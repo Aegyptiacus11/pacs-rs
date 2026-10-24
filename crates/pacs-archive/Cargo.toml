@@ -1,0 +1,19 @@
+[package]
+name = "pacs-archive"
+description = "The pacs-rs archive: files in the store, entries in the index, kept in step"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+pacs-core.workspace = true
+pacs-index.workspace = true
+pacs-store.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pacs-core = { workspace = true, features = ["synthetic"] }
+tokio.workspace = true

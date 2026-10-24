@@ -1320,6 +1320,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "pacs-archive"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "pacs-core",
+ "pacs-index",
+ "pacs-store",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "pacs-core"
 version = "0.1.0"
 dependencies = [
