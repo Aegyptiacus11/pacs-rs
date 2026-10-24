@@ -22,3 +22,7 @@ synthetic = []
 [dev-dependencies]
 dicom-dictionary-std.workspace = true
 pacs-core = { path = ".", features = ["synthetic"] }
+
+[[example]]
+name = "write_synthetic"
+required-features = ["synthetic"]
