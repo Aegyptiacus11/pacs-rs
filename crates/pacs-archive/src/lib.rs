@@ -15,6 +15,13 @@ pub enum IngestError {
     /// The UIDs contradict what the archive already holds.
     #[error("{0}")]
     Conflict(String),
+    /// Sent to one study but belongs to another.
+    #[error("instance {sop_instance_uid} is in study {actual}, not {expected}")]
+    WrongStudy {
+        sop_instance_uid: String,
+        expected: String,
+        actual: String,
+    },
     #[error(transparent)]
     Store(#[from] pacs_store::Error),
     #[error(transparent)]
@@ -57,7 +64,33 @@ impl Archive {
     /// the index then refuses the instance, the file just written is removed again: its
     /// key comes from the refused UIDs, so it is never the file of an indexed instance.
     pub async fn ingest(&self, bytes: Bytes) -> Result<Ingested, IngestError> {
+        self.ingest_checked(bytes, None).await
+    }
+
+    /// [`Archive::ingest`], refusing an instance that is not in study `study_instance_uid`.
+    pub async fn ingest_in_study(
+        &self,
+        bytes: Bytes,
+        study_instance_uid: &str,
+    ) -> Result<Ingested, IngestError> {
+        self.ingest_checked(bytes, Some(study_instance_uid)).await
+    }
+
+    async fn ingest_checked(
+        &self,
+        bytes: Bytes,
+        expected_study: Option<&str>,
+    ) -> Result<Ingested, IngestError> {
         let instance = Instance::from_bytes(&bytes)?;
+        if let Some(expected) = expected_study
+            && expected != instance.key.study_instance_uid
+        {
+            return Err(IngestError::WrongStudy {
+                sop_instance_uid: instance.key.sop_instance_uid.clone(),
+                expected: expected.to_owned(),
+                actual: instance.key.study_instance_uid.clone(),
+            });
+        }
         let size = bytes.len();
         let object_key = self.store.put(&instance.key, bytes).await?;
         let new = match NewInstance::new(&instance, object_key.clone(), size) {

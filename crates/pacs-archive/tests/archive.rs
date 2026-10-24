@@ -70,3 +70,20 @@ async fn a_refused_instance_leaves_no_file_behind() {
         .key;
     assert!(store.get(&store.key_for(&original).unwrap()).await.is_ok());
 }
+
+#[tokio::test]
+async fn an_instance_sent_to_another_study_is_refused() {
+    let archive = archive().await;
+    let series = SyntheticSeries::new(54, 1);
+    let other = SyntheticSeries::new(55, 1).study_uid();
+    let err = archive
+        .ingest_in_study(series.slice_bytes(0).into(), &other)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IngestError::WrongStudy { .. }));
+    let ok = archive
+        .ingest_in_study(series.slice_bytes(0).into(), &series.study_uid())
+        .await
+        .unwrap();
+    assert_eq!(ok.recorded, Recorded::Added);
+}
