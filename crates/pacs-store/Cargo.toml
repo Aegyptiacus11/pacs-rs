@@ -1,0 +1,19 @@
+[package]
+name = "pacs-store"
+description = "Where pacs-rs keeps DICOM files: local disk or S3-compatible object storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+object_store.workspace = true
+pacs-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pacs-core = { workspace = true, features = ["synthetic"] }
+tempfile.workspace = true
+tokio.workspace = true
