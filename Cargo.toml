@@ -21,6 +21,7 @@ dicom-object = "0.10.0"
 futures = "0.3.34"
 http-body-util = "0.1.5"
 memchr = "2.8.3"
+mimalloc = { version = "0.1.52", default-features = false }
 object_store = { version = "0.14.2", features = ["aws"] }
 pacs-archive = { path = "crates/pacs-archive" }
 pacs-core = { path = "crates/pacs-core" }
@@ -42,3 +43,10 @@ tower-http = { version = "0.7.1", features = ["cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+# Small and fast: one codegen unit with LTO, no symbols. Panics still unwind, so one failing
+# request cannot take the server down.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
