@@ -3,6 +3,21 @@
 `scripts/bench.sh` against pacs-rs and the reference server (see the README, "Comparing with a
 reference server"), with the same client and the same files.
 
+## 2026-10-24: memory while serving a study ZIP
+
+`scripts/zip-memory.sh`: peak resident memory (VmHWM) of the pacs-server binary, native, before
+and after `GET /studies/{id}/archive`, for the synthetic CT of 200 and of 600 slices.
+
+| | before: ZIP built in memory | after: ZIP streamed |
+|---|---|---|
+| 200 slices, 101 MB: added peak memory | +255 to +259 MB | +14 to +26 MB |
+| 200 slices: first byte / whole ZIP | 1.70-1.84 s / 1.82-1.96 s | 7 ms / 1.78-1.92 s |
+| 600 slices, 303 MB: added peak memory | +556 MB | +32 MB |
+| 600 slices: first byte / whole ZIP | 6.10 s / 6.44 s | 19 ms / 5.68 s |
+
+Before, memory grew with the study (about 1.8 times its size); streamed, it holds one file at a
+time whatever the study's size.
+
 ## 2026-10-24: one CT series, reference server 26.9.1 (latest)
 
 The same workload and machine as below, against the latest reference release (26.9.1, core
