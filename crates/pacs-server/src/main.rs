@@ -17,6 +17,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let settings = Settings::parse();
+    if settings.healthcheck {
+        std::process::exit(if pacs_server::healthy(settings.listen).await {
+            0
+        } else {
+            1
+        });
+    }
     let archive = open_archive(&settings).await?;
     let app = app(archive, &settings)?;
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;

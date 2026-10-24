@@ -101,6 +101,14 @@ fn secrets_from_the_environment_or_a_file() {
     assert!(secret("BROKEN", lookup).is_err());
 }
 
+#[tokio::test]
+async fn nothing_listening_is_unhealthy() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    assert!(!pacs_server::healthy(address).await);
+}
+
 #[test]
 fn defaults() {
     let settings = Settings::try_parse_from(["pacs-server"]).unwrap();
@@ -207,6 +215,13 @@ async fn serves_over_tcp_and_shuts_down_cleanly() {
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert!(response.ends_with("ok\n"), "{response}");
+
+    assert!(pacs_server::healthy(address).await);
+    let wildcard = std::net::SocketAddr::new([0, 0, 0, 0].into(), address.port());
+    assert!(
+        pacs_server::healthy(wildcard).await,
+        "0.0.0.0 is checked on loopback"
+    );
 
     stop.send(()).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), server)

@@ -59,6 +59,11 @@ pub struct Settings {
     #[arg(long, env = "PACS_MAX_UPLOAD_BYTES", default_value_t = 1 << 30)]
     pub max_upload_bytes: usize,
 
+    /// Check that a server with these settings answers on /healthz, exit 0 if it does and
+    /// 1 if not, and do nothing else: a health check for images without a shell or curl.
+    #[arg(long)]
+    pub healthcheck: bool,
+
     /// Origins browsers may call from, comma-separated, or `*`. None by default.
     #[arg(long, env = "PACS_CORS_ORIGINS", value_delimiter = ',')]
     pub cors_origins: Vec<String>,
@@ -283,6 +288,33 @@ pub async fn serve(
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
+}
+
+/// Whether the server listening at `listen` answers 200 on `/healthz` within 5 seconds.
+/// A wildcard address (0.0.0.0, ::) is reached on loopback.
+pub async fn healthy(listen: SocketAddr) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut target = listen;
+    if target.ip().is_unspecified() {
+        target.set_ip(if target.is_ipv4() {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            std::net::Ipv6Addr::LOCALHOST.into()
+        });
+    }
+    let check = async {
+        let mut stream = tokio::net::TcpStream::connect(target).await.ok()?;
+        let request =
+            format!("GET /healthz HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.ok()?;
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head).await.ok()?;
+        Some(head.starts_with(b"HTTP/1.1 200"))
+    };
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), check).await,
+        Ok(Some(true))
+    )
 }
 
 /// Ctrl-C, or SIGTERM from Docker and systemd.

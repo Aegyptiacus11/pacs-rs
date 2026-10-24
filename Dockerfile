@@ -18,4 +18,5 @@ ENV PACS_LISTEN=0.0.0.0:8080 \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 VOLUME /data
 EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=6s --start-period=5s CMD ["/pacs-server", "--healthcheck"]
 ENTRYPOINT ["/pacs-server"]
