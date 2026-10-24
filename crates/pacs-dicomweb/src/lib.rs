@@ -16,6 +16,7 @@ mod error;
 pub mod media;
 pub mod multipart;
 mod qido;
+mod wado;
 
 pub use error::ApiError;
 
@@ -61,10 +62,32 @@ pub fn router(archive: Archive, config: Config) -> Router {
     let state = AppState { archive, config };
     Router::new()
         .route("/studies", get(qido::studies))
+        .route(
+            "/studies/{study}",
+            get(wado::study),
+        )
+        .route("/studies/{study}/metadata", get(wado::study_metadata))
         .route("/studies/{study}/series", get(qido::series))
+        .route("/studies/{study}/series/{series}", get(wado::series))
+        .route(
+            "/studies/{study}/series/{series}/metadata",
+            get(wado::series_metadata),
+        )
         .route(
             "/studies/{study}/series/{series}/instances",
             get(qido::instances),
+        )
+        .route(
+            "/studies/{study}/series/{series}/instances/{instance}",
+            get(wado::instance),
+        )
+        .route(
+            "/studies/{study}/series/{series}/instances/{instance}/metadata",
+            get(wado::instance_metadata),
+        )
+        .route(
+            "/studies/{study}/series/{series}/instances/{instance}/frames/{frames}",
+            get(wado::frames),
         )
         .layer(DefaultBodyLimit::max(limit))
         .with_state(state)
