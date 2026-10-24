@@ -40,18 +40,41 @@ impl From<pacs_index::Error> for IngestError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ingested {
     pub key: InstanceKey,
-    pub recorded: Recorded,
+    pub outcome: Outcome,
+}
+
+/// What became of an ingested instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Added,
+    /// It was there already and the new file took its place (overwriting is on).
+    Replaced,
+    /// It was there already and was kept as it was (overwriting is off).
+    AlreadyStored,
 }
 
 #[derive(Debug, Clone)]
 pub struct Archive {
     store: Store,
     index: Index,
+    overwrite: bool,
 }
 
 impl Archive {
+    /// An archive that keeps the first copy of an instance sent twice, like the
+    /// reference server's default; see [`Archive::with_overwrite`].
     pub fn new(store: Store, index: Index) -> Self {
-        Archive { store, index }
+        Archive {
+            store,
+            index,
+            overwrite: false,
+        }
+    }
+
+    /// Whether an instance sent again replaces the stored one.
+    pub fn with_overwrite(mut self, overwrite: bool) -> Self {
+        self.overwrite = overwrite;
+        self
     }
 
     pub fn index(&self) -> &Index {
@@ -91,6 +114,19 @@ impl Archive {
                 actual: instance.key.study_instance_uid.clone(),
             });
         }
+        if !self.overwrite
+            && let Some(existing) = self
+                .index
+                .rest_instance_by_uid(&instance.key.sop_instance_uid)
+                .await?
+            && existing.series_instance_uid == instance.key.series_instance_uid
+            && existing.study_instance_uid == instance.key.study_instance_uid
+        {
+            return Ok(Ingested {
+                key: instance.key,
+                outcome: Outcome::AlreadyStored,
+            });
+        }
         let size = bytes.len();
         let object_key = self.store.put(&instance.key, bytes).await?;
         let new = match NewInstance::new(&instance, object_key.clone(), size) {
@@ -103,7 +139,10 @@ impl Archive {
         match self.index.record(&new).await {
             Ok(recorded) => Ok(Ingested {
                 key: instance.key,
-                recorded,
+                outcome: match recorded {
+                    Recorded::Added => Outcome::Added,
+                    Recorded::Replaced => Outcome::Replaced,
+                },
             }),
             Err(e) => {
                 if matches!(e, pacs_index::Error::Conflict(_)) {

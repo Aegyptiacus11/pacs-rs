@@ -411,7 +411,7 @@ async fn post_instances_takes_one_file() {
     assert_eq!(json["SOPInstanceUID"], series.instance_uid(0));
     assert_eq!(json["StudyInstanceUID"], series.study_uid());
     assert_eq!(json["Status"], "Added");
-    assert_eq!(upload().await.json()["Status"], "Replaced");
+    assert_eq!(upload().await.json()["Status"], "AlreadyStored");
 
     let reply = send(&app, "POST", "/instances", &[], Bytes::from_static(b"junk")).await;
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);

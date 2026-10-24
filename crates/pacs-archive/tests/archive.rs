@@ -1,7 +1,7 @@
 use bytes::Bytes;
-use pacs_archive::{Archive, IngestError};
+use pacs_archive::{Archive, IngestError, Outcome};
 use pacs_core::synthetic::SyntheticSeries;
-use pacs_index::{Index, Recorded};
+use pacs_index::Index;
 use pacs_store::Store;
 
 async fn archive() -> Archive {
@@ -14,7 +14,7 @@ async fn ingest_then_read_the_same_bytes_back() {
     let series = SyntheticSeries::new(51, 2);
     for bytes in series.all_bytes() {
         let ingested = archive.ingest(Bytes::from(bytes)).await.unwrap();
-        assert_eq!(ingested.recorded, Recorded::Added);
+        assert_eq!(ingested.outcome, Outcome::Added);
     }
     let entry = archive
         .index()
@@ -85,5 +85,35 @@ async fn an_instance_sent_to_another_study_is_refused() {
         .ingest_in_study(series.slice_bytes(0).into(), &series.study_uid())
         .await
         .unwrap();
-    assert_eq!(ok.recorded, Recorded::Added);
+    assert_eq!(ok.outcome, Outcome::Added);
+}
+
+#[tokio::test]
+async fn the_first_copy_is_kept_unless_overwriting() {
+    let store = Store::memory();
+    let series = SyntheticSeries::new(56, 1);
+    let first = series.slice_bytes(0);
+    // the same instance, different bytes: another patient name
+    let second = series
+        .clone()
+        .with_patient("OTHER^NAME", None)
+        .slice_bytes(0);
+    let key = pacs_core::Instance::from_bytes(&first).unwrap().key;
+
+    let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap());
+    archive.ingest(first.clone().into()).await.unwrap();
+    let again = archive.ingest(second.clone().into()).await.unwrap();
+    assert_eq!(again.outcome, Outcome::AlreadyStored);
+    assert_eq!(
+        store.get(&store.key_for(&key).unwrap()).await.unwrap(),
+        first
+    );
+
+    let archive = archive.with_overwrite(true);
+    let again = archive.ingest(second.clone().into()).await.unwrap();
+    assert_eq!(again.outcome, Outcome::Replaced);
+    assert_eq!(
+        store.get(&store.key_for(&key).unwrap()).await.unwrap(),
+        second
+    );
 }

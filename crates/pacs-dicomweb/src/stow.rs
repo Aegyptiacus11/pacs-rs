@@ -7,8 +7,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use pacs_archive::{IngestError, Ingested};
-use pacs_index::Recorded;
+use pacs_archive::{IngestError, Ingested, Outcome};
 use serde_json::{Value, json};
 
 use crate::media::MediaType;
@@ -228,13 +227,14 @@ pub(crate) async fn upload(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     match state.archive.ingest(body).await {
-        Ok(Ingested { key, recorded }) => Ok(Json(json!({
+        Ok(Ingested { key, outcome }) => Ok(Json(json!({
             "StudyInstanceUID": key.study_instance_uid,
             "SeriesInstanceUID": key.series_instance_uid,
             "SOPInstanceUID": key.sop_instance_uid,
-            "Status": match recorded {
-                Recorded::Added => "Added",
-                Recorded::Replaced => "Replaced",
+            "Status": match outcome {
+                Outcome::Added => "Added",
+                Outcome::Replaced => "Replaced",
+                Outcome::AlreadyStored => "AlreadyStored",
             },
         }))
         .into_response()),
