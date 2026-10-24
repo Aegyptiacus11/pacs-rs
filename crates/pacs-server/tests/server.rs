@@ -124,9 +124,9 @@ async fn health_and_dicomweb_under_its_path_and_data_survives_a_restart() {
         let (status, _, _) =
             call(&app, stow_request("/dicom-web/studies", series.all_bytes())).await;
         assert_eq!(status, StatusCode::OK);
-        // not at the root
+        // STOW is DICOMweb's; at the root, /studies is the REST API's
         let (status, _, _) = call(&app, stow_request("/studies", series.all_bytes())).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     }
     assert!(dir.path().join("db/index.sqlite").is_file());
     let files = dir
@@ -214,4 +214,36 @@ async fn serves_over_tcp_and_shuts_down_cleanly() {
         .expect("the server stops")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn the_rest_api_is_at_the_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(dir.path(), &[]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let series = SyntheticSeries::new(72, 1);
+    let (status, _, body) = call(
+        &app,
+        Request::post("/instances")
+            .body(Body::from(series.slice_bytes(0)))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let reply: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(reply["Status"], "Success");
+    let (status, _, body) = call(&app, Request::get("/studies").body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()[0],
+        reply["ParentStudy"]
+    );
+}
+
+#[tokio::test]
+async fn dicomweb_cannot_take_the_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(dir.path(), &["--dicomweb-path", "/"]);
+    let archive = open_archive(&settings).await.unwrap();
+    assert!(app(archive, &settings).is_err());
 }

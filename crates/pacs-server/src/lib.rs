@@ -149,9 +149,14 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     Ok(Archive::new(store, index).with_overwrite(settings.overwrite_instances))
 }
 
-/// The whole HTTP application: `/healthz` and DICOMweb under `dicomweb_path`.
+/// The whole HTTP application: `/healthz`, the REST API at `/` and DICOMweb under
+/// `dicomweb_path`.
 pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
+    if path == "/" {
+        bail!("the DICOMweb path cannot be /: the REST API is served there");
+    }
+    let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes);
     let dicomweb = pacs_dicomweb::router(
         archive,
         pacs_dicomweb::Config {
@@ -160,12 +165,10 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
             max_upload_bytes: settings.max_upload_bytes,
         },
     );
-    let mut app = Router::new().route("/healthz", get(|| async { "ok\n" }));
-    app = if path == "/" {
-        app.merge(dicomweb)
-    } else {
-        app.nest(&path, dicomweb)
-    };
+    let mut app = Router::new()
+        .route("/healthz", get(|| async { "ok\n" }))
+        .merge(rest)
+        .nest(&path, dicomweb);
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }
