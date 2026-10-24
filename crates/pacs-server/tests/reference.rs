@@ -1,5 +1,5 @@
-//! The same files stored in pacs-rs and in a reference DICOMweb server; the same requests
-//! to both; the answers compared tag by tag.
+//! The same files stored in pacs-rs and in a reference server; the same requests to both,
+//! over DICOMweb and over the REST API; the answers compared tag by tag.
 //!
 //! Runs only when `PACS_TEST_REFERENCE_URL` names the reference server's DICOMweb root,
 //! e.g. `http://127.0.0.1:18042/dicom-web` (README, "Comparing with a reference server").
@@ -45,7 +45,48 @@ const ALLOWED: &[(&str, &str, Side, &str)] = &[
         Side::Reference,
         "no BulkDataURI for pixel data yet; viewers fetch frames instead",
     ),
+    (
+        "rest-instance",
+        "FileUuid",
+        Side::Reference,
+        "pacs-rs names files by their UIDs and has no attachment UUIDs",
+    ),
 ];
+
+/// Tags whose values may differ: (where, tag, why).
+const ALLOWED_VALUES: &[(&str, &str, &str)] = &[
+    (
+        "rest-study",
+        "LastUpdate",
+        "each server's own clock at arrival",
+    ),
+    (
+        "rest-series",
+        "LastUpdate",
+        "each server's own clock at arrival",
+    ),
+];
+
+/// Lists compared as sets, their order being a deliberate difference: (where, tag, why).
+const ALLOWED_ORDER: &[(&str, &str, &str)] = &[
+    (
+        "rest-series",
+        "Instances",
+        "pacs-rs lists a series' instances by Instance Number; the reference by ID",
+    ),
+    (
+        "rest-study",
+        "Series",
+        "pacs-rs lists a study's series by Series Number; the reference by ID",
+    ),
+];
+
+fn same_members(a: &Value, b: &Value) -> bool {
+    let set = |v: &Value| -> Option<BTreeSet<String>> {
+        Some(v.as_array()?.iter().map(|x| x.to_string()).collect())
+    };
+    set(a).is_some() && set(a) == set(b)
+}
 
 /// Part Content-Types that differ on purpose: (reference, pacs-rs, why).
 const ALLOWED_PART_TYPES: &[(&str, &str, &str)] = &[(
@@ -81,6 +122,17 @@ impl Server {
             .send()
             .await
             .unwrap_or_else(|e| panic!("{} GET {path}: {e}", self.name));
+        reply(response).await
+    }
+
+    async fn post(&self, path: &str, body: Vec<u8>) -> Reply {
+        let response = self
+            .client
+            .post(format!("{}{path}", self.base))
+            .body(body)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{} POST {path}: {e}", self.name));
         reply(response).await
     }
 
@@ -179,7 +231,16 @@ impl Report {
         let tags: BTreeSet<&String> = r.keys().chain(p.keys()).collect();
         for tag in tags {
             match (r.get(tag), p.get(tag)) {
-                (Some(a), Some(b)) if a != b => {
+                (Some(a), Some(b))
+                    if a != b
+                        && !ALLOWED_VALUES
+                            .iter()
+                            .any(|(p, t, _)| *p == place && t == tag)
+                        && !(ALLOWED_ORDER
+                            .iter()
+                            .any(|(p, t, _)| *p == place && t == tag)
+                            && same_members(a, b)) =>
+                {
                     self.push(format!("{what} {tag}: reference {a} | pacs-rs {b}"))
                 }
                 (Some(a), None) if !self.allowed(place, tag, Side::Reference) => {
@@ -283,6 +344,208 @@ async fn start_pacs() -> (Server, tempfile::TempDir) {
         client: reqwest::Client::new(),
     };
     (server, dir)
+}
+
+/// The same server's REST root: its DICOMweb base without `/dicom-web`.
+fn rest_root(dicomweb: &Server) -> Server {
+    Server {
+        name: dicomweb.name,
+        base: dicomweb.base.trim_end_matches("/dicom-web").to_owned(),
+        client: dicomweb.client.clone(),
+    }
+}
+
+fn unzip(reply: &Reply) -> BTreeMap<String, Vec<u8>> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(reply.body.to_vec())).unwrap();
+    (0..archive.len())
+        .map(|i| {
+            let mut file = archive.by_index(i).unwrap();
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            (file.name().to_owned(), bytes)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn same_rest_answers_as_the_reference_server() {
+    let Ok(reference_base) = std::env::var("PACS_TEST_REFERENCE_URL") else {
+        eprintln!("PACS_TEST_REFERENCE_URL not set; skipping");
+        return;
+    };
+    let reference = rest_root(&Server {
+        name: "reference",
+        base: reference_base.trim_end_matches('/').to_owned(),
+        client: reqwest::Client::new(),
+    });
+    let (pacs_dicomweb, _dir) = start_pacs().await;
+    let pacs = rest_root(&pacs_dicomweb);
+    let mut report = Report::default();
+
+    let run = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        % 100_000) as u32
+        + 100_000;
+    let big = SyntheticSeries::new(run * 10 + 6, 3);
+    let small = SyntheticSeries::new(run * 10 + 7, 2).in_study(run * 10 + 6, 2);
+    let files: Vec<Vec<u8>> = big
+        .all_bytes()
+        .into_iter()
+        .chain(small.all_bytes())
+        .collect();
+
+    // uploads, then the same file again
+    let mut study_id = String::new();
+    for (n, file) in files.iter().chain(files.first()).enumerate() {
+        let (r, p) = (
+            reference.post("/instances", file.clone()).await,
+            pacs.post("/instances", file.clone()).await,
+        );
+        let what = format!("POST /instances #{n}");
+        if report.status(&what, &r, &p) {
+            let (r, p) = (reference.json(&r), pacs.json(&p));
+            report.objects("rest-upload", &what, &r, &p);
+            study_id = r["ParentStudy"].as_str().unwrap_or_default().to_owned();
+        }
+    }
+
+    let find =
+        serde_json::json!({"Level": "Study", "Query": {"StudyInstanceUID": big.study_uid()}});
+    let (r, p) = (
+        reference
+            .post("/tools/find", find.to_string().into_bytes())
+            .await,
+        pacs.post("/tools/find", find.to_string().into_bytes())
+            .await,
+    );
+    if report.status("/tools/find", &r, &p) && reference.json(&r) != pacs.json(&p) {
+        report.push(format!(
+            "/tools/find: reference {} | pacs-rs {}",
+            reference.json(&r),
+            pacs.json(&p)
+        ));
+    }
+
+    let path = format!("/studies/{study_id}");
+    let (r, p) = (
+        reference.get(&path, "*/*").await,
+        pacs.get(&path, "*/*").await,
+    );
+    let mut series_ids = Vec::new();
+    if report.status(&path, &r, &p) {
+        let (r, p) = (reference.json(&r), pacs.json(&p));
+        report.objects("rest-study", &path, &r, &p);
+        series_ids = r["Series"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+    }
+    let path = format!("/studies/{study_id}/statistics");
+    let (r, p) = (
+        reference.get(&path, "*/*").await,
+        pacs.get(&path, "*/*").await,
+    );
+    if report.status(&path, &r, &p) {
+        report.objects(
+            "rest-statistics",
+            &path,
+            &reference.json(&r),
+            &pacs.json(&p),
+        );
+    }
+    let path = format!("/studies/{study_id}/instances");
+    let (r, p) = (
+        reference.get(&path, "*/*").await,
+        pacs.get(&path, "*/*").await,
+    );
+    let mut instance_ids = Vec::new();
+    if report.status(&path, &r, &p) {
+        let (r, p) = (reference.json(&r), pacs.json(&p));
+        let by_id = |v: &Value| -> BTreeMap<String, Value> {
+            v.as_array()
+                .into_iter()
+                .flatten()
+                .map(|i| (i["ID"].as_str().unwrap_or("?").to_owned(), i.clone()))
+                .collect()
+        };
+        let (r, p) = (by_id(&r), by_id(&p));
+        if r.keys().ne(p.keys()) {
+            report.push(format!("{path}: different instance IDs"));
+        }
+        for (id, a) in &r {
+            if let Some(b) = p.get(id) {
+                report.objects("rest-instance", &format!("{path} [{id}]"), a, b);
+            }
+        }
+        instance_ids = r.into_keys().collect();
+    }
+    for id in &series_ids {
+        let path = format!("/series/{id}");
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        if report.status(&path, &r, &p) {
+            report.objects("rest-series", &path, &reference.json(&r), &pacs.json(&p));
+        }
+    }
+    for id in &instance_ids {
+        let path = format!("/instances/{id}");
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        if report.status(&path, &r, &p) {
+            report.objects("rest-instance", &path, &reference.json(&r), &pacs.json(&p));
+        }
+        let path = format!("/instances/{id}/file");
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        if report.status(&path, &r, &p) && r.body != p.body {
+            report.push(format!("{path}: files differ"));
+        }
+    }
+    let path = format!("/studies/{study_id}/archive");
+    let (r, p) = (
+        reference.get(&path, "*/*").await,
+        pacs.get(&path, "*/*").await,
+    );
+    if report.status(&path, &r, &p) {
+        let (r, p) = (unzip(&r), unzip(&p));
+        if r.keys().ne(p.keys()) {
+            report.push(format!(
+                "{path}: names reference {:?} | pacs-rs {:?}",
+                r.keys().collect::<Vec<_>>(),
+                p.keys().collect::<Vec<_>>()
+            ));
+        }
+        for (name, a) in &r {
+            if p.get(name).is_some_and(|b| a != b) {
+                report.push(format!("{path} {name}: contents differ"));
+            }
+        }
+    }
+    for path in ["/studies/unknown", "/series/unknown", "/instances/unknown"] {
+        let (r, p) = (
+            reference.get(path, "*/*").await,
+            pacs.get(path, "*/*").await,
+        );
+        report.status(path, &r, &p);
+    }
+
+    assert!(
+        report.lines.is_empty(),
+        "{} difference(s) from the reference server:\n{}",
+        report.lines.len(),
+        report.lines.join("\n")
+    );
 }
 
 #[tokio::test]
