@@ -50,6 +50,10 @@ pub struct Settings {
     #[arg(long, env = "PACS_S3_REGION", default_value = "us-east-1")]
     pub s3_region: String,
 
+    /// Replace an instance that is sent again, instead of keeping the first copy.
+    #[arg(long, env = "PACS_OVERWRITE_INSTANCES", default_value_t = false)]
+    pub overwrite_instances: bool,
+
     /// Largest accepted request body, in bytes (STOW-RS, uploads).
     #[arg(long, env = "PACS_MAX_UPLOAD_BYTES", default_value_t = 1 << 30)]
     pub max_upload_bytes: usize,
@@ -142,7 +146,7 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     let index = Index::open(&settings.index)
         .await
         .with_context(|| format!("opening the index {}", settings.index.display()))?;
-    Ok(Archive::new(store, index))
+    Ok(Archive::new(store, index).with_overwrite(settings.overwrite_instances))
 }
 
 /// The whole HTTP application: `/healthz` and DICOMweb under `dicomweb_path`.

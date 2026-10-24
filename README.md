@@ -57,6 +57,7 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_S3_ENDPOINT` | AWS | e.g. `http://homeserver:8333` for SeaweedFS |
 | `PACS_S3_REGION` | `us-east-1` | |
 | `PACS_S3_ACCESS_KEY_ID`, `PACS_S3_SECRET_ACCESS_KEY` | | environment only, or `..._FILE` naming a file |
+| `PACS_OVERWRITE_INSTANCES` | `false` | replace an instance sent again, instead of keeping the first copy |
 | `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
 | `RUST_LOG` | `info` | log filter |
