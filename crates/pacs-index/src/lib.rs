@@ -7,7 +7,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use dicom_dictionary_std::tags;
-use pacs_core::{Instance, levels};
+use pacs_core::{Instance, levels, main_tags, public_ids};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -47,13 +47,36 @@ pub struct NewInstance {
     series_attributes: Value,
     instance_attributes: Value,
     metadata: Value,
+    study_public_id: String,
+    patient_public_id: String,
+    series_public_id: String,
+    instance_public_id: String,
+    patient_main_tags: Value,
+    study_main_tags: Value,
+    series_main_tags: Value,
+    instance_main_tags: Value,
 }
 
 impl NewInstance {
     /// `object_key` is where the store put the file, `size_bytes` the file's length.
     pub fn new(instance: &Instance, object_key: String, size_bytes: usize) -> Result<Self, Error> {
         let key = &instance.key;
+        let patient = instance.string(tags::PATIENT_ID).unwrap_or_default();
+        let (study, series, sop) = (
+            key.study_instance_uid.as_str(),
+            key.series_instance_uid.as_str(),
+            key.sop_instance_uid.as_str(),
+        );
+        let main = |tags| Value::Object(instance.main_tags(tags));
         Ok(NewInstance {
+            patient_public_id: public_ids::patient(&patient),
+            study_public_id: public_ids::study(&patient, study),
+            series_public_id: public_ids::series(&patient, study, series),
+            instance_public_id: public_ids::instance(&patient, study, series, sop),
+            patient_main_tags: main(main_tags::PATIENT),
+            study_main_tags: main(main_tags::STUDY),
+            series_main_tags: main(main_tags::SERIES),
+            instance_main_tags: main(main_tags::INSTANCE),
             study_instance_uid: key.study_instance_uid.clone(),
             series_instance_uid: key.series_instance_uid.clone(),
             sop_instance_uid: key.sop_instance_uid.clone(),
@@ -191,12 +214,15 @@ impl Index {
 
         sqlx::query(
             "INSERT INTO studies (study_instance_uid, patient_id, patient_name, study_date,
-                                  accession_number, attributes)
-             VALUES (?, ?, ?, ?, ?, ?)
+                                  accession_number, attributes, public_id, patient_public_id,
+                                  main_tags, patient_main_tags)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (study_instance_uid) DO UPDATE SET
                 patient_id = excluded.patient_id, patient_name = excluded.patient_name,
                 study_date = excluded.study_date, accession_number = excluded.accession_number,
-                attributes = excluded.attributes",
+                attributes = excluded.attributes, public_id = excluded.public_id,
+                patient_public_id = excluded.patient_public_id,
+                main_tags = excluded.main_tags, patient_main_tags = excluded.patient_main_tags",
         )
         .bind(&new.study_instance_uid)
         .bind(&new.patient_id)
@@ -204,36 +230,44 @@ impl Index {
         .bind(&new.study_date)
         .bind(&new.accession_number)
         .bind(new.study_attributes.to_string())
+        .bind(&new.study_public_id)
+        .bind(&new.patient_public_id)
+        .bind(new.study_main_tags.to_string())
+        .bind(new.patient_main_tags.to_string())
         .execute(&mut *tx)
         .await?;
 
         sqlx::query(
             "INSERT INTO series (series_instance_uid, study_instance_uid, modality, series_number,
-                                 attributes)
-             VALUES (?, ?, ?, ?, ?)
+                                 attributes, public_id, main_tags)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (series_instance_uid) DO UPDATE SET
                 modality = excluded.modality, series_number = excluded.series_number,
-                attributes = excluded.attributes",
+                attributes = excluded.attributes, public_id = excluded.public_id,
+                main_tags = excluded.main_tags",
         )
         .bind(&new.series_instance_uid)
         .bind(&new.study_instance_uid)
         .bind(&new.modality)
         .bind(new.series_number)
         .bind(new.series_attributes.to_string())
+        .bind(&new.series_public_id)
+        .bind(new.series_main_tags.to_string())
         .execute(&mut *tx)
         .await?;
 
         sqlx::query(
             "INSERT INTO instances (sop_instance_uid, series_instance_uid, sop_class_uid,
                                     instance_number, transfer_syntax_uid, object_key, size_bytes,
-                                    attributes, metadata)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    attributes, metadata, public_id, main_tags)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (sop_instance_uid) DO UPDATE SET
                 sop_class_uid = excluded.sop_class_uid,
                 instance_number = excluded.instance_number,
                 transfer_syntax_uid = excluded.transfer_syntax_uid,
                 object_key = excluded.object_key, size_bytes = excluded.size_bytes,
                 attributes = excluded.attributes, metadata = excluded.metadata,
+                public_id = excluded.public_id, main_tags = excluded.main_tags,
                 received_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         )
         .bind(&new.sop_instance_uid)
@@ -245,6 +279,8 @@ impl Index {
         .bind(new.size_bytes)
         .bind(new.instance_attributes.to_string())
         .bind(new.metadata.to_string())
+        .bind(&new.instance_public_id)
+        .bind(new.instance_main_tags.to_string())
         .execute(&mut *tx)
         .await?;
 
