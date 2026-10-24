@@ -1,6 +1,8 @@
-# Builds the pacs-server image when a tag v<version> is pushed, and pushes it to Harbor on the
-# homeserver as pacs/pacs-server:<version>-<short commit>. Runs on the homeserver's own runner
-# (homeserver-infra, stacks/runners), whose build daemon reaches Harbor at homeserver:8080.
+# Builds the pacs-server image when a tag v<version> is pushed, pushes it to Harbor on the
+# homeserver as pacs/pacs-server:<version>-<short commit>, pins it by digest in
+# homeserver-infra's stacks/pacs/compose.yml and redeploys that stack through its Portainer
+# webhook. Runs on the homeserver's own runner (homeserver-infra, stacks/runners), whose build
+# daemon reaches Harbor at homeserver:8080.
 # The runner must go before this repo is made public (see README, "Releases").
 name: image
 
@@ -49,6 +51,7 @@ jobs:
           -t "$IMAGE:${{ steps.tag.outputs.tag }}" .
 
       - name: Push
+        id: push
         env:
           HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
@@ -57,6 +60,7 @@ jobs:
           docker push "$IMAGE:${{ steps.tag.outputs.tag }}"
           digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ steps.tag.outputs.tag }}")"
           echo "$digest"
+          echo "image=127.0.0.1:8080/pacs/pacs-server:${{ steps.tag.outputs.tag }}@${digest#*@}" >> "$GITHUB_OUTPUT"
           {
             echo "Pushed \`$IMAGE:${{ steps.tag.outputs.tag }}\`"
             echo
@@ -66,3 +70,47 @@ jobs:
       - name: Log out
         if: always()
         run: docker logout "$REGISTRY" || true
+
+      # The stack is deployed from homeserver-infra, so the new image goes there first;
+      # a redeploy from Portainer would otherwise bring the old one back.
+      - name: Pin in homeserver-infra
+        env:
+          INFRA_TOKEN: ${{ secrets.INFRA_TOKEN }}
+          NEW_IMAGE: ${{ steps.push.outputs.image }}
+        run: |
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$INFRA_TOKEN" | base64 -w0)"
+          git() { command git -c "http.https://github.com/.extraheader=$auth" "$@"; }
+          dir="$RUNNER_TEMP/homeserver-infra"
+          git clone --quiet --depth 1 https://github.com/Aegyptiacus11/homeserver-infra.git "$dir"
+          cd "$dir"
+          sed -i "s#^\(    image: \)127\.0\.0\.1:8080/pacs/pacs-server:.*#\1$NEW_IMAGE#" stacks/pacs/compose.yml
+          grep -qF "image: $NEW_IMAGE" stacks/pacs/compose.yml || { echo "::error::no pacs-server image line in stacks/pacs/compose.yml"; exit 1; }
+          if git diff --quiet; then
+            echo "Already pinned to $NEW_IMAGE"
+            exit 0
+          fi
+          git -c user.name="pacs-rs image workflow" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -am "pacs: ${{ steps.tag.outputs.tag }}, from pacs-rs $GITHUB_REF_NAME"
+          for _ in 1 2 3; do
+            git push --quiet origin HEAD:main && exit 0
+            git pull --quiet --rebase --depth 1 origin main
+          done
+          echo "::error::could not push to homeserver-infra"
+          exit 1
+
+      - name: Redeploy
+        env:
+          WEBHOOK: ${{ secrets.PORTAINER_PACS_WEBHOOK }}
+        run: |
+          # Portainer's self-signed certificate, on the host itself.
+          curl -fsS -k -X POST --max-time 300 "https://homeserver:9443/api/stacks/webhooks/$WEBHOOK"
+          for _ in $(seq 1 36); do
+            if curl -fsS --max-time 5 http://100.116.202.2:8104/healthz >/dev/null; then
+              echo "pacs answers on its tailnet port"
+              echo "Deployed \`${{ steps.push.outputs.image }}\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::pacs did not come back healthy within 3 minutes"
+          exit 1
