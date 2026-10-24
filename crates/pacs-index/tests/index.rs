@@ -196,3 +196,26 @@ async fn a_file_index_survives_reopening() {
     let study = index.study(&series.study_uid()).await.unwrap().unwrap();
     assert_eq!(study.instance_count, 2);
 }
+
+/// Concurrent uploads: a file index has several connections, and every write must wait
+/// its turn instead of failing with "database is locked".
+#[tokio::test]
+async fn concurrent_records_all_succeed() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = Index::open(dir.path().join("index.sqlite")).await.unwrap();
+    let series = SyntheticSeries::new(35, 64);
+    let mut tasks = Vec::new();
+    for bytes in series.all_bytes() {
+        let index = index.clone();
+        tasks.push(tokio::spawn(async move {
+            let instance = Instance::from_bytes(&bytes).unwrap();
+            let new = NewInstance::new(&instance, "k".into(), bytes.len()).unwrap();
+            index.record(&new).await
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap().unwrap();
+    }
+    let study = index.study(&series.study_uid()).await.unwrap().unwrap();
+    assert_eq!(study.instance_count, 64);
+}

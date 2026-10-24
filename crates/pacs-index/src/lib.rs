@@ -187,7 +187,10 @@ impl Index {
     /// Record a stored instance. Re-sending an instance replaces its entry; study and
     /// series attributes follow the latest instance received.
     pub async fn record(&self, new: &NewInstance) -> Result<Recorded, Error> {
-        let mut tx = self.pool.begin().await?;
+        // IMMEDIATE takes the write lock up front. A deferred transaction would read, then
+        // fail at once with "database is locked" trying to upgrade while another upload
+        // writes; this one waits its turn (the busy timeout) instead.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let series_study: Option<String> = sqlx::query_scalar(
             "SELECT study_instance_uid FROM series WHERE series_instance_uid = ?",
