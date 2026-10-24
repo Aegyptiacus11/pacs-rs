@@ -1,0 +1,20 @@
+[package]
+name = "pacs-index"
+description = "The pacs-rs index: studies, series and instances, and where their files are"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dicom-dictionary-std.workspace = true
+pacs-core.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pacs-core = { workspace = true, features = ["synthetic"] }
+tempfile.workspace = true
+tokio.workspace = true
