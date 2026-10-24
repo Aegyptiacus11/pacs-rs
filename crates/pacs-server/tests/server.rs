@@ -247,3 +247,87 @@ async fn dicomweb_cannot_take_the_root() {
     let archive = open_archive(&settings).await.unwrap();
     assert!(app(archive, &settings).is_err());
 }
+
+#[test]
+fn index_locations_and_passwords() {
+    use pacs_server::{IndexLocation, with_password, without_password};
+    assert_eq!(
+        IndexLocation::parse("data/index.sqlite"),
+        IndexLocation::Sqlite("data/index.sqlite".into())
+    );
+    assert_eq!(
+        IndexLocation::parse("postgres://pacs@db/pacs"),
+        IndexLocation::Postgres("postgres://pacs@db/pacs".into())
+    );
+    assert_eq!(
+        with_password("postgres://pacs@db:5432/pacs", "p@ss:w/rd").unwrap(),
+        "postgres://pacs:p%40ss%3Aw%2Frd@db:5432/pacs"
+    );
+    assert!(with_password("postgres://pacs:x@db/pacs", "y").is_err());
+    assert!(with_password("postgres://db/pacs", "y").is_err());
+    assert_eq!(
+        without_password("postgres://pacs:secret@db/pacs"),
+        "postgres://pacs:***@db/pacs"
+    );
+}
+
+/// The whole server on a Postgres index, when `PACS_TEST_POSTGRES_URL` names a server.
+#[tokio::test]
+async fn the_server_on_postgres() {
+    let Ok(server) = std::env::var("PACS_TEST_POSTGRES_URL") else {
+        eprintln!("PACS_TEST_POSTGRES_URL not set; skipping");
+        return;
+    };
+    let server = server.trim_end_matches('/');
+    let name = format!("pacs_server_test_{}", std::process::id());
+    sqlx::any::install_default_drivers();
+    let mut admin =
+        <sqlx::AnyConnection as sqlx::Connection>::connect(&format!("{server}/postgres"))
+            .await
+            .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {name}"
+    )))
+    .execute(&mut admin)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .execute(&mut admin)
+        .await
+        .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("{server}/{name}");
+    let storage = format!("file:{}", dir.path().join("files").display());
+    let settings =
+        Settings::try_parse_from(["pacs-server", "--index", &url, "--storage", &storage]).unwrap();
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let series = SyntheticSeries::new(73, 3);
+    let (status, _, _) = call(&app, stow_request("/dicom-web/studies", series.all_bytes())).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = call(
+        &app,
+        Request::get(format!(
+            "/dicom-web/studies?StudyInstanceUID={}",
+            series.study_uid()
+        ))
+        .header("host", "pacs.test")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let studies: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(studies[0]["00201208"]["Value"][0], 3);
+    assert_eq!(studies[0]["00080061"]["Value"][0], "CT");
+    let (_, _, body) = call(
+        &app,
+        Request::get("/studies?expand").body(Body::empty()).unwrap(),
+    )
+    .await;
+    let rest: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        rest[0]["MainDicomTags"]["StudyInstanceUID"],
+        series.study_uid()
+    );
+}

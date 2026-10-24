@@ -35,9 +35,10 @@ pub struct Settings {
     #[arg(long, env = "PACS_DICOMWEB_PATH", default_value = "/dicom-web")]
     pub dicomweb_path: String,
 
-    /// The SQLite index file; created if missing.
+    /// The index: a SQLite file (created if missing), or `postgres://user@host/database`
+    /// with the password in PACS_INDEX_PASSWORD (or PACS_INDEX_PASSWORD_FILE).
     #[arg(long, env = "PACS_INDEX", default_value = "data/index.sqlite")]
-    pub index: PathBuf,
+    pub index: String,
 
     /// Where files go: `file:<directory>` or `s3://<bucket>[/<prefix>]`.
     #[arg(long, env = "PACS_STORAGE", default_value = "file:data/files")]
@@ -135,18 +136,89 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
             Store::s3(&config, &prefix)?
         }
     };
-    if let Some(parent) = settings
-        .index
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating the index directory {}", parent.display()))?;
-    }
-    let index = Index::open(&settings.index)
-        .await
-        .with_context(|| format!("opening the index {}", settings.index.display()))?;
+    let index = match IndexLocation::parse(&settings.index) {
+        IndexLocation::Postgres(url) => {
+            let url = match secret("PACS_INDEX_PASSWORD", process_env)? {
+                Some(password) => with_password(&url, &password)?,
+                None => url,
+            };
+            Index::connect(&url)
+                .await
+                .with_context(|| format!("opening the Postgres index {}", without_password(&url)))?
+        }
+        IndexLocation::Sqlite(path) => {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("creating the index directory {}", parent.display())
+                })?;
+            }
+            Index::open(&path)
+                .await
+                .with_context(|| format!("opening the index {}", path.display()))?
+        }
+    };
     Ok(Archive::new(store, index).with_overwrite(settings.overwrite_instances))
+}
+
+/// Where the index is, parsed from `--index`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexLocation {
+    Sqlite(PathBuf),
+    Postgres(String),
+}
+
+impl IndexLocation {
+    pub fn parse(text: &str) -> Self {
+        if text.starts_with("postgres://") || text.starts_with("postgresql://") {
+            IndexLocation::Postgres(text.to_owned())
+        } else {
+            IndexLocation::Sqlite(PathBuf::from(text.strip_prefix("sqlite:").unwrap_or(text)))
+        }
+    }
+}
+
+/// `postgres://user@host/db` with `password` put in, percent-encoded. A URL that already
+/// has a password is an error: one place for it is enough.
+pub fn with_password(url: &str, password: &str) -> anyhow::Result<String> {
+    let (scheme, rest) = url
+        .split_once("://")
+        .context("a Postgres URL looks like postgres://user@host/database")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let Some((user, host)) = authority.rsplit_once('@') else {
+        bail!("the Postgres URL needs a user (postgres://user@host/database) for its password");
+    };
+    if user.contains(':') {
+        bail!("the Postgres URL has a password already; set it in one place only");
+    }
+    let encoded: String = password
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    let path = if path.is_empty() {
+        String::new()
+    } else {
+        format!("/{path}")
+    };
+    Ok(format!("{scheme}://{user}:{encoded}@{host}{path}"))
+}
+
+/// A Postgres URL fit for logs.
+pub fn without_password(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => match rest.split_once('@') {
+            Some((user, host)) => {
+                let user = user.split(':').next().unwrap_or(user);
+                format!("{scheme}://{user}:***@{host}")
+            }
+            None => url.to_owned(),
+        },
+        None => url.to_owned(),
+    }
 }
 
 /// The whole HTTP application: `/healthz`, the REST API at `/` and DICOMweb under

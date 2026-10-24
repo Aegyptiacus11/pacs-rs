@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
         listen = %listener.local_addr()?,
         dicomweb = %settings.dicomweb_path,
         storage = ?StorageLocation::parse(&settings.storage)?,
-        index = %settings.index.display(),
+        index = %pacs_server::without_password(&settings.index),
         "pacs-server {} ready",
         env!("CARGO_PKG_VERSION"),
     );
