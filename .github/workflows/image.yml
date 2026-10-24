@@ -1,0 +1,65 @@
+# Builds the pacs-server image when a tag v<version> is pushed, and pushes it to Harbor on the
+# homeserver as pacs/pacs-server:<version>-<short commit>. Runs on the homeserver's own runner
+# (homeserver-infra, stacks/runners), whose build daemon reaches Harbor at homeserver:8080.
+# The runner must go before this repo is made public (see README, "Releases").
+name: image
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+
+jobs:
+  image:
+    runs-on: [self-hosted, homeserver]
+    timeout-minutes: 60
+    env:
+      REGISTRY: homeserver:8080
+      IMAGE: homeserver:8080/pacs/pacs-server
+      # Docker's login lives in the job's temporary folder, emptied before the next job.
+      DOCKER_CONFIG: ${{ runner.temp }}/docker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag
+        id: tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          crate="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          if [ "$version" != "$crate" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $crate"
+            exit 1
+          fi
+          echo "tag=$version-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: >
+          docker build --pull
+          --label org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+          --label org.opencontainers.image.revision=${{ github.sha }}
+          --label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          -t "$IMAGE:${{ steps.tag.outputs.tag }}" .
+
+      - name: Push
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          printf '%s' "$HARBOR_PASSWORD" | docker login "$REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+          docker push "$IMAGE:${{ steps.tag.outputs.tag }}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ steps.tag.outputs.tag }}")"
+          echo "$digest"
+          {
+            echo "Pushed \`$IMAGE:${{ steps.tag.outputs.tag }}\`"
+            echo
+            echo "On the homeserver: \`127.0.0.1:8080/pacs/pacs-server:${{ steps.tag.outputs.tag }}@${digest#*@}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out
+        if: always()
+        run: docker logout "$REGISTRY" || true
