@@ -104,7 +104,12 @@ jobs:
         run: |
           [ -n "$WEBHOOK" ] || { echo "::error::secret PORTAINER_PACS_WEBHOOK is empty"; exit 1; }
           # Portainer's self-signed certificate, on the host itself.
-          curl -fsS -k -X POST --max-time 300 "https://homeserver:9443/api/stacks/webhooks/$WEBHOOK"
+          code="$(curl -sS -k -o /dev/null -w '%{http_code}' -X POST --max-time 300 "https://homeserver:9443/api/stacks/webhooks/$WEBHOOK")"
+          case "$code" in
+            2??) ;;
+            404) echo "::error::Portainer does not know this webhook: set PORTAINER_PACS_WEBHOOK again from the pacs stack's page"; exit 1 ;;
+            *) echo "::error::webhook answered HTTP $code"; exit 1 ;;
+          esac
           for _ in $(seq 1 36); do
             if curl -fsS --max-time 5 http://100.116.202.2:8104/healthz >/dev/null; then
               echo "pacs answers on its tailnet port"
