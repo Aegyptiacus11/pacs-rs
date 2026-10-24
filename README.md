@@ -1,7 +1,7 @@
 # pacs-rs
 
 An open-source PACS written in Rust, built on the [dicom-rs](https://github.com/Enet4/dicom-rs)
-crates.
+crates. Its index is SQLite or Postgres; its files are on disk or in S3-compatible storage.
 
 Status: early development. `pacs-server` serves DICOMweb over HTTP, with files on disk or in
 S3 and a SQLite index.
@@ -12,7 +12,7 @@ S3 and a SQLite index.
 |---|---|
 | `pacs-core` | parse a DICOM file, its UIDs, per-level attributes, DICOM JSON, frames |
 | `pacs-store` | the files, as received: local disk, S3-compatible storage or memory |
-| `pacs-index` | the SQLite index: hierarchy, counts, attributes, metadata, storage keys |
+| `pacs-index` | the index, SQLite or Postgres: hierarchy, counts, attributes, metadata, storage keys |
 | `pacs-archive` | ingest: store then index, undone if the index refuses |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, find, study archives |
@@ -76,7 +76,8 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_LISTEN` | `127.0.0.1:8080` | address to listen on |
 | `PACS_DICOMWEB_PATH` | `/dicom-web` | where the DICOMweb root is served |
 | `PACS_BASE_URL` | from the request | public URL of the DICOMweb root, for Retrieve URLs |
-| `PACS_INDEX` | `data/index.sqlite` | the SQLite index |
+| `PACS_INDEX` | `data/index.sqlite` | a SQLite file, or `postgres://user@host/database` |
+| `PACS_INDEX_PASSWORD` | | the Postgres password; environment only, or `..._FILE` naming a file |
 | `PACS_STORAGE` | `file:data/files` | `file:<directory>` or `s3://<bucket>[/<prefix>]` |
 | `PACS_S3_ENDPOINT` | AWS | e.g. `http://homeserver:8333` for SeaweedFS |
 | `PACS_S3_REGION` | `us-east-1` | |
@@ -105,6 +106,20 @@ The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up.
 ```bash
 cargo test --workspace
 ```
+
+The Postgres tests run only when `PACS_TEST_POSTGRES_URL` names a server; each test makes a
+database of its own there. Every index test, the server tests and the reference comparison then
+run on Postgres as well as SQLite:
+
+```bash
+docker run -d --rm --name pacs-rs-test-pg -p 127.0.0.1:15432:5432 -e POSTGRES_PASSWORD=test \
+  postgres:18.4-alpine
+PACS_TEST_POSTGRES_URL=postgres://postgres:test@127.0.0.1:15432 cargo test --workspace
+docker stop pacs-rs-test-pg
+```
+
+Connections to Postgres are not encrypted yet (no TLS); keep the database on the same host or
+private network.
 
 The S3 tests run only when `PACS_TEST_S3_ENDPOINT` is set; against a throwaway SeaweedFS:
 
