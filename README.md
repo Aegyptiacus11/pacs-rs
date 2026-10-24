@@ -112,7 +112,7 @@ and waits for `/healthz`. The job runs on a self-hosted runner on the homeserver
 |---|---|---|
 | `HARBOR_USERNAME`, `HARBOR_PASSWORD` | registry robot, push and pull in `pacs` | homeserver-infra `scripts/harbor-ci-robot.py` |
 | `INFRA_TOKEN` | fine-grained token, Contents: read and write on homeserver-infra only | GitHub settings |
-| `PORTAINER_PACS_WEBHOOK` | the `pacs` stack's webhook id | `terraform output -raw pacs_webhook_id` in homeserver-infra |
+| `PORTAINER_PACS_WEBHOOK` | the `pacs` stack's webhook id | Portainer, the stack's page (homeserver-infra `stacks/pacs/README.md`) |
 
 ```bash
 git tag v0.1.1 && git push origin v0.1.1
