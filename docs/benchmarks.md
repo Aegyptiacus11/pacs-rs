@@ -17,6 +17,11 @@ The same workload and machine as below, against the latest reference release (26
 | 200 frames, 8 requests at a time | 0.29-0.30 s | 0.27-0.28 s |
 | study ZIP, 95 MB | 2.49-2.50 s | 1.92-1.98 s |
 
+The pacs-rs figures above are from the Debian-based image. The static image that replaced it
+(15 MB, musl with mimalloc) measured the same or better on this workload: frames 1.72-1.84 s
+one at a time and 0.26-0.27 s eight at a time, the ZIP 1.72-1.76 s. Without mimalloc, musl's
+allocator made frames about 25% slower.
+
 ## 2026-10-24: one CT series, reference server 26.6.1
 
 - Data: a synthetic series, 200 slices of 512 x 512 x 16 bits, 101 MB

@@ -86,8 +86,10 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
 | `RUST_LOG` | `info` | log filter |
 
-In Docker, `docker build -t pacs-server .`; the image listens on `0.0.0.0:8080` and keeps the
-index and files in the `/data` volume unless `PACS_STORAGE` says otherwise.
+In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 15 MB, run as
+an unprivileged user (uid 10001). It listens on `0.0.0.0:8080` and keeps the index and files in
+the `/data` volume unless `PACS_STORAGE` says otherwise. With no shell or curl inside, health
+checks call `/healthz` from outside.
 
 A synthetic series to try it with:
 
