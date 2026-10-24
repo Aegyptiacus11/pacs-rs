@@ -101,20 +101,28 @@ curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 
 ## Releases
 
-Pushing a tag `v<version>` (the workspace version in `Cargo.toml`) builds the Docker image and
-pushes it to the private registry on the homeserver as `pacs/pacs-server:<version>-<commit>`
-(`.github/workflows/image.yml`). The job runs on a self-hosted runner there
-(homeserver-infra, `stacks/runners`), with the registry login in the repository secrets
-`HARBOR_USERNAME` and `HARBOR_PASSWORD` (homeserver-infra, `scripts/harbor-ci-robot.py`).
+Pushing a tag `v<version>` (the workspace version in `Cargo.toml`) releases to the homeserver
+(`.github/workflows/image.yml`): it builds the Docker image, pushes it to the private registry
+there as `pacs/pacs-server:<version>-<commit>`, pins that digest in homeserver-infra's
+`stacks/pacs/compose.yml` (a commit to its `main`), calls the `pacs` stack's Portainer webhook,
+and waits for `/healthz`. The job runs on a self-hosted runner on the homeserver
+(homeserver-infra, `stacks/runners`). Repository secrets:
+
+| Secret | What | Made with |
+|---|---|---|
+| `HARBOR_USERNAME`, `HARBOR_PASSWORD` | registry robot, push and pull in `pacs` | homeserver-infra `scripts/harbor-ci-robot.py` |
+| `INFRA_TOKEN` | fine-grained token, Contents: read and write on homeserver-infra only | GitHub settings |
+| `PORTAINER_PACS_WEBHOOK` | the `pacs` stack's webhook id | `terraform output -raw pacs_webhook_id` in homeserver-infra |
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
-**Before this repository goes public**, remove that runner (homeserver-infra,
-`stacks/runners/README.md`) and the workflow, or move the workflow to GitHub's runners: the
-runner's build daemon is privileged, which is root on the homeserver, and in a public repository
-a pull request can add a workflow that runs on it.
+**Before this repository goes public**, remove the runner (homeserver-infra,
+`stacks/runners/README.md`), revoke `INFRA_TOKEN`, delete the four secrets, and drop the
+workflow or move it to GitHub's runners: the runner's build daemon is privileged, which is
+root on the homeserver, and in a public repository a pull request can add a workflow that
+runs on it.
 
 ## Building
 
