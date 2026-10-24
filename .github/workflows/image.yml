@@ -21,10 +21,13 @@ jobs:
     env:
       REGISTRY: homeserver:8080
       IMAGE: homeserver:8080/pacs/pacs-server
-      # Docker's login lives in the job's temporary folder, emptied before the next job.
-      DOCKER_CONFIG: ${{ runner.temp }}/docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Docker's login lives in the job's temporary folder, emptied before the next job.
+      # (The runner context is not available in the job's env, hence this step.)
+      - name: Docker config
+        run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
 
       - name: Tag
         id: tag
