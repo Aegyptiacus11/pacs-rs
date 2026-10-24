@@ -94,7 +94,23 @@ fn strings_and_ints_for_the_index() {
     use dicom_dictionary_std::tags;
     let instance = Instance::from_bytes(&SyntheticSeries::new(16, 2).slice_bytes(1)).unwrap();
     assert_eq!(instance.string(tags::MODALITY).as_deref(), Some("CT"));
-    assert_eq!(instance.string(tags::STUDY_DATE), None);
+    assert_eq!(
+        instance.string(tags::STUDY_DATE).as_deref(),
+        Some("20260101")
+    );
+    assert_eq!(instance.string(tags::REQUESTING_PHYSICIAN), None);
     assert_eq!(instance.int(tags::INSTANCE_NUMBER), Some(2));
     assert_eq!(instance.int(tags::ROWS), Some(4));
+}
+
+#[test]
+fn a_latin1_name_round_trips() {
+    let series = SyntheticSeries::new(17, 1).with_patient("MÜLLER^RENÉ", Some("ISO_IR 100"));
+    let bytes = series.slice_bytes(0);
+    // written in ISO 8859-1, one byte per letter: no UTF-8 sequence for Ü (C3 9C)
+    assert!(bytes.windows(2).all(|w| w != [0xC3, 0x9C]));
+    assert!(bytes.windows(6).any(|w| w == b"M\xDCLLER"));
+    let instance = Instance::from_bytes(&bytes).unwrap();
+    let json = instance.to_json().unwrap();
+    assert_eq!(json["00100010"]["Value"][0]["Alphabetic"], "MÜLLER^RENÉ");
 }

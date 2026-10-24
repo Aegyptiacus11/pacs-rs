@@ -16,6 +16,9 @@ pub struct SyntheticSeries {
     pub slices: u32,
     pub rows: u16,
     pub columns: u16,
+    pub patient_name: String,
+    /// Specific Character Set, when the patient name needs one.
+    pub character_set: Option<&'static str>,
 }
 
 impl SyntheticSeries {
@@ -27,6 +30,8 @@ impl SyntheticSeries {
             slices,
             rows: 4,
             columns: 4,
+            patient_name: "SYNTHETIC^SERIES".into(),
+            character_set: None,
         }
     }
 
@@ -34,6 +39,13 @@ impl SyntheticSeries {
     pub fn in_study(mut self, study_seed: u32, number: u32) -> Self {
         self.study_seed = study_seed;
         self.series_number = number;
+        self
+    }
+
+    /// The same series for a patient named `name`, in `character_set` (e.g. `ISO_IR 100`).
+    pub fn with_patient(mut self, name: &str, character_set: Option<&'static str>) -> Self {
+        self.patient_name = name.into();
+        self.character_set = character_set;
         self
     }
 
@@ -109,12 +121,39 @@ impl SyntheticSeries {
 
     fn dataset(&self, slice: u32) -> InMemDicomObject {
         let z = slice as f64 * 2.5;
-        InMemDicomObject::from_element_iter([
+        let mut object = InMemDicomObject::from_element_iter([
             DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
             DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, self.instance_uid(slice)),
             DataElement::new(tags::MODALITY, VR::CS, "CT"),
-            DataElement::new(tags::PATIENT_NAME, VR::PN, "SYNTHETIC^SERIES"),
+            DataElement::new(tags::PATIENT_NAME, VR::PN, self.patient_name.as_str()),
             DataElement::new(tags::PATIENT_ID, VR::LO, format!("SYN{}", self.study_seed)),
+            DataElement::new(tags::PATIENT_BIRTH_DATE, VR::DA, "19700101"),
+            DataElement::new(tags::PATIENT_SEX, VR::CS, "O"),
+            DataElement::new(tags::STUDY_DATE, VR::DA, "20260101"),
+            DataElement::new(tags::STUDY_TIME, VR::TM, "120000"),
+            DataElement::new(
+                tags::ACCESSION_NUMBER,
+                VR::SH,
+                format!("ACC{}", self.study_seed),
+            ),
+            DataElement::new(
+                tags::REFERRING_PHYSICIAN_NAME,
+                VR::PN,
+                "REFERRING^PHYSICIAN",
+            ),
+            DataElement::new(tags::STUDY_ID, VR::SH, format!("S{}", self.study_seed)),
+            DataElement::new(tags::STUDY_DESCRIPTION, VR::LO, "Synthetic study"),
+            DataElement::new(
+                tags::SERIES_DESCRIPTION,
+                VR::LO,
+                format!("Synthetic series {}", self.series_number),
+            ),
+            DataElement::new(tags::SLICE_THICKNESS, VR::DS, "2.5"),
+            DataElement::new(
+                tags::PIXEL_SPACING,
+                VR::DS,
+                dicom_value!(Strs, ["0.5".to_owned(), "0.5".to_owned()]),
+            ),
             DataElement::new(tags::STUDY_INSTANCE_UID, VR::UI, self.study_uid()),
             DataElement::new(tags::SERIES_INSTANCE_UID, VR::UI, self.series_uid()),
             DataElement::new(tags::SERIES_NUMBER, VR::IS, self.series_number.to_string()),
@@ -136,7 +175,15 @@ impl SyntheticSeries {
                 VR::US,
                 PrimitiveValue::from(0_u16),
             ),
-        ])
+        ]);
+        if let Some(character_set) = self.character_set {
+            object.put(DataElement::new(
+                tags::SPECIFIC_CHARACTER_SET,
+                VR::CS,
+                character_set,
+            ));
+        }
+        object
     }
 
     /// Every slice, in instance-number order.
