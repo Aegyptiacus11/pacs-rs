@@ -134,6 +134,26 @@ fn put(attributes: &mut Value, tag: &str, element: Value) {
     }
 }
 
+/// `lower` laid over `upper`: a series result is its study's attributes plus its own,
+/// an instance result its study's, its series' and its own, as the reference server
+/// answers. The lower level wins where both have a tag.
+fn inherit(upper: &Value, lower: Value) -> Value {
+    let mut merged = upper.clone();
+    if let (Some(m), Value::Object(l)) = (merged.as_object_mut(), lower) {
+        m.extend(l);
+    }
+    merged
+}
+
+/// Search results are JSON, so their strings are UTF-8 whatever the files say.
+fn utf8(attributes: &mut Value) {
+    put(
+        attributes,
+        "00080005",
+        json!({"vr": "CS", "Value": ["ISO_IR 192"]}),
+    );
+}
+
 fn uid(value: &str) -> Value {
     json!({"vr": "UI", "Value": [value]})
 }
@@ -144,6 +164,16 @@ fn count(n: i64) -> Value {
 
 fn url(value: String) -> Value {
     json!({"vr": "UR", "Value": [value]})
+}
+
+/// A study's stored attributes, `{}` for a study not indexed.
+async fn study_attributes(state: &AppState, study: &str) -> Result<Value, ApiError> {
+    Ok(state
+        .archive
+        .index()
+        .study(study)
+        .await?
+        .map_or_else(|| json!({}), |s| s.attributes))
 }
 
 pub(crate) async fn studies(
@@ -180,6 +210,7 @@ pub(crate) async fn studies(
                 "00081190",
                 url(study_url(&base, &study.study_instance_uid)),
             );
+            utf8(&mut attributes);
             attributes
         })
         .collect();
@@ -203,11 +234,12 @@ pub(crate) async fn series(
     if let Some(modality) = search.get("00080060") {
         series.retain(|s| s.attributes["00080060"]["Value"][0] == modality);
     }
+    let study_attributes = study_attributes(&state, &study).await?;
     let body: Vec<Value> = search
         .page(series)
         .into_iter()
         .map(|series| {
-            let mut attributes = series.attributes;
+            let mut attributes = inherit(&study_attributes, series.attributes);
             put(&mut attributes, "0020000D", uid(&series.study_instance_uid));
             put(&mut attributes, "00201209", count(series.instance_count));
             put(
@@ -219,6 +251,7 @@ pub(crate) async fn series(
                     &series.series_instance_uid,
                 )),
             );
+            utf8(&mut attributes);
             attributes
         })
         .collect();
@@ -242,11 +275,28 @@ pub(crate) async fn instances(
     if let Some(class) = search.get("00080016") {
         instances.retain(|i| i.sop_class_uid == class);
     }
+    let upper = match state
+        .archive
+        .index()
+        .series(&study, Some(&series))
+        .await?
+        .into_iter()
+        .next()
+    {
+        Some(s) => inherit(&study_attributes(&state, &study).await?, s.attributes),
+        None => json!({}),
+    };
     let body: Vec<Value> = search
         .page(instances)
         .into_iter()
         .map(|instance| {
-            let mut attributes = instance.attributes;
+            let mut attributes = inherit(&upper, instance.attributes);
+            // every indexed instance is in the store, ready to retrieve
+            put(
+                &mut attributes,
+                "00080056",
+                json!({"vr": "CS", "Value": ["ONLINE"]}),
+            );
             put(
                 &mut attributes,
                 "0020000D",
@@ -267,6 +317,7 @@ pub(crate) async fn instances(
                     &instance.sop_instance_uid,
                 )),
             );
+            utf8(&mut attributes);
             attributes
         })
         .collect();
