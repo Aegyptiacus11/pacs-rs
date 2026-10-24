@@ -10,6 +10,7 @@ use dicom_dictionary_std::tags;
 use dicom_object::file::ReadPreamble;
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
 
+pub mod json;
 pub mod levels;
 #[cfg(feature = "synthetic")]
 pub mod synthetic;
@@ -68,7 +69,9 @@ impl Instance {
 
     /// The data set as DICOM JSON (PS3.18 F.2), file meta group excluded.
     pub fn to_json(&self) -> Result<serde_json::Value, serde_json::Error> {
-        dicom_json::to_value(&*self.object)
+        let mut value = dicom_json::to_value(&*self.object)?;
+        json::normalize(&mut value);
+        Ok(value)
     }
 
     /// The data set as DICOM JSON without its bulk pixel data, as the index keeps it for
@@ -110,7 +113,9 @@ fn elements_json<'a>(
             dicom_json::to_value(element)?,
         );
     }
-    Ok(serde_json::Value::Object(map))
+    let mut value = serde_json::Value::Object(map);
+    json::normalize(&mut value);
+    Ok(value)
 }
 
 fn uid(object: &DefaultDicomObject, name: &'static str, tag: Tag) -> Result<String, Error> {

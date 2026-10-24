@@ -86,7 +86,7 @@ fn level_attributes_are_split_by_level() {
     assert_eq!(series_json["00080060"]["Value"][0], "CT");
     assert!(series_json.get("00100010").is_none());
     let inst = instance.attributes_json(levels::INSTANCE).unwrap();
-    assert_eq!(inst["00200013"]["vr"], "IS");
+    assert_eq!(inst["00200013"]["Value"][0], 1);
 }
 
 #[test]
