@@ -446,7 +446,22 @@ impl Index {
         series_instance_uid: &str,
         sop_instance_uid: Option<&str>,
     ) -> Result<Vec<Value>, Error> {
-        let rows: Vec<String> = sqlx::query_scalar(
+        self.metadata_text(study_instance_uid, series_instance_uid, sop_instance_uid)
+            .await?
+            .into_iter()
+            .map(parse)
+            .collect()
+    }
+
+    /// [`Index::metadata`] as the stored JSON text, one string per instance, for a server
+    /// to send without parsing and writing it again.
+    pub async fn metadata_text(
+        &self,
+        study_instance_uid: &str,
+        series_instance_uid: &str,
+        sop_instance_uid: Option<&str>,
+    ) -> Result<Vec<String>, Error> {
+        Ok(sqlx::query_scalar(
             "SELECT i.metadata
                FROM instances i JOIN series se USING (series_instance_uid)
               WHERE se.study_instance_uid = ?1 AND i.series_instance_uid = ?2
@@ -457,8 +472,7 @@ impl Index {
         .bind(series_instance_uid)
         .bind(sop_instance_uid)
         .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter().map(parse).collect()
+        .await?)
     }
 }
 

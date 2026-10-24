@@ -13,10 +13,9 @@ use pacs_archive::Archive;
 use pacs_core::Instance;
 use pacs_core::frames::{Frame, FrameError};
 use pacs_index::InstanceEntry;
-use serde_json::Value;
 
 use crate::media::{Accept, Packaging, accepts_json, negotiate};
-use crate::qido::json_response;
+use crate::qido::DICOM_JSON;
 use crate::{ApiError, AppState, multipart};
 
 const DICOM: &str = "application/dicom";
@@ -134,7 +133,8 @@ pub(crate) async fn instance(
     retrieve(state.archive, &headers, entries)
 }
 
-fn metadata_response(headers: &HeaderMap, metadata: Vec<Value>) -> Result<Response, ApiError> {
+/// The stored JSON of each instance, joined into one array as it is: no parsing.
+fn metadata_response(headers: &HeaderMap, metadata: Vec<String>) -> Result<Response, ApiError> {
     if !accepts_json(&accept(headers)) {
         return Err(ApiError::not_acceptable(
             "metadata comes as application/dicom+json",
@@ -143,7 +143,11 @@ fn metadata_response(headers: &HeaderMap, metadata: Vec<Value>) -> Result<Respon
     if metadata.is_empty() {
         return Err(ApiError::not_found("no such instances"));
     }
-    Ok(json_response(Value::Array(metadata)))
+    let mut body = String::with_capacity(metadata.iter().map(|m| m.len() + 1).sum::<usize>() + 2);
+    body.push('[');
+    body.push_str(&metadata.join(","));
+    body.push(']');
+    Ok(([(CONTENT_TYPE, DICOM_JSON)], body).into_response())
 }
 
 pub(crate) async fn study_metadata(
@@ -156,7 +160,7 @@ pub(crate) async fn study_metadata(
     for series in index.series(&study, None).await? {
         metadata.extend(
             index
-                .metadata(&study, &series.series_instance_uid, None)
+                .metadata_text(&study, &series.series_instance_uid, None)
                 .await?,
         );
     }
@@ -171,7 +175,7 @@ pub(crate) async fn series_metadata(
     let metadata = state
         .archive
         .index()
-        .metadata(&study, &series, None)
+        .metadata_text(&study, &series, None)
         .await?;
     metadata_response(&headers, metadata)
 }
@@ -184,7 +188,7 @@ pub(crate) async fn instance_metadata(
     let metadata = state
         .archive
         .index()
-        .metadata(&study, &series, Some(&instance))
+        .metadata_text(&study, &series, Some(&instance))
         .await?;
     metadata_response(&headers, metadata)
 }
