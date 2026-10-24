@@ -324,12 +324,37 @@ impl Report {
     }
 }
 
-async fn start_pacs() -> (Server, tempfile::TempDir) {
+/// The index pacs-rs runs on here: a fresh Postgres database when `PACS_TEST_POSTGRES_URL`
+/// names a server, else a SQLite file in `dir`.
+async fn index_for(dir: &std::path::Path, tag: &str) -> String {
+    let Ok(server) = std::env::var("PACS_TEST_POSTGRES_URL") else {
+        return dir.join("index.sqlite").display().to_string();
+    };
+    let server = server.trim_end_matches('/');
+    let name = format!("pacs_reference_{tag}_{}", std::process::id());
+    sqlx::any::install_default_drivers();
+    let mut admin =
+        <sqlx::AnyConnection as sqlx::Connection>::connect(&format!("{server}/postgres"))
+            .await
+            .unwrap();
+    for sql in [
+        format!("DROP DATABASE IF EXISTS {name}"),
+        format!("CREATE DATABASE {name}"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut admin)
+            .await
+            .unwrap();
+    }
+    format!("{server}/{name}")
+}
+
+async fn start_pacs(tag: &str) -> (Server, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let settings = <Settings as clap::Parser>::try_parse_from([
         "pacs-server".to_owned(),
         "--index".into(),
-        dir.path().join("index.sqlite").display().to_string(),
+        index_for(dir.path(), tag).await,
         "--storage".into(),
         format!("file:{}", dir.path().join("files").display()),
     ])
@@ -379,7 +404,7 @@ async fn same_rest_answers_as_the_reference_server() {
         base: reference_base.trim_end_matches('/').to_owned(),
         client: reqwest::Client::new(),
     });
-    let (pacs_dicomweb, _dir) = start_pacs().await;
+    let (pacs_dicomweb, _dir) = start_pacs("rest").await;
     let pacs = rest_root(&pacs_dicomweb);
     let mut report = Report::default();
 
@@ -559,7 +584,7 @@ async fn same_answers_as_the_reference_server() {
         base: reference_base.trim_end_matches('/').to_owned(),
         client: reqwest::Client::new(),
     };
-    let (pacs, _dir) = start_pacs().await;
+    let (pacs, _dir) = start_pacs("dicomweb").await;
     let mut report = Report::default();
 
     // Fresh UIDs every run: the reference server keeps the first copy of an instance it
