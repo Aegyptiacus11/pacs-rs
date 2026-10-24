@@ -13,7 +13,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 mod rest;
-pub use rest::{RestInstance, RestSeries, RestStudy, Statistics};
+pub use rest::{RestInstance, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -112,6 +112,8 @@ pub enum Recorded {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Study {
     pub study_instance_uid: String,
+    /// The REST API's ID; `None` for a study indexed before public IDs existed.
+    pub public_id: Option<String>,
     /// DICOM JSON of the study-level attributes.
     pub attributes: Value,
     pub modalities: Vec<String>,
@@ -297,7 +299,7 @@ impl Index {
 
     pub async fn studies(&self, filter: &StudyFilter) -> Result<Vec<Study>, Error> {
         let rows = sqlx::query(
-            "SELECT st.study_instance_uid, st.attributes,
+            "SELECT st.study_instance_uid, st.public_id, st.attributes,
                     (SELECT count(*) FROM series se
                       WHERE se.study_instance_uid = st.study_instance_uid) AS series_count,
                     (SELECT count(*) FROM instances i JOIN series se USING (series_instance_uid)
@@ -327,6 +329,7 @@ impl Index {
                 let modalities: Option<String> = row.try_get("modalities")?;
                 Ok(Study {
                     study_instance_uid: row.try_get("study_instance_uid")?,
+                    public_id: row.try_get("public_id")?,
                     attributes: parse(row.try_get("attributes")?)?,
                     modalities: modalities
                         .map(|m| m.split('\\').map(str::to_owned).collect())

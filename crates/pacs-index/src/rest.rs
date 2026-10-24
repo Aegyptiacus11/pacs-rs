@@ -6,6 +6,25 @@ use sqlx::sqlite::SqliteRow;
 
 use crate::{Error, Index, parse};
 
+/// A study or series is stable once nothing new has arrived for this long, the reference
+/// server's default `StableAge`.
+pub const STABLE_AGE_SECONDS: i64 = 60;
+
+/// `last_update` and `is_stable` from the latest `received_at` of `$instances`. The 60 is
+/// [`STABLE_AGE_SECONDS`]; SQL text has to be a literal, so it is written out.
+macro_rules! freshness {
+    ($instances:literal) => {
+        concat!(
+            "(SELECT strftime('%Y%m%dT%H%M%S', max(i.received_at)) ",
+            $instances,
+            ") AS last_update,
+             (SELECT (julianday('now') - julianday(max(i.received_at))) * 86400 > 60 ",
+            $instances,
+            ") AS is_stable"
+        )
+    };
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestStudy {
     pub public_id: String,
@@ -15,8 +34,10 @@ pub struct RestStudy {
     pub patient_main_tags: Value,
     /// Public IDs of its series, by series number.
     pub series: Vec<String>,
-    /// When its latest instance arrived, `YYYY-MM-DDTHH:MM:SS.fffZ`.
+    /// When its latest instance arrived, UTC, `YYYYMMDDTHHMMSS`.
     pub last_update: String,
+    /// Whether nothing has arrived for [`STABLE_AGE_SECONDS`].
+    pub is_stable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +50,7 @@ pub struct RestSeries {
     /// Public IDs of its instances, by instance number.
     pub instances: Vec<String>,
     pub last_update: String,
+    pub is_stable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,14 +122,15 @@ impl Index {
     }
 
     pub async fn rest_study(&self, public_id: &str) -> Result<Option<RestStudy>, Error> {
-        let Some(row) = sqlx::query(
+        let Some(row) = sqlx::query(concat!(
             "SELECT st.public_id, st.study_instance_uid, st.patient_public_id, st.main_tags,
-                    st.patient_main_tags,
-                    (SELECT max(i.received_at) FROM instances i
-                       JOIN series se USING (series_instance_uid)
-                      WHERE se.study_instance_uid = st.study_instance_uid) AS last_update
-               FROM studies st WHERE st.public_id = ?",
-        )
+                        st.patient_main_tags, ",
+            freshness!(
+                "FROM instances i JOIN series se USING (series_instance_uid)
+                      WHERE se.study_instance_uid = st.study_instance_uid"
+            ),
+            " FROM studies st WHERE st.public_id = ?"
+        ))
         .bind(public_id)
         .fetch_optional(&self.pool)
         .await?
@@ -130,18 +153,18 @@ impl Index {
             patient_main_tags: parse(row.try_get("patient_main_tags")?)?,
             series,
             last_update: row.try_get("last_update")?,
+            is_stable: row.try_get("is_stable")?,
         }))
     }
 
     pub async fn rest_series(&self, public_id: &str) -> Result<Option<RestSeries>, Error> {
-        let Some(row) = sqlx::query(
-            "SELECT se.public_id, se.series_instance_uid, se.study_instance_uid, se.main_tags,
-                    st.public_id AS parent_study,
-                    (SELECT max(i.received_at) FROM instances i
-                      WHERE i.series_instance_uid = se.series_instance_uid) AS last_update
-               FROM series se JOIN studies st USING (study_instance_uid)
-              WHERE se.public_id = ?",
-        )
+        let Some(row) = sqlx::query(concat!(
+            "SELECT se.public_id, se.series_instance_uid, se.study_instance_uid,
+                        se.main_tags, st.public_id AS parent_study, ",
+            freshness!("FROM instances i WHERE i.series_instance_uid = se.series_instance_uid"),
+            " FROM series se JOIN studies st USING (study_instance_uid)
+                  WHERE se.public_id = ?"
+        ))
         .bind(public_id)
         .fetch_optional(&self.pool)
         .await?
@@ -164,6 +187,7 @@ impl Index {
             main_tags: parse(row.try_get("main_tags")?)?,
             instances,
             last_update: row.try_get("last_update")?,
+            is_stable: row.try_get("is_stable")?,
         }))
     }
 
@@ -174,6 +198,20 @@ impl Index {
             .await?
             .map(instance)
             .transpose()
+    }
+
+    /// The public ID of the series with this UID.
+    pub async fn series_public_id(
+        &self,
+        series_instance_uid: &str,
+    ) -> Result<Option<String>, Error> {
+        Ok(
+            sqlx::query_scalar("SELECT public_id FROM series WHERE series_instance_uid = ?")
+                .bind(series_instance_uid)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten(),
+        )
     }
 
     pub async fn rest_instance_by_uid(

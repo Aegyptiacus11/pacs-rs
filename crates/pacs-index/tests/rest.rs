@@ -22,7 +22,10 @@ async fn studies_series_and_instances_by_public_id() {
 
     let patient = "SYN81";
     let study_id = public_ids::study(patient, &first.study_uid());
-    assert_eq!(index.study_public_ids().await.unwrap(), std::slice::from_ref(&study_id));
+    assert_eq!(
+        index.study_public_ids().await.unwrap(),
+        std::slice::from_ref(&study_id)
+    );
 
     let study = index.rest_study(&study_id).await.unwrap().unwrap();
     assert_eq!(study.study_instance_uid, first.study_uid());
@@ -34,12 +37,19 @@ async fn studies_series_and_instances_by_public_id() {
         public_ids::series(patient, &first.study_uid(), &second.series_uid()),
     ];
     assert_eq!(study.series, series_ids);
-    assert!(study.last_update.ends_with('Z'));
+    // YYYYMMDDTHHMMSS, and just arrived, so not stable yet
+    assert_eq!(study.last_update.len(), 15);
+    assert_eq!(&study.last_update[8..9], "T");
+    assert!(!study.is_stable);
 
     let series = index.rest_series(&series_ids[0]).await.unwrap().unwrap();
     assert_eq!(series.parent_study, study_id);
     assert_eq!(series.main_tags["Modality"], "CT");
     assert_eq!(series.instances.len(), 3);
+    assert_eq!(
+        index.series_public_id(&first.series_uid()).await.unwrap(),
+        Some(series_ids[0].clone())
+    );
 
     let instance = index
         .rest_instance(&series.instances[2])
