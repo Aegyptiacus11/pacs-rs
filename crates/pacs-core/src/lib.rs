@@ -9,6 +9,9 @@ use dicom_dictionary_std::tags;
 use dicom_object::file::ReadPreamble;
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
 
+#[cfg(feature = "synthetic")]
+pub mod synthetic;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("not a readable DICOM file: {0}")]

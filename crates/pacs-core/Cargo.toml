@@ -14,3 +14,10 @@ dicom-json.workspace = true
 dicom-object.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[features]
+# Synthetic CT series for tests here and in the other crates.
+synthetic = []
+
+[dev-dependencies]
+pacs-core = { path = ".", features = ["synthetic"] }

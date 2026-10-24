@@ -407,6 +407,7 @@ dependencies = [
  "dicom-dictionary-std",
  "dicom-json",
  "dicom-object",
+ "pacs-core",
  "serde_json",
  "thiserror",
 ]
