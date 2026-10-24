@@ -93,8 +93,7 @@ A synthetic series to try it with:
 
 ```bash
 cargo run -p pacs-core --features synthetic --example write_synthetic -- synthetic 1 3
-curl -X POST -H 'Content-Type: application/dicom' --data-binary @synthetic/00001.dcm \
-  http://127.0.0.1:8080/dicom-web/instances
+curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 ```
 
 ## Building
