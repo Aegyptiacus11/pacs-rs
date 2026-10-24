@@ -113,7 +113,7 @@ run on Postgres as well as SQLite:
 
 ```bash
 docker run -d --rm --name pacs-rs-test-pg -p 127.0.0.1:15432:5432 -e POSTGRES_PASSWORD=test \
-  postgres:18.4-alpine
+  postgres:18.6-alpine
 PACS_TEST_POSTGRES_URL=postgres://postgres:test@127.0.0.1:15432 cargo test --workspace
 docker stop pacs-rs-test-pg
 ```
