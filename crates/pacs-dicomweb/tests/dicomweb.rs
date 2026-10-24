@@ -460,3 +460,46 @@ async fn searches_it_cannot_do_exactly_are_refused() {
     .await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn retrieve_urls_follow_the_proxy_and_the_mount_path() {
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let config = Config {
+        mount_path: "/dicom-web/".into(),
+        ..Config::default()
+    };
+    let app = router(archive, config);
+    let series = SyntheticSeries::new(68, 1);
+    stow(&app, "/studies", series.all_bytes()).await;
+    let reply = send(
+        &app,
+        "GET",
+        "/studies",
+        &[
+            ("x-forwarded-proto", "https"),
+            ("x-forwarded-host", "pacs.example.org, proxy.internal"),
+        ],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(
+        value(&reply.json()[0], "00081190"),
+        &format!(
+            "https://pacs.example.org/dicom-web/studies/{}",
+            series.study_uid()
+        )
+    );
+
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let config = Config {
+        base_url: Some("https://fixed.example/root/".into()),
+        ..Config::default()
+    };
+    let app = router(archive, config);
+    stow(&app, "/studies", series.all_bytes()).await;
+    let reply = get(&app, "/studies", "application/dicom+json").await;
+    assert_eq!(
+        value(&reply.json()[0], "00081190"),
+        &format!("https://fixed.example/root/studies/{}", series.study_uid())
+    );
+}
