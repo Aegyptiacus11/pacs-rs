@@ -1,0 +1,16 @@
+[package]
+name = "pacs-core"
+description = "DICOM instances as pacs-rs stores and indexes them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dicom-core.workspace = true
+dicom-dictionary-std.workspace = true
+dicom-json.workspace = true
+dicom-object.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
