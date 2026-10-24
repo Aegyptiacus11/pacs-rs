@@ -9,13 +9,14 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::HeaderMap;
 use axum::http::header::HOST;
-use axum::routing::get;
+use axum::routing::{get, post};
 use pacs_archive::Archive;
 
 mod error;
 pub mod media;
 pub mod multipart;
 mod qido;
+mod stow;
 mod wado;
 
 pub use error::ApiError;
@@ -61,10 +62,10 @@ pub fn router(archive: Archive, config: Config) -> Router {
     let limit = config.max_upload_bytes;
     let state = AppState { archive, config };
     Router::new()
-        .route("/studies", get(qido::studies))
+        .route("/studies", get(qido::studies).post(stow::store))
         .route(
             "/studies/{study}",
-            get(wado::study),
+            get(wado::study).post(stow::store_in_study),
         )
         .route("/studies/{study}/metadata", get(wado::study_metadata))
         .route("/studies/{study}/series", get(qido::series))
@@ -89,6 +90,7 @@ pub fn router(archive: Archive, config: Config) -> Router {
             "/studies/{study}/series/{series}/instances/{instance}/frames/{frames}",
             get(wado::frames),
         )
+        .route("/instances", post(stow::upload))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(state)
 }
