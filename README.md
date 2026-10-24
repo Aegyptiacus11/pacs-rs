@@ -99,6 +99,23 @@ cargo run -p pacs-core --features synthetic --example write_synthetic -- synthet
 curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 ```
 
+## Releases
+
+Pushing a tag `v<version>` (the workspace version in `Cargo.toml`) builds the Docker image and
+pushes it to the private registry on the homeserver as `pacs/pacs-server:<version>-<commit>`
+(`.github/workflows/image.yml`). The job runs on a self-hosted runner there
+(homeserver-infra, `stacks/runners`), with the registry login in the repository secrets
+`HARBOR_USERNAME` and `HARBOR_PASSWORD` (homeserver-infra, `scripts/harbor-ci-robot.py`).
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+**Before this repository goes public**, remove that runner (homeserver-infra,
+`stacks/runners/README.md`) and the workflow, or move the workflow to GitHub's runners: the
+runner's build daemon is privileged, which is root on the homeserver, and in a public repository
+a pull request can add a workflow that runs on it.
+
 ## Building
 
 The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up.
