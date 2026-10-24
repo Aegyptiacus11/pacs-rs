@@ -155,6 +155,11 @@ impl Archive {
 
     /// The stored file of an indexed instance.
     pub async fn file(&self, entry: &InstanceEntry) -> Result<Bytes, pacs_store::Error> {
-        self.store.get(&entry.object_key).await
+        self.file_at(&entry.object_key).await
+    }
+
+    /// The stored file under an index entry's `object_key`.
+    pub async fn file_at(&self, object_key: &str) -> Result<Bytes, pacs_store::Error> {
+        self.store.get(object_key).await
     }
 }
