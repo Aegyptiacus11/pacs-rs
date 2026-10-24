@@ -1,0 +1,217 @@
+use std::collections::HashMap;
+use std::path::Path;
+
+use axum::Router;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use bytes::Bytes;
+use clap::Parser;
+use http_body_util::BodyExt;
+use pacs_core::synthetic::SyntheticSeries;
+use pacs_dicomweb::multipart;
+use pacs_server::{Settings, StorageLocation, app, open_archive, secret, serve};
+use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tower::ServiceExt;
+
+fn settings_in(dir: &Path, extra: &[&str]) -> Settings {
+    let index = dir.join("db/index.sqlite");
+    let storage = format!("file:{}", dir.join("files").display());
+    let mut args = vec![
+        "pacs-server".to_owned(),
+        "--index".into(),
+        index.display().to_string(),
+        "--storage".into(),
+        storage,
+    ];
+    args.extend(extra.iter().map(|s| s.to_string()));
+    Settings::try_parse_from(args).unwrap()
+}
+
+async fn call(app: &Router, request: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Bytes) {
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    (
+        status,
+        headers,
+        response.into_body().collect().await.unwrap().to_bytes(),
+    )
+}
+
+fn stow_request(uri: &str, files: Vec<Vec<u8>>) -> Request<Body> {
+    let boundary = multipart::new_boundary();
+    let body = multipart::body(
+        &boundary,
+        files
+            .into_iter()
+            .map(|f| ("application/dicom".to_owned(), Bytes::from(f))),
+    );
+    Request::post(uri)
+        .header("host", "pacs.test")
+        .header(
+            "content-type",
+            format!(r#"multipart/related; type="application/dicom"; boundary={boundary}"#),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[test]
+fn storage_locations() {
+    assert_eq!(
+        StorageLocation::parse("file:data/files").unwrap(),
+        StorageLocation::Directory("data/files".into())
+    );
+    assert_eq!(
+        StorageLocation::parse("s3://dicom").unwrap(),
+        StorageLocation::S3 {
+            bucket: "dicom".into(),
+            prefix: String::new()
+        }
+    );
+    assert_eq!(
+        StorageLocation::parse("s3://dicom/pacs-rs/").unwrap(),
+        StorageLocation::S3 {
+            bucket: "dicom".into(),
+            prefix: "pacs-rs".into()
+        }
+    );
+    for bad in ["", "file:", "s3://", "/data", "http://x"] {
+        assert!(StorageLocation::parse(bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn secrets_from_the_environment_or_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("key");
+    std::fs::write(&file, "from-file\n").unwrap();
+    let env: HashMap<&str, String> = [
+        ("DIRECT", "direct".to_owned()),
+        ("VIA_FILE", file.display().to_string()),
+        ("BROKEN_FILE", "/nonexistent/key".to_owned()),
+    ]
+    .into();
+    let lookup = |name: &str| env.get(name).cloned();
+    assert_eq!(secret("DIRECT", lookup).unwrap().as_deref(), Some("direct"));
+    // VIA is unset, so VIA_FILE names the file; its newline is dropped
+    assert_eq!(secret("VIA", lookup).unwrap().as_deref(), Some("from-file"));
+    assert_eq!(secret("ABSENT", lookup).unwrap(), None);
+    assert!(secret("BROKEN", lookup).is_err());
+}
+
+#[test]
+fn defaults() {
+    let settings = Settings::try_parse_from(["pacs-server"]).unwrap();
+    assert_eq!(settings.listen.to_string(), "127.0.0.1:8080");
+    assert_eq!(settings.dicomweb_path, "/dicom-web");
+    assert_eq!(settings.storage, "file:data/files");
+    assert!(settings.cors_origins.is_empty());
+}
+
+#[tokio::test]
+async fn health_and_dicomweb_under_its_path_and_data_survives_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(dir.path(), &[]);
+    let series = SyntheticSeries::new(71, 2);
+    {
+        let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+        let (status, _, body) =
+            call(&app, Request::get("/healthz").body(Body::empty()).unwrap()).await;
+        assert_eq!((status, &body[..]), (StatusCode::OK, &b"ok\n"[..]));
+
+        let (status, _, _) =
+            call(&app, stow_request("/dicom-web/studies", series.all_bytes())).await;
+        assert_eq!(status, StatusCode::OK);
+        // not at the root
+        let (status, _, _) = call(&app, stow_request("/studies", series.all_bytes())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+    assert!(dir.path().join("db/index.sqlite").is_file());
+    let files = dir
+        .path()
+        .join("files")
+        .join(series.study_uid())
+        .join(series.series_uid());
+    assert_eq!(std::fs::read_dir(&files).unwrap().count(), 2);
+
+    // a new process, the same directories
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, _, body) = call(
+        &app,
+        Request::get("/dicom-web/studies")
+            .header("host", "pacs.test")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let studies: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(studies[0]["00201208"]["Value"][0], 2);
+    assert_eq!(
+        studies[0]["00081190"]["Value"][0],
+        format!("http://pacs.test/dicom-web/studies/{}", series.study_uid())
+    );
+}
+
+#[tokio::test]
+async fn cors_only_when_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let preflight = || {
+        Request::options("/dicom-web/studies")
+            .header("origin", "https://viewer.example")
+            .header("access-control-request-method", "GET")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let settings = settings_in(dir.path(), &[]);
+    let plain = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (_, headers, _) = call(&plain, preflight()).await;
+    assert!(headers.get("access-control-allow-origin").is_none());
+
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--cors-origins",
+            "https://viewer.example,https://other.example",
+        ],
+    );
+    let with_cors = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, headers, _) = call(&with_cors, preflight()).await;
+    assert!(status.is_success());
+    assert_eq!(
+        headers.get("access-control-allow-origin").unwrap(),
+        "https://viewer.example"
+    );
+}
+
+#[tokio::test]
+async fn serves_over_tcp_and_shuts_down_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(dir.path(), &[]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(serve(listener, app, async {
+        let _ = stopped.await;
+    }));
+
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(response.ends_with("ok\n"), "{response}");
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("the server stops")
+        .unwrap()
+        .unwrap();
+}
