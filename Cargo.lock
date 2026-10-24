@@ -1617,6 +1617,7 @@ dependencies = [
  "pacs-dicomweb",
  "pacs-index",
  "pacs-store",
+ "reqwest",
  "serde_json",
  "tempfile",
  "tokio",

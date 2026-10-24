@@ -28,6 +28,7 @@ tracing-subscriber.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
 pacs-core = { workspace = true, features = ["synthetic"] }
+reqwest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tower.workspace = true
