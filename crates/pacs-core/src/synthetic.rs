@@ -1,5 +1,6 @@
 //! Synthetic CT series for tests: small, deterministic, no patient data.
 
+use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR, dicom_value};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
@@ -51,13 +52,64 @@ impl SyntheticSeries {
         format!("2.25.{}3{:05}", self.seed, slice + 1)
     }
 
+    /// The pixel values of one frame of one slice: distinct per slice and frame.
+    pub fn pixels(&self, slice: u32, frame: u32) -> Vec<u16> {
+        (0..u32::from(self.rows) * u32::from(self.columns))
+            .map(|i| (slice * 1000 + frame * 100 + i) as u16)
+            .collect()
+    }
+
     /// One slice as a DICOM Part 10 file in Explicit VR Little Endian, preamble included.
     pub fn slice_bytes(&self, slice: u32) -> Vec<u8> {
-        let pixels: Vec<u16> = (0..u32::from(self.rows) * u32::from(self.columns))
-            .map(|i| (slice * 100 + i) as u16)
-            .collect();
+        self.multiframe_bytes(slice, 1)
+    }
+
+    /// One instance of `frames` native frames, Number of Frames set when more than one.
+    pub fn multiframe_bytes(&self, slice: u32, frames: u32) -> Vec<u8> {
+        let mut object = self.dataset(slice);
+        if frames > 1 {
+            object.put(DataElement::new(
+                tags::NUMBER_OF_FRAMES,
+                VR::IS,
+                frames.to_string(),
+            ));
+        }
+        let pixels: Vec<u16> = (0..frames).flat_map(|f| self.pixels(slice, f)).collect();
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OW,
+            PrimitiveValue::U16(pixels.into()),
+        ));
+        to_file(object, uids::EXPLICIT_VR_LITTLE_ENDIAN)
+    }
+
+    /// One instance with encapsulated pixel data in transfer syntax `ts`: the fragments
+    /// are opaque bytes (nothing decodes them), with the given basic offset table.
+    pub fn encapsulated_bytes(
+        &self,
+        slice: u32,
+        ts: &str,
+        frames: u32,
+        offset_table: Vec<u32>,
+        fragments: Vec<Vec<u8>>,
+    ) -> Vec<u8> {
+        let mut object = self.dataset(slice);
+        object.put(DataElement::new(
+            tags::NUMBER_OF_FRAMES,
+            VR::IS,
+            frames.to_string(),
+        ));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new(offset_table, fragments),
+        ));
+        to_file(object, ts)
+    }
+
+    fn dataset(&self, slice: u32) -> InMemDicomObject {
         let z = slice as f64 * 2.5;
-        let object = InMemDicomObject::from_element_iter([
+        InMemDicomObject::from_element_iter([
             DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
             DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, self.instance_uid(slice)),
             DataElement::new(tags::MODALITY, VR::CS, "CT"),
@@ -84,19 +136,21 @@ impl SyntheticSeries {
                 VR::US,
                 PrimitiveValue::from(0_u16),
             ),
-            DataElement::new(tags::PIXEL_DATA, VR::OW, PrimitiveValue::U16(pixels.into())),
-        ]);
-        let file = object
-            .with_meta(FileMetaTableBuilder::new().transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN))
-            .expect("the synthetic data set has the SOP class and instance UIDs");
-        let mut bytes = Vec::new();
-        file.write_all(&mut bytes)
-            .expect("writing to a Vec does not fail");
-        bytes
+        ])
     }
 
     /// Every slice, in instance-number order.
     pub fn all_bytes(&self) -> Vec<Vec<u8>> {
         (0..self.slices).map(|s| self.slice_bytes(s)).collect()
     }
+}
+
+fn to_file(object: InMemDicomObject, ts: &str) -> Vec<u8> {
+    let file = object
+        .with_meta(FileMetaTableBuilder::new().transfer_syntax(ts))
+        .expect("the synthetic data set has the SOP class and instance UIDs");
+    let mut bytes = Vec::new();
+    file.write_all(&mut bytes)
+        .expect("the transfer syntax is known and writing to a Vec does not fail");
+    bytes
 }
