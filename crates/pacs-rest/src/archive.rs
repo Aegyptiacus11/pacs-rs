@@ -1,14 +1,18 @@
 //! `GET /studies/{id}/archive`: a study's files in a ZIP, one folder per patient,
 //! study and series, as the reference server (26.9.1) lays it out:
 //! `PatientID - PatientName/AccessionNumber - StudyDescription/
-//! SeriesNumber - Modality - SeriesDescription/CT000001.dcm`.
+//! SeriesNumber - Modality - SeriesDescription/CT000001.dcm`. Streamed: see [`zip_stream`].
 
 use std::collections::HashMap;
-use std::io::{Cursor, Write};
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
+use pacs_archive::Archive;
 use serde_json::Value;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
@@ -73,6 +77,7 @@ pub(crate) async fn study(
         }
     }
 
+    // (path in the ZIP, storage key), in series then instance order
     let mut entries = Vec::new();
     let mut counters: HashMap<String, usize> = HashMap::new();
     for instance in index.rest_study_instances(&id).await? {
@@ -83,25 +88,10 @@ pub(crate) async fn study(
         let n = counters.entry(instance.parent_series.clone()).or_default();
         *n += 1;
         let path = format!("{patient_dir}/{study_dir}/{dir}/{prefix}{n:06}.dcm");
-        let file = state.archive.file_at(&instance.object_key).await?;
-        entries.push((path, file));
+        entries.push((path, instance.object_key));
     }
 
-    let zip = tokio::task::spawn_blocking(move || -> zip::result::ZipResult<Vec<u8>> {
-        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let options = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated)
-            .large_file(entries.iter().any(|(_, f)| f.len() >= u32::MAX as usize));
-        for (path, file) in entries {
-            writer.start_file(path, options)?;
-            writer.write_all(&file)?;
-        }
-        Ok(writer.finish()?.into_inner())
-    })
-    .await
-    .map_err(RestError::internal)?
-    .map_err(RestError::internal)?;
-
+    let body = Body::from_stream(zip_stream(state.archive.clone(), entries));
     Ok((
         [
             (CONTENT_TYPE, "application/zip".to_owned()),
@@ -110,9 +100,80 @@ pub(crate) async fn study(
                 format!(r#"attachment; filename="{id}.zip""#),
             ),
         ],
-        zip,
+        body,
     )
         .into_response())
+}
+
+/// Where the ZIP writer puts its bytes, for the stream to take them from as they come.
+#[derive(Clone, Default)]
+struct Sink(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("not poisoned").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Sink {
+    fn take(&self) -> Bytes {
+        Bytes::from(std::mem::take(&mut *self.0.lock().expect("not poisoned")))
+    }
+}
+
+type Writer = zip::ZipWriter<zip::write::StreamWriter<Sink>>;
+
+/// The ZIP of `entries`, made as it is sent: each step reads one file from the store and
+/// compresses it, so memory holds one file, not the study, and a slow client slows the
+/// reading. Entries carry their sizes after their data (streaming ZIP), as any unzip
+/// reads them. An error midway ends the body early: the client sees a cut-off ZIP.
+fn zip_stream(
+    archive: Archive,
+    entries: Vec<(String, String)>,
+) -> impl futures::Stream<Item = std::io::Result<Bytes>> {
+    let sink = Sink::default();
+    let writer: Writer = zip::ZipWriter::new_stream(sink.clone());
+    futures::stream::unfold(Some((writer, entries.into_iter())), move |state| {
+        let (archive, sink) = (archive.clone(), sink.clone());
+        async move {
+            let (mut writer, mut entries) = state?;
+            let step = match entries.next() {
+                Some((path, object_key)) => {
+                    let file = match archive.file_at(&object_key).await {
+                        Ok(file) => file,
+                        Err(e) => return Some((Err(std::io::Error::other(e)), None)),
+                    };
+                    tokio::task::spawn_blocking(move || {
+                        let options = SimpleFileOptions::default()
+                            .compression_method(CompressionMethod::Deflated)
+                            .large_file(file.len() >= u32::MAX as usize);
+                        writer.start_file(path, options)?;
+                        writer.write_all(&file)?;
+                        Ok::<_, zip::result::ZipError>(Some(writer))
+                    })
+                    .await
+                }
+                None => {
+                    tokio::task::spawn_blocking(move || {
+                        writer.finish()?;
+                        Ok(None)
+                    })
+                    .await
+                }
+            };
+            match step {
+                Ok(Ok(Some(writer))) => Some((Ok(sink.take()), Some((writer, entries)))),
+                Ok(Ok(None)) => Some((Ok(sink.take()), None)),
+                Ok(Err(e)) => Some((Err(std::io::Error::other(e)), None)),
+                Err(e) => Some((Err(std::io::Error::other(e)), None)),
+            }
+        }
+    })
 }
 
 #[cfg(test)]

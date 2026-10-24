@@ -255,3 +255,47 @@ async fn unknown_ids_are_a_bare_404_and_unsupported_searches_400() {
         json!([])
     );
 }
+
+#[tokio::test]
+async fn the_archive_is_streamed_file_by_file() {
+    let app = app().await;
+    let series = SyntheticSeries::new(95, 6);
+    upload_all(&app, &series).await;
+    let study_id = public_ids::study("SYN95", &series.study_uid());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/studies/{study_id}/archive"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    // no Content-Length: the size is not known until the end
+    assert!(response.headers().get("content-length").is_none());
+    let mut body = response.into_body();
+    let mut chunks = 0;
+    let mut zip = Vec::new();
+    while let Some(frame) = body.frame().await {
+        if let Ok(data) = frame.unwrap().into_data() {
+            if !data.is_empty() {
+                chunks += 1;
+            }
+            zip.extend_from_slice(&data);
+        }
+    }
+    // one piece per file at least, not one block at the end
+    assert!(chunks >= 6, "{chunks} chunks");
+    let mut archive = zip::ZipArchive::new(Cursor::new(zip)).unwrap();
+    assert_eq!(archive.len(), 6);
+    for (i, expected) in series.all_bytes().iter().enumerate() {
+        let mut bytes = Vec::new();
+        archive
+            .by_index(i)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(&bytes, expected, "entry {i}");
+    }
+}
