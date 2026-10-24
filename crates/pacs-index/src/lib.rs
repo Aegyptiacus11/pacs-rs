@@ -12,6 +12,9 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+mod rest;
+pub use rest::{RestInstance, RestSeries, RestStudy, Statistics};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The UIDs disagree with what is already indexed, e.g. a series UID already seen in
