@@ -3,8 +3,8 @@
 An open-source PACS written in Rust, built on the [dicom-rs](https://github.com/Enet4/dicom-rs)
 crates.
 
-Status: early development. The DICOMweb layer works as a library and is tested; there is
-no server binary yet.
+Status: early development. `pacs-server` serves DICOMweb over HTTP, with files on disk or in
+S3 and a SQLite index.
 
 ## Crates
 
@@ -15,6 +15,7 @@ no server binary yet.
 | `pacs-index` | the SQLite index: hierarchy, counts, attributes, metadata, storage keys |
 | `pacs-archive` | ingest: store then index, undone if the index refuses |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
+| `pacs-server` | the binary: settings, `/healthz`, DICOMweb under `/dicom-web` |
 
 ## DICOMweb
 
@@ -36,6 +37,40 @@ DICOM JSON numbers: IS and DS values are written as JSON numbers, padding trimme
 F.2.3-1 allows numbers or strings).
 
 DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after.
+
+## Running
+
+```bash
+cargo run --release -p pacs-server -- --help
+cargo run --release -p pacs-server            # files in data/files, index in data/index.sqlite
+```
+
+Every flag has a `PACS_*` environment variable:
+
+| Variable | Default | |
+|---|---|---|
+| `PACS_LISTEN` | `127.0.0.1:8080` | address to listen on |
+| `PACS_DICOMWEB_PATH` | `/dicom-web` | where the DICOMweb root is served |
+| `PACS_BASE_URL` | from the request | public URL of the DICOMweb root, for Retrieve URLs |
+| `PACS_INDEX` | `data/index.sqlite` | the SQLite index |
+| `PACS_STORAGE` | `file:data/files` | `file:<directory>` or `s3://<bucket>[/<prefix>]` |
+| `PACS_S3_ENDPOINT` | AWS | e.g. `http://homeserver:8333` for SeaweedFS |
+| `PACS_S3_REGION` | `us-east-1` | |
+| `PACS_S3_ACCESS_KEY_ID`, `PACS_S3_SECRET_ACCESS_KEY` | | environment only, or `..._FILE` naming a file |
+| `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
+| `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
+| `RUST_LOG` | `info` | log filter |
+
+In Docker, `docker build -t pacs-server .`; the image listens on `0.0.0.0:8080` and keeps the
+index and files in the `/data` volume unless `PACS_STORAGE` says otherwise.
+
+A synthetic series to try it with:
+
+```bash
+cargo run -p pacs-core --features synthetic --example write_synthetic -- synthetic 1 3
+curl -X POST -H 'Content-Type: application/dicom' --data-binary @synthetic/00001.dcm \
+  http://127.0.0.1:8080/dicom-web/instances
+```
 
 ## Building
 
