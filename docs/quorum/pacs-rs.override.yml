@@ -1,0 +1,40 @@
+# Quorum's dev stack with pacs-rs as its PACS service (the service Quorum's compose file names
+# `orthanc`), isolated from the real dev stack by its own project and volume names. Used from
+# outside Quorum's repo:
+#   docker compose -p quorum-pacsrs --env-file quorum.env \
+#     -f <quorum>/ops/compose.dev.yml -f pacs-rs.override.yml up -d --build frontend backend
+services:
+  backend:
+    environment:
+      # the PACS holds the only copy of each CT, the setup Quorum is moving to
+      DICOM_INGEST: orthanc
+
+  orthanc:
+    image: pacs-server:small
+    ports: !override
+      - "127.0.0.1:18142:8042"
+    environment:
+      PACS_LISTEN: 0.0.0.0:8042
+      PACS_INDEX: /data/index.sqlite
+      PACS_STORAGE: s3://${MINIO_BUCKET}/pacs-rs
+      PACS_S3_ENDPOINT: http://minio:9000
+      PACS_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      PACS_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    volumes: !override
+      - pacs_data:/data
+    healthcheck:
+      test: ["CMD", "/pacs-server", "--healthcheck"]
+      interval: 5s
+      timeout: 6s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres_data:
+    name: quorum-pacsrs_postgres_data
+  orthanc_index:
+    name: quorum-pacsrs_orthanc_index
+  minio_data:
+    name: quorum-pacsrs_minio_data
+  pacs_data:
+    name: quorum-pacsrs_pacs_data
