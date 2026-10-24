@@ -2,27 +2,52 @@
 
 use serde_json::Value;
 use sqlx::Row;
-use sqlx::sqlite::SqliteRow;
+use sqlx::any::AnyRow;
 
-use crate::{Error, Index, parse};
+use crate::{Error, Index, now_ms, parse};
 
 /// A study or series is stable once nothing new has arrived for this long, the reference
 /// server's default `StableAge`.
 pub const STABLE_AGE_SECONDS: i64 = 60;
 
-/// `last_update` and `is_stable` from the latest `received_at` of `$instances`. The 60 is
-/// [`STABLE_AGE_SECONDS`]; SQL text has to be a literal, so it is written out.
-macro_rules! freshness {
+/// The latest arrival among `$instances`, in epoch milliseconds, as `last_ms`.
+macro_rules! last_arrival {
     ($instances:literal) => {
-        concat!(
-            "(SELECT strftime('%Y%m%dT%H%M%S', max(i.received_at)) ",
-            $instances,
-            ") AS last_update,
-             (SELECT (julianday('now') - julianday(max(i.received_at))) * 86400 > 60 ",
-            $instances,
-            ") AS is_stable"
-        )
+        concat!("(SELECT max(i.received_ms) ", $instances, ") AS last_ms")
     };
+}
+
+/// `YYYYMMDDTHHMMSS` in UTC, the reference server's LastUpdate format, from epoch ms.
+pub(crate) fn last_update_text(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}{month:02}{day:02}T{:02}{:02}{:02}",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// LastUpdate and IsStable from the latest arrival.
+fn freshness(last_ms: Option<i64>) -> (String, bool) {
+    match last_ms {
+        Some(ms) => (
+            last_update_text(ms),
+            now_ms() - ms > STABLE_AGE_SECONDS * 1000,
+        ),
+        None => (String::new(), true),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,7 +119,7 @@ macro_rules! instance_query {
     };
 }
 
-fn instance(row: SqliteRow) -> Result<RestInstance, Error> {
+fn instance(row: AnyRow) -> Result<RestInstance, Error> {
     Ok(RestInstance {
         public_id: row.try_get("public_id")?,
         sop_instance_uid: row.try_get("sop_instance_uid")?,
@@ -125,11 +150,11 @@ impl Index {
         let Some(row) = sqlx::query(concat!(
             "SELECT st.public_id, st.study_instance_uid, st.patient_public_id, st.main_tags,
                         st.patient_main_tags, ",
-            freshness!(
+            last_arrival!(
                 "FROM instances i JOIN series se USING (series_instance_uid)
                       WHERE se.study_instance_uid = st.study_instance_uid"
             ),
-            " FROM studies st WHERE st.public_id = ?"
+            " FROM studies st WHERE st.public_id = $1"
         ))
         .bind(public_id)
         .fetch_optional(&self.pool)
@@ -139,12 +164,13 @@ impl Index {
         };
         let study_instance_uid: String = row.try_get("study_instance_uid")?;
         let series = sqlx::query_scalar(
-            "SELECT public_id FROM series WHERE study_instance_uid = ?
+            "SELECT public_id FROM series WHERE study_instance_uid = $1
               ORDER BY series_number IS NULL, series_number, series_instance_uid",
         )
         .bind(&study_instance_uid)
         .fetch_all(&self.pool)
         .await?;
+        let (last_update, is_stable) = freshness(row.try_get("last_ms")?);
         Ok(Some(RestStudy {
             public_id: row.try_get("public_id")?,
             study_instance_uid,
@@ -152,8 +178,8 @@ impl Index {
             main_tags: parse(row.try_get("main_tags")?)?,
             patient_main_tags: parse(row.try_get("patient_main_tags")?)?,
             series,
-            last_update: row.try_get("last_update")?,
-            is_stable: row.try_get("is_stable")?,
+            last_update,
+            is_stable,
         }))
     }
 
@@ -161,9 +187,9 @@ impl Index {
         let Some(row) = sqlx::query(concat!(
             "SELECT se.public_id, se.series_instance_uid, se.study_instance_uid,
                         se.main_tags, st.public_id AS parent_study, ",
-            freshness!("FROM instances i WHERE i.series_instance_uid = se.series_instance_uid"),
+            last_arrival!("FROM instances i WHERE i.series_instance_uid = se.series_instance_uid"),
             " FROM series se JOIN studies st USING (study_instance_uid)
-                  WHERE se.public_id = ?"
+                  WHERE se.public_id = $1"
         ))
         .bind(public_id)
         .fetch_optional(&self.pool)
@@ -173,12 +199,13 @@ impl Index {
         };
         let series_instance_uid: String = row.try_get("series_instance_uid")?;
         let instances = sqlx::query_scalar(
-            "SELECT public_id FROM instances WHERE series_instance_uid = ?
+            "SELECT public_id FROM instances WHERE series_instance_uid = $1
               ORDER BY instance_number IS NULL, instance_number, sop_instance_uid",
         )
         .bind(&series_instance_uid)
         .fetch_all(&self.pool)
         .await?;
+        let (last_update, is_stable) = freshness(row.try_get("last_ms")?);
         Ok(Some(RestSeries {
             public_id: row.try_get("public_id")?,
             series_instance_uid,
@@ -186,13 +213,13 @@ impl Index {
             parent_study: row.try_get("parent_study")?,
             main_tags: parse(row.try_get("main_tags")?)?,
             instances,
-            last_update: row.try_get("last_update")?,
-            is_stable: row.try_get("is_stable")?,
+            last_update,
+            is_stable,
         }))
     }
 
     pub async fn rest_instance(&self, public_id: &str) -> Result<Option<RestInstance>, Error> {
-        sqlx::query(instance_query!("WHERE i.public_id = ?"))
+        sqlx::query(instance_query!("WHERE i.public_id = $1"))
             .bind(public_id)
             .fetch_optional(&self.pool)
             .await?
@@ -206,7 +233,7 @@ impl Index {
         series_instance_uid: &str,
     ) -> Result<Option<String>, Error> {
         Ok(
-            sqlx::query_scalar("SELECT public_id FROM series WHERE series_instance_uid = ?")
+            sqlx::query_scalar("SELECT public_id FROM series WHERE series_instance_uid = $1")
                 .bind(series_instance_uid)
                 .fetch_optional(&self.pool)
                 .await?
@@ -218,7 +245,7 @@ impl Index {
         &self,
         sop_instance_uid: &str,
     ) -> Result<Option<RestInstance>, Error> {
-        sqlx::query(instance_query!("WHERE i.sop_instance_uid = ?"))
+        sqlx::query(instance_query!("WHERE i.sop_instance_uid = $1"))
             .bind(sop_instance_uid)
             .fetch_optional(&self.pool)
             .await?
@@ -232,7 +259,7 @@ impl Index {
         study_public_id: &str,
     ) -> Result<Vec<RestInstance>, Error> {
         sqlx::query(instance_query!(
-            "WHERE st.public_id = ?
+            "WHERE st.public_id = $1
               ORDER BY se.series_number IS NULL, se.series_number, se.series_instance_uid,
                        i.instance_number IS NULL, i.instance_number, i.sop_instance_uid"
         ))
@@ -251,12 +278,12 @@ impl Index {
         let row = sqlx::query(
             "SELECT count(DISTINCT se.series_instance_uid) AS series,
                     count(i.sop_instance_uid) AS instances,
-                    coalesce(sum(i.size_bytes), 0) AS size_bytes,
+                    CAST(coalesce(sum(i.size_bytes), 0) AS BIGINT) AS size_bytes,
                     count(st.study_instance_uid) AS found
                FROM studies st
                LEFT JOIN series se ON se.study_instance_uid = st.study_instance_uid
                LEFT JOIN instances i ON i.series_instance_uid = se.series_instance_uid
-              WHERE st.public_id = ?",
+              WHERE st.public_id = $1",
         )
         .bind(study_public_id)
         .fetch_one(&self.pool)
@@ -270,5 +297,19 @@ impl Index {
             instances: row.try_get("instances")?,
             size_bytes: row.try_get("size_bytes")?,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::last_update_text;
+
+    #[test]
+    fn last_update_is_utc_civil_time() {
+        assert_eq!(last_update_text(0), "19700101T000000");
+        // 2026-10-24T17:53:00.123Z
+        assert_eq!(last_update_text(1_792_864_380_123), "20261024T175300");
+        // a leap day
+        assert_eq!(last_update_text(951_782_400_000), "20000229T000000");
     }
 }

@@ -1,16 +1,20 @@
 //! The pacs-rs index: which studies, series and instances exist, the attributes QIDO-RS
 //! and WADO-RS metadata answer with, and the storage key of each instance's file.
 //!
-//! SQLite for now. The schema is in `migrations/` and applied on open.
+//! SQLite (a file, or memory for tests) or Postgres, through sqlx's `Any` driver: one code
+//! path, and SQL written in the subset both understand - `$1` parameters, `CAST($1 AS
+//! TEXT) IS NULL` for optional ones - with a dialect-specific statement only where there is
+//! no common one. Each dialect's schema is in `migrations/<dialect>/`, applied on open.
 
 use std::path::Path;
-use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dicom_dictionary_std::tags;
 use pacs_core::{Instance, levels, main_tags, public_ids};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::{Row, SqlitePool};
+use sqlx::AnyPool;
+use sqlx::Row;
+use sqlx::any::AnyPoolOptions;
 
 mod rest;
 pub use rest::{RestInstance, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
@@ -152,48 +156,117 @@ pub struct StudyFilter {
     pub offset: Option<i64>,
 }
 
+/// Which database is behind the index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    Sqlite,
+    Postgres,
+}
+
 #[derive(Debug, Clone)]
 pub struct Index {
-    pool: SqlitePool,
+    pool: AnyPool,
+    dialect: Dialect,
+}
+
+/// The study search, with `$modalities` the dialect's way to list a study's modalities
+/// separated by `\\`.
+macro_rules! studies_query {
+    ($modalities:literal) => {
+        concat!(
+            "SELECT st.study_instance_uid, st.public_id, st.attributes,
+                    (SELECT count(*) FROM series se
+                      WHERE se.study_instance_uid = st.study_instance_uid) AS series_count,
+                    (SELECT count(*) FROM instances i JOIN series se USING (series_instance_uid)
+                      WHERE se.study_instance_uid = st.study_instance_uid) AS instance_count, ",
+            $modalities,
+            " AS modalities
+               FROM studies st
+              WHERE (CAST($1 AS TEXT) IS NULL OR st.study_instance_uid = $1)
+                AND (CAST($2 AS TEXT) IS NULL OR st.patient_id = $2)
+                AND (CAST($3 AS TEXT) IS NULL OR st.accession_number = $3)
+                AND (CAST($4 AS TEXT) IS NULL OR st.study_date = $4)
+              ORDER BY st.study_date DESC NULLS LAST, st.study_instance_uid
+              LIMIT $5 OFFSET $6"
+        )
+    };
+}
+
+/// Milliseconds since the Unix epoch, now.
+pub(crate) fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 impl Index {
     /// Open (creating if needed) the index in a SQLite file.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let options = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .foreign_keys(true);
-        Self::with_pool(SqlitePoolOptions::new().connect_with(options).await?).await
+        let url = format!("sqlite://{}?mode=rwc", path.as_ref().display());
+        Self::connect(&url).await
     }
 
-    /// A fresh index in memory, for tests. One connection, since each in-memory
-    /// connection would otherwise be its own database.
+    /// Open the index at `url`: `sqlite://<path>?mode=rwc`, `sqlite::memory:` or
+    /// `postgres://user:password@host/database`.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        sqlx::any::install_default_drivers();
+        let dialect = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            Dialect::Postgres
+        } else if url.starts_with("sqlite:") {
+            Dialect::Sqlite
+        } else {
+            return Err(Error::Database(sqlx::Error::Configuration(
+                format!("not a sqlite: or postgres:// URL: {url}").into(),
+            )));
+        };
+        let mut options = AnyPoolOptions::new();
+        if url.starts_with("sqlite::memory:") {
+            // each in-memory connection would be a database of its own
+            options = options.max_connections(1);
+        }
+        let pool = options.connect(url).await?;
+        if dialect == Dialect::Sqlite && !url.starts_with("sqlite::memory:") {
+            // write-ahead logging: readers never wait for the writer; it sticks to the file
+            sqlx::query("PRAGMA journal_mode = WAL")
+                .execute(&pool)
+                .await?;
+        }
+        match dialect {
+            Dialect::Sqlite => sqlx::migrate!("./migrations/sqlite").run(&pool).await?,
+            Dialect::Postgres => sqlx::migrate!("./migrations/postgres").run(&pool).await?,
+        }
+        Ok(Index { pool, dialect })
+    }
+
+    /// A fresh index in memory, for tests.
     pub async fn in_memory() -> Result<Self, Error> {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")?.foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await?;
-        Self::with_pool(pool).await
+        Self::connect("sqlite::memory:").await
     }
 
-    async fn with_pool(pool: SqlitePool) -> Result<Self, Error> {
-        sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Index { pool })
+    pub fn dialect(&self) -> Dialect {
+        self.dialect
     }
 
     /// Record a stored instance. Re-sending an instance replaces its entry; study and
     /// series attributes follow the latest instance received.
     pub async fn record(&self, new: &NewInstance) -> Result<Recorded, Error> {
-        // IMMEDIATE takes the write lock up front. A deferred transaction would read, then
-        // fail at once with "database is locked" trying to upgrade while another upload
-        // writes; this one waits its turn (the busy timeout) instead.
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        // One writer at a time, taken before the first read. In SQLite, IMMEDIATE takes the
+        // write lock: a deferred transaction would read, then fail at once with "database
+        // is locked" upgrading while another upload writes. In Postgres, a transaction-wide
+        // advisory lock does the same, so the checks below see every earlier upload.
+        let mut tx = match self.dialect {
+            Dialect::Sqlite => self.pool.begin_with("BEGIN IMMEDIATE").await?,
+            Dialect::Postgres => {
+                let mut tx = self.pool.begin().await?;
+                sqlx::query("SELECT CAST(pg_advisory_xact_lock(7461636) AS TEXT)")
+                    .execute(&mut *tx)
+                    .await?;
+                tx
+            }
+        };
 
         let series_study: Option<String> = sqlx::query_scalar(
-            "SELECT study_instance_uid FROM series WHERE series_instance_uid = ?",
+            "SELECT study_instance_uid FROM series WHERE series_instance_uid = $1",
         )
         .bind(&new.series_instance_uid)
         .fetch_optional(&mut *tx)
@@ -205,7 +278,7 @@ impl Index {
             )));
         }
         let instance_series: Option<String> = sqlx::query_scalar(
-            "SELECT series_instance_uid FROM instances WHERE sop_instance_uid = ?",
+            "SELECT series_instance_uid FROM instances WHERE sop_instance_uid = $1",
         )
         .bind(&new.sop_instance_uid)
         .fetch_optional(&mut *tx)
@@ -224,7 +297,7 @@ impl Index {
             "INSERT INTO studies (study_instance_uid, patient_id, patient_name, study_date,
                                   accession_number, attributes, public_id, patient_public_id,
                                   main_tags, patient_main_tags)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (study_instance_uid) DO UPDATE SET
                 patient_id = excluded.patient_id, patient_name = excluded.patient_name,
                 study_date = excluded.study_date, accession_number = excluded.accession_number,
@@ -248,7 +321,7 @@ impl Index {
         sqlx::query(
             "INSERT INTO series (series_instance_uid, study_instance_uid, modality, series_number,
                                  attributes, public_id, main_tags)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (series_instance_uid) DO UPDATE SET
                 modality = excluded.modality, series_number = excluded.series_number,
                 attributes = excluded.attributes, public_id = excluded.public_id,
@@ -267,8 +340,8 @@ impl Index {
         sqlx::query(
             "INSERT INTO instances (sop_instance_uid, series_instance_uid, sop_class_uid,
                                     instance_number, transfer_syntax_uid, object_key, size_bytes,
-                                    attributes, metadata, public_id, main_tags)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    attributes, metadata, public_id, main_tags, received_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (sop_instance_uid) DO UPDATE SET
                 sop_class_uid = excluded.sop_class_uid,
                 instance_number = excluded.instance_number,
@@ -276,7 +349,7 @@ impl Index {
                 object_key = excluded.object_key, size_bytes = excluded.size_bytes,
                 attributes = excluded.attributes, metadata = excluded.metadata,
                 public_id = excluded.public_id, main_tags = excluded.main_tags,
-                received_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+                received_ms = excluded.received_ms",
         )
         .bind(&new.sop_instance_uid)
         .bind(&new.series_instance_uid)
@@ -289,6 +362,7 @@ impl Index {
         .bind(new.metadata.to_string())
         .bind(&new.instance_public_id)
         .bind(new.instance_main_tags.to_string())
+        .bind(now_ms())
         .execute(&mut *tx)
         .await?;
 
@@ -301,32 +375,27 @@ impl Index {
     }
 
     pub async fn studies(&self, filter: &StudyFilter) -> Result<Vec<Study>, Error> {
-        let rows = sqlx::query(
-            "SELECT st.study_instance_uid, st.public_id, st.attributes,
-                    (SELECT count(*) FROM series se
-                      WHERE se.study_instance_uid = st.study_instance_uid) AS series_count,
-                    (SELECT count(*) FROM instances i JOIN series se USING (series_instance_uid)
-                      WHERE se.study_instance_uid = st.study_instance_uid) AS instance_count,
-                    (SELECT group_concat(modality, char(92)) FROM
-                       (SELECT DISTINCT modality FROM series se
-                         WHERE se.study_instance_uid = st.study_instance_uid
-                           AND modality IS NOT NULL ORDER BY modality)) AS modalities
-               FROM studies st
-              WHERE (?1 IS NULL OR st.study_instance_uid = ?1)
-                AND (?2 IS NULL OR st.patient_id = ?2)
-                AND (?3 IS NULL OR st.accession_number = ?3)
-                AND (?4 IS NULL OR st.study_date = ?4)
-              ORDER BY st.study_date DESC, st.study_instance_uid
-              LIMIT ?5 OFFSET ?6",
-        )
-        .bind(&filter.study_instance_uid)
-        .bind(&filter.patient_id)
-        .bind(&filter.accession_number)
-        .bind(&filter.study_date)
-        .bind(filter.limit.unwrap_or(-1))
-        .bind(filter.offset.unwrap_or(0))
-        .fetch_all(&self.pool)
-        .await?;
+        let sql = match self.dialect {
+            Dialect::Sqlite => studies_query!(
+                "(SELECT group_concat(modality, char(92)) FROM
+                   (SELECT DISTINCT modality FROM series se
+                     WHERE se.study_instance_uid = st.study_instance_uid
+                       AND modality IS NOT NULL ORDER BY modality))"
+            ),
+            Dialect::Postgres => studies_query!(
+                "(SELECT string_agg(DISTINCT modality, chr(92) ORDER BY modality) FROM series se
+                   WHERE se.study_instance_uid = st.study_instance_uid)"
+            ),
+        };
+        let rows = sqlx::query(sql)
+            .bind(&filter.study_instance_uid)
+            .bind(&filter.patient_id)
+            .bind(&filter.accession_number)
+            .bind(&filter.study_date)
+            .bind(filter.limit.unwrap_or(i64::MAX))
+            .bind(filter.offset.unwrap_or(0))
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter()
             .map(|row| {
                 let modalities: Option<String> = row.try_get("modalities")?;
@@ -363,8 +432,8 @@ impl Index {
                     (SELECT count(*) FROM instances i
                       WHERE i.series_instance_uid = se.series_instance_uid) AS instance_count
                FROM series se
-              WHERE se.study_instance_uid = ?1
-                AND (?2 IS NULL OR se.series_instance_uid = ?2)
+              WHERE se.study_instance_uid = $1
+                AND (CAST($2 AS TEXT) IS NULL OR se.series_instance_uid = $2)
               ORDER BY se.series_number IS NULL, se.series_number, se.series_instance_uid",
         )
         .bind(study_instance_uid)
@@ -395,8 +464,8 @@ impl Index {
                     i.sop_class_uid, i.transfer_syntax_uid, i.object_key, i.size_bytes,
                     i.attributes
                FROM instances i JOIN series se USING (series_instance_uid)
-              WHERE se.study_instance_uid = ?1 AND i.series_instance_uid = ?2
-                AND (?3 IS NULL OR i.sop_instance_uid = ?3)
+              WHERE se.study_instance_uid = $1 AND i.series_instance_uid = $2
+                AND (CAST($3 AS TEXT) IS NULL OR i.sop_instance_uid = $3)
               ORDER BY i.instance_number IS NULL, i.instance_number, i.sop_instance_uid",
         )
         .bind(study_instance_uid)
@@ -464,8 +533,8 @@ impl Index {
         Ok(sqlx::query_scalar(
             "SELECT i.metadata
                FROM instances i JOIN series se USING (series_instance_uid)
-              WHERE se.study_instance_uid = ?1 AND i.series_instance_uid = ?2
-                AND (?3 IS NULL OR i.sop_instance_uid = ?3)
+              WHERE se.study_instance_uid = $1 AND i.series_instance_uid = $2
+                AND (CAST($3 AS TEXT) IS NULL OR i.sop_instance_uid = $3)
               ORDER BY i.instance_number IS NULL, i.instance_number, i.sop_instance_uid",
         )
         .bind(study_instance_uid)
