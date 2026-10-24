@@ -1,0 +1,30 @@
+# Benchmarks
+
+`scripts/bench.sh` against pacs-rs and the reference server (see the README, "Comparing with a
+reference server"), with the same client and the same files.
+
+## 2026-10-24: one CT series
+
+- Data: a synthetic series, 200 slices of 512 x 512 x 16 bits, 101 MB
+  (`write_synthetic -- ct 77 200 512`).
+- Both servers in Docker on one laptop (AMD Ryzen 7 PRO 7840U, 16 threads, 30 GB, Docker 29.9.2,
+  overlay2), each fresh, files and index on the container's disk, curl on the same machine.
+- pacs-rs at commit "WADO-RS metadata: send the stored JSON as it is"; the reference server in
+  version 26.6.1 with its default configuration and its DICOMweb plugin.
+- Three rounds; the upload only in the first (later rounds re-send stored instances).
+
+| | reference | pacs-rs |
+|---|---|---|
+| upload 200 files, 4 at a time | 0.77 s | 0.67 s |
+| series metadata, first request | 76 ms | 3 ms |
+| series metadata, later requests (median of 5) | 5-6 ms | 2-3 ms |
+| 200 frames, one request after another | 1.99-2.07 s | 1.70-1.73 s |
+| 200 frames, 8 requests at a time | 0.28-0.29 s | 0.27-0.28 s |
+| study ZIP, 95 MB | 2.49-2.52 s | 1.89-1.90 s |
+
+What this does not say: anything about other data (real CT, compressed transfer syntaxes,
+thousands of studies), other hardware, S3 storage, or a tuned reference server. It is one
+workload, the one Quorum's viewer makes, measured once on one machine.
+
+The first run of this benchmark found a bug: concurrent uploads failed with "database is
+locked" (fixed in "pacs-index: take the write lock up front").

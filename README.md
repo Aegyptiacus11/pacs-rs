@@ -129,6 +129,11 @@ PACS_TEST_REFERENCE_URL=http://127.0.0.1:18042/dicom-web cargo test -p pacs-serv
 docker stop pacs-rs-reference
 ```
 
+## Benchmarks
+
+`scripts/bench.sh` times the requests a viewer makes for one CT series; results and their limits
+are in [docs/benchmarks.md](docs/benchmarks.md).
+
 ## License
 
 Licensed under either of
