@@ -18,6 +18,12 @@ pub enum Error {
     Read(#[from] dicom_object::ReadError),
     #[error("missing required attribute {name} {tag}")]
     Missing { name: &'static str, tag: Tag },
+    #[error("attribute {name} {tag} is not a valid UID: {value:?}")]
+    InvalidUid {
+        name: &'static str,
+        tag: Tag,
+        value: String,
+    },
     #[error("attribute {name} {tag} is not a string: {source}")]
     NotAString {
         name: &'static str,
@@ -73,7 +79,22 @@ fn uid(object: &DefaultDicomObject, name: &'static str, tag: Tag) -> Result<Stri
     let value = element
         .to_str()
         .map_err(|source| Error::NotAString { name, tag, source })?;
-    Ok(trim_uid(&value))
+    let value = trim_uid(&value);
+    if !is_valid_uid(&value) {
+        return Err(Error::InvalidUid { name, tag, value });
+    }
+    Ok(value)
+}
+
+/// Whether `uid` has the shape of a DICOM UID: dot-separated runs of digits, at most 64
+/// characters (PS3.5 9.1). Leading zeros in a component are tolerated, as real devices
+/// emit them. Store keys and URLs are built from UIDs, so nothing else may get through.
+pub fn is_valid_uid(uid: &str) -> bool {
+    !uid.is_empty()
+        && uid.len() <= 64
+        && uid
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// UIDs are padded with NUL to an even length on the wire.

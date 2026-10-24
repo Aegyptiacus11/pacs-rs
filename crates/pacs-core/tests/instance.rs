@@ -50,3 +50,16 @@ fn dicom_json_carries_the_identifiers_and_vrs() {
 fn garbage_is_an_error_not_a_panic() {
     assert!(Instance::from_bytes(b"not dicom").is_err());
 }
+
+#[test]
+fn uids_are_digits_and_dots_only() {
+    use pacs_core::is_valid_uid;
+    assert!(is_valid_uid("1.2.840.10008.5.1.4.1.1.2"));
+    assert!(is_valid_uid("2.25.0123"));
+    assert!(!is_valid_uid(""));
+    assert!(!is_valid_uid("1..2"));
+    assert!(!is_valid_uid("1.2."));
+    assert!(!is_valid_uid("../../etc/passwd"));
+    assert!(!is_valid_uid("1.2/3"));
+    assert!(!is_valid_uid(&"1".repeat(65)));
+}
