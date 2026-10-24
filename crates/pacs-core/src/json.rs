@@ -2,8 +2,9 @@
 //!
 //! dicom-json writes string values as stored, padding included (`"1 "`, UIDs ending in NUL),
 //! and IS / DS as those strings. PS3.18 Table F.2.3-1 allows IS and DS as either JSON
-//! numbers or strings; viewers parse numbers most reliably, so they become numbers when
-//! they parse without loss of meaning, and stay (trimmed) strings otherwise.
+//! numbers or strings. IS become numbers when they parse; DS stay strings, trimmed, which
+//! keeps the stored decimal exactly ("2.50" is not 2.5 to everyone) and is what the
+//! reference server answers too.
 
 use serde_json::Value;
 
@@ -28,7 +29,7 @@ pub fn normalize(dataset: &mut Value) {
                     let trimmed = s.trim_end_matches([' ', '\0']);
                     *value = match vr.as_str() {
                         "IS" => int(trimmed.trim_start()),
-                        "DS" => decimal(trimmed.trim_start()),
+                        "DS" => Value::String(trimmed.trim_start().to_owned()),
                         _ => Value::String(trimmed.to_owned()),
                     };
                 }
@@ -42,15 +43,6 @@ fn int(s: &str) -> Value {
     match s.strip_prefix('+').unwrap_or(s).parse::<i64>() {
         Ok(n) => Value::from(n),
         Err(_) => Value::String(s.to_owned()),
-    }
-}
-
-fn decimal(s: &str) -> Value {
-    match s.parse::<f64>() {
-        Ok(x) if x.is_finite() => serde_json::Number::from_f64(x)
-            .map(Value::Number)
-            .unwrap_or_else(|| Value::String(s.to_owned())),
-        _ => Value::String(s.to_owned()),
     }
 }
 
@@ -77,7 +69,7 @@ mod tests {
             ds,
             json!({
                 "00200013": {"vr": "IS", "Value": [1]},
-                "00200032": {"vr": "DS", "Value": [-12.5, 0.0, 1000.0]},
+                "00200032": {"vr": "DS", "Value": ["-12.5", "0", "1e3"]},
                 "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
                 "00080060": {"vr": "CS", "Value": ["CT"]},
                 "00281050": {"vr": "DS", "Value": ["not a number"]},

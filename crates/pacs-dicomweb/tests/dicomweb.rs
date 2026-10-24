@@ -155,6 +155,9 @@ async fn the_requests_quorum_makes() {
     assert_eq!(value(&series[0], "00201209"), 3);
     assert_eq!(value(&series[1], "0020000E"), &small.series_uid());
     assert_eq!(value(&series[1], "00201209"), 2);
+    // a series result carries its study's attributes too, and says it is UTF-8
+    assert_eq!(value(&series[0], "00100020"), "SYN61");
+    assert_eq!(value(&series[0], "00080005"), "ISO_IR 192");
 
     // 3. the largest series' metadata, in one response
     let reply = get(
@@ -170,7 +173,10 @@ async fn the_requests_quorum_makes() {
     for (slice, instance) in metadata.iter().enumerate() {
         assert_eq!(value(instance, "00080018"), &big.instance_uid(slice as u32));
         assert_eq!(value(instance, "00200013"), slice + 1);
-        assert_eq!(instance["00200032"]["Value"][2], slice as f64 * 2.5);
+        assert_eq!(
+            instance["00200032"]["Value"][2],
+            (slice as f64 * 2.5).to_string()
+        );
         assert!(instance.get("7FE00010").is_none());
     }
 
@@ -219,6 +225,9 @@ async fn instances_and_series_come_back_byte_for_byte() {
     assert_eq!(instances.as_array().unwrap().len(), 3);
     assert_eq!(value(&instances[2], "00080018"), &big.instance_uid(2));
     assert_eq!(value(&instances[2], "0020000E"), &big.series_uid());
+    assert_eq!(value(&instances[2], "00080056"), "ONLINE");
+    assert_eq!(value(&instances[2], "00080060"), "CT");
+    assert_eq!(value(&instances[2], "00080050"), "ACC61");
 
     let reply = get(
         &app,
