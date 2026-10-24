@@ -114,3 +114,20 @@ fn a_latin1_name_round_trips() {
     let json = instance.to_json().unwrap();
     assert_eq!(json["00100010"]["Value"][0]["Alphabetic"], "MÜLLER^RENÉ");
 }
+
+#[test]
+fn main_tags_are_raw_strings_by_keyword() {
+    use pacs_core::main_tags;
+    let series = SyntheticSeries::new(18, 2).with_patient("MÜLLER^RENÉ", Some("ISO_IR 100"));
+    let instance = Instance::from_bytes(&series.slice_bytes(1)).unwrap();
+    let patient = instance.main_tags(main_tags::PATIENT);
+    assert_eq!(patient["PatientName"], "MÜLLER^RENÉ");
+    assert_eq!(patient["PatientID"], "SYN18");
+    assert!(patient.get("OtherPatientIDs").is_none());
+    let study = instance.main_tags(main_tags::STUDY);
+    assert_eq!(study["StudyDate"], "20260101");
+    assert_eq!(study["StudyInstanceUID"], series.study_uid());
+    let inst = instance.main_tags(main_tags::INSTANCE);
+    assert_eq!(inst["InstanceNumber"], "2");
+    assert_eq!(inst["ImagePositionPatient"], "0\\0\\2.5");
+}

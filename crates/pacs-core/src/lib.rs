@@ -13,6 +13,7 @@ use dicom_object::{DefaultDicomObject, OpenFileOptions};
 pub mod frames;
 pub mod json;
 pub mod levels;
+pub mod main_tags;
 pub mod public_ids;
 #[cfg(feature = "synthetic")]
 pub mod synthetic;
