@@ -393,32 +393,6 @@ async fn stow_reports_what_it_stored_and_what_it_did_not() {
 }
 
 #[tokio::test]
-async fn post_instances_takes_one_file() {
-    let app = app().await;
-    let series = SyntheticSeries::new(67, 1);
-    let upload = || {
-        send(
-            &app,
-            "POST",
-            "/instances",
-            &[("content-type", "application/dicom")],
-            Bytes::from(series.slice_bytes(0)),
-        )
-    };
-    let reply = upload().await;
-    assert_eq!(reply.status, StatusCode::OK);
-    let json = reply.json();
-    assert_eq!(json["SOPInstanceUID"], series.instance_uid(0));
-    assert_eq!(json["StudyInstanceUID"], series.study_uid());
-    assert_eq!(json["Status"], "Added");
-    assert_eq!(upload().await.json()["Status"], "AlreadyStored");
-
-    let reply = send(&app, "POST", "/instances", &[], Bytes::from_static(b"junk")).await;
-    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-    assert!(reply.json()["error"].is_string());
-}
-
-#[tokio::test]
 async fn searches_it_cannot_do_exactly_are_refused() {
     let app = app().await;
     quorum_study(&app).await;

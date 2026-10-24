@@ -1,5 +1,4 @@
-//! DICOMweb for pacs-rs (PS3.18): QIDO-RS search, WADO-RS retrieve and STOW-RS store,
-//! plus `POST /instances` for one file in the request body.
+//! DICOMweb for pacs-rs (PS3.18): QIDO-RS search, WADO-RS retrieve and STOW-RS store.
 //!
 //! [`router`] serves the DICOMweb root at `/`; nest it under a prefix to mount it
 //! elsewhere, and set [`Config::base_url`] to the public address of that root so that
@@ -9,7 +8,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::HeaderMap;
 use axum::http::header::HOST;
-use axum::routing::{get, post};
+use axum::routing::get;
 use pacs_archive::Archive;
 
 mod error;
@@ -107,7 +106,6 @@ pub fn router(archive: Archive, config: Config) -> Router {
             "/studies/{study}/series/{series}/instances/{instance}/frames/{frames}",
             get(wado::frames),
         )
-        .route("/instances", post(stow::upload))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(state)
 }

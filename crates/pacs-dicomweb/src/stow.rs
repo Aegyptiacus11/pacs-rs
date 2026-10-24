@@ -1,13 +1,12 @@
 //! STOW-RS (PS3.18 10.5): `multipart/related; type="application/dicom"` bodies of DICOM
-//! files. And `POST /instances`: one DICOM file as the whole body.
+//! files.
 
-use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use pacs_archive::{IngestError, Ingested, Outcome};
+use pacs_archive::{IngestError, Ingested};
 use serde_json::{Value, json};
 
 use crate::media::MediaType;
@@ -218,28 +217,4 @@ pub(crate) async fn store_in_study(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     store_parts(state, headers, body, Some(study)).await
-}
-
-/// `POST /instances`: the body is one DICOM file. Answers with its UIDs and whether it
-/// was new.
-pub(crate) async fn upload(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    match state.archive.ingest(body).await {
-        Ok(Ingested { key, outcome }) => Ok(Json(json!({
-            "StudyInstanceUID": key.study_instance_uid,
-            "SeriesInstanceUID": key.series_instance_uid,
-            "SOPInstanceUID": key.sop_instance_uid,
-            "Status": match outcome {
-                Outcome::Added => "Added",
-                Outcome::Replaced => "Replaced",
-                Outcome::AlreadyStored => "AlreadyStored",
-            },
-        }))
-        .into_response()),
-        Err(IngestError::Invalid(e)) => Err(ApiError::bad_request(e.to_string())),
-        Err(IngestError::Conflict(e)) => Err(ApiError::new(StatusCode::CONFLICT, e)),
-        Err(e) => Err(ApiError::internal(e)),
-    }
 }
