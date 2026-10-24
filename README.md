@@ -3,19 +3,37 @@
 An open-source PACS written in Rust, built on the [dicom-rs](https://github.com/Enet4/dicom-rs)
 crates.
 
-Status: early development, nothing usable yet.
+Status: early development. The DICOMweb layer works as a library and is tested; there is
+no server binary yet.
 
-## First milestone
+## Crates
 
-A DICOMweb server that a web viewer can read CT series from:
+| Crate | What |
+|---|---|
+| `pacs-core` | parse a DICOM file, its UIDs, per-level attributes, DICOM JSON, frames |
+| `pacs-store` | the files, as received: local disk, S3-compatible storage or memory |
+| `pacs-index` | the SQLite index: hierarchy, counts, attributes, metadata, storage keys |
+| `pacs-archive` | ingest: store then index, undone if the index refuses |
+| `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 
-- QIDO-RS: search studies, series and instances, with `includefield` for
-  NumberOfStudyRelatedInstances (0020,1208) and NumberOfSeriesRelatedInstances (0020,1209);
-- WADO-RS: a series' metadata in one response, an instance's frames and the instance itself
-  (`multipart/related`, in the stored transfer syntax);
-- STOW-RS, plus a plain `POST /instances` that takes one DICOM file in the body;
-- DICOM files kept in S3-compatible object storage (SeaweedFS, MinIO, R2) or on local disk,
-  with a small index in SQLite.
+## DICOMweb
+
+| Request | |
+|---|---|
+| `GET /studies`, `/studies/{study}/series`, `.../series/{series}/instances` | QIDO-RS; counts, Modalities in Study and Retrieve URL always included |
+| `GET /studies/{study}`, `.../series/{series}`, `.../instances/{instance}` | WADO-RS retrieve, `multipart/related; type="application/dicom"`, as stored |
+| `GET .../metadata` (study, series, instance) | DICOM JSON without pixel data |
+| `GET .../instances/{instance}/frames/{list}` | frames in the stored transfer syntax: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
+| `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
+| `POST /instances` | one DICOM file as the body; answers with its UIDs |
+
+Not yet: wildcard, range, list and fuzzy matching (answered with 400, not ignored);
+`includefield` for attributes beyond the stored levels; transcoding (406 when the client wants
+a transfer syntax other than the stored one); rendered media; JSON/XML + bulk data STOW;
+BulkDataURI in metadata.
+
+DICOM JSON numbers: IS and DS values are written as JSON numbers, padding trimmed (PS3.18 Table
+F.2.3-1 allows numbers or strings).
 
 DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after.
 
