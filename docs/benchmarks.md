@@ -3,7 +3,21 @@
 `scripts/bench.sh` against pacs-rs and the reference server (see the README, "Comparing with a
 reference server"), with the same client and the same files.
 
-## 2026-10-24: one CT series
+## 2026-10-24: one CT series, reference server 26.9.1 (latest)
+
+The same workload and machine as below, against the latest reference release (26.9.1, core
+1.13.0), three rounds:
+
+| | reference 26.9.1 | pacs-rs |
+|---|---|---|
+| upload 200 files, 4 at a time | 0.87 s | 0.68 s |
+| series metadata, first request | 75 ms | 3 ms |
+| series metadata, later requests (median of 5) | 6-11 ms | 2-3 ms |
+| 200 frames, one request after another | 1.93-1.97 s | 1.74-1.81 s |
+| 200 frames, 8 requests at a time | 0.29-0.30 s | 0.27-0.28 s |
+| study ZIP, 95 MB | 2.49-2.50 s | 1.92-1.98 s |
+
+## 2026-10-24: one CT series, reference server 26.6.1
 
 - Data: a synthetic series, 200 slices of 512 x 512 x 16 bits, 101 MB
   (`write_synthetic -- ct 77 200 512`).
