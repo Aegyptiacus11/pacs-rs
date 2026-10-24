@@ -1,7 +1,7 @@
 //! Main tags: the attributes the REST API shows for each resource, as raw DICOM strings.
 //!
 //! The lists are those of the reference server's default configuration, read from its
-//! `GET /system` (`MainDicomTags`) for version 26.6.1, so that pacs-rs answers with the
+//! `GET /system` (`MainDicomTags`) for version 26.9.1 (the same as 26.6.1), so that pacs-rs answers with the
 //! same attributes.
 
 use dicom_core::Tag;

@@ -1,5 +1,7 @@
 //! `GET /studies/{id}/archive`: a study's files in a ZIP, one folder per patient,
-//! study and series, as the reference server lays it out.
+//! study and series, as the reference server (26.9.1) lays it out:
+//! `PatientID - PatientName/AccessionNumber - StudyDescription/
+//! SeriesNumber - Modality - SeriesDescription/CT000001.dcm`.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
@@ -25,7 +27,7 @@ fn name(parts: &[&str]) -> String {
         .filter(|p| !p.is_empty())
         .copied()
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" - ");
     let clean: String = joined
         .chars()
         .map(|c| {
@@ -62,7 +64,11 @@ pub(crate) async fn study(
     for series_id in &study.series {
         if let Some(series) = index.rest_series(series_id).await? {
             let modality = tag(&series.main_tags, "Modality").to_owned();
-            let dir = name(&[&modality, tag(&series.main_tags, "SeriesDescription")]);
+            let dir = name(&[
+                tag(&series.main_tags, "SeriesNumber"),
+                &modality,
+                tag(&series.main_tags, "SeriesDescription"),
+            ]);
             series_dirs.insert(series.public_id, (dir, name(&[&modality])));
         }
     }
@@ -115,9 +121,9 @@ mod tests {
 
     #[test]
     fn names_are_safe() {
-        assert_eq!(name(&["SYN1", "DOE^JOHN"]), "SYN1 DOE^JOHN");
+        assert_eq!(name(&["SYN1", "DOE^JOHN"]), "SYN1 - DOE^JOHN");
         // no `/`, and never `..` as a whole path component
-        assert_eq!(name(&["../..", "a/b"]), "_.. a_b");
+        assert_eq!(name(&["../..", "a/b"]), "_.. - a_b");
         assert_eq!(name(&[".."]), "Unknown");
         assert_eq!(name(&["", ""]), "Unknown");
         assert_eq!(name(&["CT", ""]), "CT");

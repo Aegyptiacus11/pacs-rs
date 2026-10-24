@@ -117,14 +117,14 @@ docker stop pacs-rs-test-s3
 
 `crates/pacs-server/tests/reference.rs` stores the same synthetic files in pacs-rs and in a
 reference DICOMweb server, makes the same requests to both and compares the answers tag by tag,
-frame by frame and file by file. The reference is Orthanc 26.6.1 with its DICOMweb plugin;
+frame by frame and file by file. The reference is Orthanc 26.9.1 (core 1.13.0) with its DICOMweb plugin;
 pacs-rs aims to be compatible with it. Deliberate differences are listed in the test, each with
 its reason. The test runs only when `PACS_TEST_REFERENCE_URL` is set:
 
 ```bash
 docker run -d --rm --name pacs-rs-reference -p 127.0.0.1:18042:8042 \
   -e DICOM_WEB_PLUGIN_ENABLED=true -e ORTHANC__AUTHENTICATION_ENABLED=false \
-  orthancteam/orthanc:26.6.1
+  orthancteam/orthanc:26.9.1
 PACS_TEST_REFERENCE_URL=http://127.0.0.1:18042/dicom-web cargo test -p pacs-server --test reference
 docker stop pacs-rs-reference
 ```

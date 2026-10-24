@@ -175,7 +175,7 @@ async fn what_quorum_reads_back() {
     let mut file = archive.by_index(0).unwrap();
     assert_eq!(
         file.name(),
-        "SYN92 SYNTHETIC^SERIES/ACC92 Synthetic study/CT Synthetic series 1/CT000001.dcm"
+        "SYN92 - SYNTHETIC^SERIES/ACC92 - Synthetic study/1 - CT - Synthetic series 1/CT000001.dcm"
     );
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
