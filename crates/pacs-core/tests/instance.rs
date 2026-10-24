@@ -63,3 +63,38 @@ fn uids_are_digits_and_dots_only() {
     assert!(!is_valid_uid("1.2/3"));
     assert!(!is_valid_uid(&"1".repeat(65)));
 }
+
+#[test]
+fn metadata_leaves_out_pixel_data() {
+    let instance = Instance::from_bytes(&SyntheticSeries::new(10, 1).slice_bytes(0)).unwrap();
+    assert!(instance.to_json().unwrap().get("7FE00010").is_some());
+    let metadata = instance.metadata_json().unwrap();
+    assert!(metadata.get("7FE00010").is_none());
+    assert_eq!(metadata["00280010"]["Value"][0], 4);
+}
+
+#[test]
+fn level_attributes_are_split_by_level() {
+    use pacs_core::levels;
+    let series = SyntheticSeries::new(15, 1);
+    let instance = Instance::from_bytes(&series.slice_bytes(0)).unwrap();
+    let study = instance.attributes_json(levels::STUDY).unwrap();
+    assert_eq!(study["0020000D"]["Value"][0], series.study_uid());
+    assert_eq!(study["00100020"]["Value"][0], "SYN15");
+    assert!(study.get("00080060").is_none());
+    let series_json = instance.attributes_json(levels::SERIES).unwrap();
+    assert_eq!(series_json["00080060"]["Value"][0], "CT");
+    assert!(series_json.get("00100010").is_none());
+    let inst = instance.attributes_json(levels::INSTANCE).unwrap();
+    assert_eq!(inst["00200013"]["vr"], "IS");
+}
+
+#[test]
+fn strings_and_ints_for_the_index() {
+    use dicom_dictionary_std::tags;
+    let instance = Instance::from_bytes(&SyntheticSeries::new(16, 2).slice_bytes(1)).unwrap();
+    assert_eq!(instance.string(tags::MODALITY).as_deref(), Some("CT"));
+    assert_eq!(instance.string(tags::STUDY_DATE), None);
+    assert_eq!(instance.int(tags::INSTANCE_NUMBER), Some(2));
+    assert_eq!(instance.int(tags::ROWS), Some(4));
+}

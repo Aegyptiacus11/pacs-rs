@@ -5,10 +5,12 @@
 //! instance UIDs, the SOP class and the stored transfer syntax.
 
 use dicom_core::Tag;
+use dicom_core::header::Header;
 use dicom_dictionary_std::tags;
 use dicom_object::file::ReadPreamble;
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
 
+pub mod levels;
 #[cfg(feature = "synthetic")]
 pub mod synthetic;
 
@@ -68,6 +70,47 @@ impl Instance {
     pub fn to_json(&self) -> Result<serde_json::Value, serde_json::Error> {
         dicom_json::to_value(&*self.object)
     }
+
+    /// The data set as DICOM JSON without its bulk pixel data, as the index keeps it for
+    /// WADO-RS metadata; the server adds a BulkDataURI in its place when serving.
+    pub fn metadata_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        elements_json(
+            self.object
+                .iter()
+                .filter(|e| !levels::BULK_PIXEL_DATA.contains(&e.tag())),
+        )
+    }
+
+    /// DICOM JSON of just those of `tags` present in the data set.
+    pub fn attributes_json(&self, tags: &[Tag]) -> Result<serde_json::Value, serde_json::Error> {
+        elements_json(tags.iter().filter_map(|&tag| self.object.get(tag)))
+    }
+
+    /// A string attribute, without its padding; `None` when absent, empty or not a string.
+    pub fn string(&self, tag: Tag) -> Option<String> {
+        let value = self.object.get(tag)?.to_str().ok()?;
+        let value = value.trim_end_matches(['\0', ' ']).trim_start();
+        (!value.is_empty()).then(|| value.to_owned())
+    }
+
+    /// An integer attribute (IS, US, ...); `None` when absent or not a number.
+    pub fn int(&self, tag: Tag) -> Option<i64> {
+        self.object.get(tag)?.to_int::<i64>().ok()
+    }
+}
+
+fn elements_json<'a>(
+    elements: impl Iterator<Item = &'a dicom_object::mem::InMemElement>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut map = serde_json::Map::new();
+    for element in elements {
+        let tag = element.tag();
+        map.insert(
+            format!("{:04X}{:04X}", tag.group(), tag.element()),
+            dicom_json::to_value(element)?,
+        );
+    }
+    Ok(serde_json::Value::Object(map))
 }
 
 fn uid(object: &DefaultDicomObject, name: &'static str, tag: Tag) -> Result<String, Error> {

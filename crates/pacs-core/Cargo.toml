@@ -20,4 +20,5 @@ thiserror.workspace = true
 synthetic = []
 
 [dev-dependencies]
+dicom-dictionary-std.workspace = true
 pacs-core = { path = ".", features = ["synthetic"] }
