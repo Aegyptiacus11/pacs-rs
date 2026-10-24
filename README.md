@@ -15,7 +15,8 @@ S3 and a SQLite index.
 | `pacs-index` | the SQLite index: hierarchy, counts, attributes, metadata, storage keys |
 | `pacs-archive` | ingest: store then index, undone if the index refuses |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
-| `pacs-server` | the binary: settings, `/healthz`, DICOMweb under `/dicom-web` |
+| `pacs-rest` | the REST API: resources by public ID, uploads, find, study archives |
+| `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web` |
 
 ## DICOMweb
 
@@ -26,7 +27,6 @@ S3 and a SQLite index.
 | `GET .../metadata` (study, series, instance) | DICOM JSON without pixel data |
 | `GET .../instances/{instance}/frames/{list}` | frames in the stored transfer syntax: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
 | `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
-| `POST /instances` | one DICOM file as the body; answers with its UIDs |
 
 Not yet: wildcard, range, list and fuzzy matching (answered with 400, not ignored);
 `includefield` for attributes beyond the stored levels; transcoding (406 when the client wants
@@ -35,6 +35,30 @@ BulkDataURI in metadata.
 
 DICOM JSON numbers: IS and DS values are written as JSON numbers, padding trimmed (PS3.18 Table
 F.2.3-1 allows numbers or strings).
+
+## REST API
+
+At the server's root, compatible with the reference server's REST API (see "Comparing with a
+reference server"), so its clients work unchanged. Resources have public IDs: the SHA-1 of their
+DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gives them.
+
+| Request | |
+|---|---|
+| `POST /instances` | one DICOM file as the body; `ID`, `ParentPatient`, `ParentStudy`, `ParentSeries`, `Path`, `Status` (`Success` or `AlreadyStored`) |
+| `GET /studies[?expand][&limit=&since=]` | study IDs, or study objects |
+| `GET /studies/{id}`, `/series/{id}`, `/instances/{id}` | the resource, with its `MainDicomTags` |
+| `GET /studies/{id}/series`, `/studies/{id}/instances`, `/series/{id}/instances` | children, expanded |
+| `GET /studies/{id}/statistics` | counts and sizes |
+| `GET /studies/{id}/archive` | the study's files in a ZIP, by patient, study and series |
+| `GET /instances/{id}/file` | the DICOM file as stored |
+| `POST /tools/find` | `Level` Study, Series or Instance, exact matching on the UIDs, PatientID, AccessionNumber, StudyDate |
+
+An instance sent again is kept as first stored (`AlreadyStored`) unless `PACS_OVERWRITE_INSTANCES`
+is set. Lists of a study's series and a series' instances come in Series and Instance Number
+order.
+
+Not yet: patients, labels, metadata, modifications and deletion, wildcard and range searches in
+`/tools/find`.
 
 DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after.
 
