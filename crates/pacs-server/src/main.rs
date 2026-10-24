@@ -2,6 +2,11 @@ use clap::Parser;
 use pacs_server::{Settings, StorageLocation, app, open_archive, serve, shutdown_signal};
 use tracing_subscriber::EnvFilter;
 
+// musl's allocator is slow under many threads (frames ran 25% slower in the static image);
+// mimalloc keeps the static binary as fast as the glibc one.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()

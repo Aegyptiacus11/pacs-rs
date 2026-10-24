@@ -15,6 +15,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
+mimalloc.workspace = true
 pacs-archive.workspace = true
 pacs-dicomweb.workspace = true
 pacs-index.workspace = true
