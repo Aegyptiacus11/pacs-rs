@@ -393,20 +393,24 @@ impl Index {
     }
 
     /// The metadata (data set without pixel data) of every instance in a series, by
-    /// instance number: the body of WADO-RS series metadata.
-    pub async fn series_metadata(
+    /// instance number: the body of WADO-RS series metadata. `sop_instance_uid` narrows
+    /// it to one instance.
+    pub async fn metadata(
         &self,
         study_instance_uid: &str,
         series_instance_uid: &str,
+        sop_instance_uid: Option<&str>,
     ) -> Result<Vec<Value>, Error> {
         let rows: Vec<String> = sqlx::query_scalar(
             "SELECT i.metadata
                FROM instances i JOIN series se USING (series_instance_uid)
               WHERE se.study_instance_uid = ?1 AND i.series_instance_uid = ?2
+                AND (?3 IS NULL OR i.sop_instance_uid = ?3)
               ORDER BY i.instance_number IS NULL, i.instance_number, i.sop_instance_uid",
         )
         .bind(study_instance_uid)
         .bind(series_instance_uid)
+        .bind(sop_instance_uid)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(parse).collect()

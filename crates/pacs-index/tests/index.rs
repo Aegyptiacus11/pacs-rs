@@ -66,13 +66,24 @@ async fn instances_and_metadata_come_in_instance_number_order() {
     assert_eq!(instances[0].transfer_syntax_uid, "1.2.840.10008.1.2.1");
 
     let metadata = index
-        .series_metadata(&series.study_uid(), &series.series_uid())
+        .metadata(&series.study_uid(), &series.series_uid(), None)
         .await
         .unwrap();
     assert_eq!(metadata.len(), 4);
     assert_eq!(metadata[0]["00080018"]["Value"][0], series.instance_uid(0));
     assert_eq!(metadata[3]["00200013"]["Value"][0], 4);
     assert!(metadata[0].get("7FE00010").is_none());
+
+    let one = index
+        .metadata(
+            &series.study_uid(),
+            &series.series_uid(),
+            Some(&series.instance_uid(2)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0]["00200013"]["Value"][0], 3);
 }
 
 #[tokio::test]
