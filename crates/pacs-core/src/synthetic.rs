@@ -7,8 +7,11 @@ use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
 /// A synthetic CT series: `slices` instances of `rows` x `columns` 16-bit pixels.
 #[derive(Debug, Clone)]
 pub struct SyntheticSeries {
-    /// Distinguishes series made in the same test; goes into every UID.
+    /// Distinguishes series made in the same test; goes into the series and instance UIDs.
     pub seed: u32,
+    /// Goes into the study UID and patient ID; series with the same one share a study.
+    pub study_seed: u32,
+    pub series_number: u32,
     pub slices: u32,
     pub rows: u16,
     pub columns: u16,
@@ -18,23 +21,34 @@ impl SyntheticSeries {
     pub fn new(seed: u32, slices: u32) -> Self {
         SyntheticSeries {
             seed,
+            study_seed: seed,
+            series_number: 1,
             slices,
             rows: 4,
             columns: 4,
         }
     }
 
-    // 2.25 UIDs (PS3.5 B.2) from fixed numbers, so tests are reproducible.
+    /// The same series, but in the study of `study_seed`, as series number `number`.
+    pub fn in_study(mut self, study_seed: u32, number: u32) -> Self {
+        self.study_seed = study_seed;
+        self.series_number = number;
+        self
+    }
+
+    // 2.25 UIDs (PS3.5 B.2) from fixed numbers, so tests are reproducible: the seed, one
+    // digit for the level, five for the slice. The fixed width keeps seeds from colliding;
+    // seeds start at 1, as a UID component may not start with 0.
     pub fn study_uid(&self) -> String {
-        format!("2.25.{}1", self.seed)
+        format!("2.25.{}100000", self.study_seed)
     }
 
     pub fn series_uid(&self) -> String {
-        format!("2.25.{}2", self.seed)
+        format!("2.25.{}200000", self.seed)
     }
 
     pub fn instance_uid(&self, slice: u32) -> String {
-        format!("2.25.{}3{}", self.seed, slice + 1)
+        format!("2.25.{}3{:05}", self.seed, slice + 1)
     }
 
     /// One slice as a DICOM Part 10 file in Explicit VR Little Endian, preamble included.
@@ -48,10 +62,10 @@ impl SyntheticSeries {
             DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, self.instance_uid(slice)),
             DataElement::new(tags::MODALITY, VR::CS, "CT"),
             DataElement::new(tags::PATIENT_NAME, VR::PN, "SYNTHETIC^SERIES"),
-            DataElement::new(tags::PATIENT_ID, VR::LO, format!("SYN{}", self.seed)),
+            DataElement::new(tags::PATIENT_ID, VR::LO, format!("SYN{}", self.study_seed)),
             DataElement::new(tags::STUDY_INSTANCE_UID, VR::UI, self.study_uid()),
             DataElement::new(tags::SERIES_INSTANCE_UID, VR::UI, self.series_uid()),
-            DataElement::new(tags::SERIES_NUMBER, VR::IS, "1"),
+            DataElement::new(tags::SERIES_NUMBER, VR::IS, self.series_number.to_string()),
             DataElement::new(tags::INSTANCE_NUMBER, VR::IS, (slice + 1).to_string()),
             DataElement::new(
                 tags::IMAGE_POSITION_PATIENT,
