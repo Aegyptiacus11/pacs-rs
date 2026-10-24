@@ -27,6 +27,15 @@ The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up.
 cargo test --workspace
 ```
 
+The S3 tests run only when `PACS_TEST_S3_ENDPOINT` is set; against a throwaway SeaweedFS:
+
+```bash
+docker run -d --rm --name pacs-rs-test-s3 -p 127.0.0.1:18333:8333 chrislusf/seaweedfs:4.48 server -s3
+curl -X PUT http://127.0.0.1:18333/pacs-test
+PACS_TEST_S3_ENDPOINT=http://127.0.0.1:18333 cargo test --workspace
+docker stop pacs-rs-test-s3
+```
+
 ## License
 
 Licensed under either of
