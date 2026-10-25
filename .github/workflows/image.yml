@@ -42,7 +42,23 @@ jobs:
           fi
           echo "tag=$version-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Log in
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: printf '%s' "$HARBOR_PASSWORD" | docker login "$REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+
+      # Tags are never overwritten: builds are not byte-identical, so a re-run would push a
+      # different image under the same tag. A re-run takes the image already there.
+      - name: Already pushed?
+        id: existing
+        run: |
+          if docker pull --quiet "$IMAGE:${{ steps.tag.outputs.tag }}"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build
+        if: steps.existing.outputs.found != 'true'
         run: >
           docker build --pull
           --label org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
@@ -51,18 +67,17 @@ jobs:
           -t "$IMAGE:${{ steps.tag.outputs.tag }}" .
 
       - name: Push
+        if: steps.existing.outputs.found != 'true'
+        run: docker push "$IMAGE:${{ steps.tag.outputs.tag }}"
+
+      - name: Digest
         id: push
-        env:
-          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
-          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
         run: |
-          printf '%s' "$HARBOR_PASSWORD" | docker login "$REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
-          docker push "$IMAGE:${{ steps.tag.outputs.tag }}"
           digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ steps.tag.outputs.tag }}")"
           echo "$digest"
           echo "image=127.0.0.1:8080/pacs/pacs-server:${{ steps.tag.outputs.tag }}@${digest#*@}" >> "$GITHUB_OUTPUT"
           {
-            echo "Pushed \`$IMAGE:${{ steps.tag.outputs.tag }}\`"
+            echo "Image \`$IMAGE:${{ steps.tag.outputs.tag }}\`"
             echo
             echo "On the homeserver: \`127.0.0.1:8080/pacs/pacs-server:${{ steps.tag.outputs.tag }}@${digest#*@}\`"
           } >> "$GITHUB_STEP_SUMMARY"
