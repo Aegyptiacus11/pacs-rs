@@ -103,7 +103,8 @@ curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 
 Pushing a tag `v<version>` (the workspace version in `Cargo.toml`) releases to the homeserver
 (`.github/workflows/image.yml`): it builds the Docker image, pushes it to the private registry
-there as `pacs/pacs-server:<version>-<commit>`, pins that digest in homeserver-infra's
+there as `pacs/pacs-server:<version>-<commit>` (and `latest`, when it is the highest release
+version; pre-releases like `v1.0.0-rc1` never get it), pins that digest in homeserver-infra's
 `stacks/pacs/compose.yml` (a commit to its `main`), calls the `pacs` stack's Portainer webhook,
 and waits for `/healthz`. The job runs on a self-hosted runner on the homeserver
 (homeserver-infra, `stacks/runners`). Repository secrets:
