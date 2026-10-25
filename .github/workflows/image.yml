@@ -70,6 +70,21 @@ jobs:
         if: steps.existing.outputs.found != 'true'
         run: docker push "$IMAGE:${{ steps.tag.outputs.tag }}"
 
+      # `latest` follows the highest release version (pre-releases like v1.0.0-rc1 never get
+      # it), so a fix released later for an older line does not move it backwards. The stack
+      # on the homeserver pins a digest, not this.
+      - name: Latest
+        run: |
+          newest="$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' | grep -vF -e - | sort -V | tail -n1)"
+          [ -n "$newest" ] || { echo "::error::could not list the repository's tags"; exit 1; }
+          if [ "$newest" = "$GITHUB_REF_NAME" ]; then
+            docker tag "$IMAGE:${{ steps.tag.outputs.tag }}" "$IMAGE:latest"
+            docker push --quiet "$IMAGE:latest"
+            echo "latest -> ${{ steps.tag.outputs.tag }}"
+          else
+            echo "latest stays: $newest is newer than $GITHUB_REF_NAME"
+          fi
+
       - name: Digest
         id: push
         run: |
