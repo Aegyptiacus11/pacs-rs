@@ -42,3 +42,24 @@ Two things did not work, both Quorum's own, and they would happen with any PACS 
 - In this ingest mode it captures a case's geometry by decoding the CT in the API image, which
   has no JPEG-LS decoder, so a JPEG-LS study - what its own upload produces - gets no geometry,
   and the case page no study facts.
+
+Both are fixed in Quorum `feat/wadors-primary` at `421848c`:
+
+- "Upload: write a file back as read" writes the header out as it came in, so an over-long DS
+  value no longer stops compression.
+- "Case geometry from headers over WADO-RS first" reads a case's geometry from the series
+  metadata, with no pixels decoded.
+
+## 2026-10-26: the fixes, against pacs-rs
+
+Quorum at `421848c`, pacs-rs `pacs-server:small` (the 0.1.x code), the same isolated stack:
+
+| What | Result |
+|---|---|
+| Patient 3, JPEG-LS lossless, 200 slices, uploaded through Quorum's API | 200/200 stored; the case page has its study facts (200 slices, 512 x 512, 0.625 x 0.625 x 1.25 mm) |
+| That case's stored geometry | origin, spacing, direction and size equal to the original files' headers |
+| Quorum's DICOM rewrite tests (`dicom-rewrite.test.ts`) | 2/2 pass |
+
+Not rerun here: the browser upload of an IRCADb study with compression on. Quorum's commit
+reports that check (patient 4: 91/91 files compressed, every frame served back decoding to the
+original pixels).
