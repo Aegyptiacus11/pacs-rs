@@ -244,7 +244,7 @@ async fn unknown_ids_are_a_bare_404_and_unsupported_searches_400() {
     for query in [
         json!({"Level": "Study", "Query": {"PatientID": "SYN*"}}),
         json!({"Level": "Study", "Query": {"PatientName": "X"}}),
-        json!({"Level": "Patient", "Query": {}}),
+        json!({"Level": "Patient", "Query": {"PatientName": "X"}}),
     ] {
         let (status, _, _) = call(&app, "POST", "/tools/find", query.to_string().into()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
@@ -297,5 +297,96 @@ async fn the_archive_is_streamed_file_by_file() {
             .read_to_end(&mut bytes)
             .unwrap();
         assert_eq!(&bytes, expected, "entry {i}");
+    }
+}
+
+/// Patient SYN96: study 96 (series 96 of 2 slices, series 97 of 1) and study 98 (1 slice).
+async fn two_studies(app: &Router) -> [SyntheticSeries; 3] {
+    let a = SyntheticSeries::new(96, 2);
+    let b = SyntheticSeries::new(97, 1).in_study(96, 2).for_patient(96);
+    let c = SyntheticSeries::new(98, 1).for_patient(96);
+    for s in [&a, &b, &c] {
+        upload_all(app, s).await;
+    }
+    [a, b, c]
+}
+
+#[tokio::test]
+async fn patients_and_parents() {
+    let app = app().await;
+    let [a, _, c] = two_studies(&app).await;
+    let patient = public_ids::patient("SYN96");
+    let study_a = public_ids::study("SYN96", &a.study_uid());
+    let study_c = public_ids::study("SYN96", &c.study_uid());
+
+    assert_eq!(
+        json(&app, "GET", "/patients", Bytes::new()).await,
+        json!([patient])
+    );
+    let p = json(&app, "GET", &format!("/patients/{patient}"), Bytes::new()).await;
+    assert_eq!(p["Type"], "Patient");
+    assert_eq!(p["MainDicomTags"]["PatientID"], "SYN96");
+    assert_eq!(p["IsProtected"], false);
+    let mut studies: Vec<String> = serde_json::from_value(p["Studies"].clone()).unwrap();
+    studies.sort();
+    let mut expected = vec![study_a.clone(), study_c.clone()];
+    expected.sort();
+    assert_eq!(studies, expected);
+    let expanded = json(&app, "GET", "/patients?expand", Bytes::new()).await;
+    assert_eq!(expanded, json!([p]));
+
+    let uri = |tail: &str| format!("/patients/{patient}/{tail}");
+    let listed = json(&app, "GET", &uri("studies"), Bytes::new()).await;
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert_eq!(listed[0]["Type"], "Study");
+    let listed = json(&app, "GET", &uri("series"), Bytes::new()).await;
+    assert_eq!(listed.as_array().unwrap().len(), 3);
+    let listed = json(&app, "GET", &uri("instances"), Bytes::new()).await;
+    assert_eq!(listed.as_array().unwrap().len(), 4);
+    let stats = json(&app, "GET", &uri("statistics"), Bytes::new()).await;
+    assert_eq!(
+        (
+            &stats["CountStudies"],
+            &stats["CountSeries"],
+            &stats["CountInstances"]
+        ),
+        (&json!(2), &json!(3), &json!(4))
+    );
+    let (status, _, zip) = call(&app, "GET", &uri("archive"), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        zip::ZipArchive::new(Cursor::new(zip.to_vec()))
+            .unwrap()
+            .len(),
+        4
+    );
+
+    let find = json!({"Level": "Patient", "Query": {"PatientID": "SYN96"}});
+    assert_eq!(
+        json(&app, "POST", "/tools/find", find.to_string().into()).await,
+        json!([patient])
+    );
+
+    // each resource's ancestors
+    let series_a = public_ids::series("SYN96", &a.study_uid(), &a.series_uid());
+    let instance =
+        public_ids::instance("SYN96", &a.study_uid(), &a.series_uid(), &a.instance_uid(0));
+    for (uri, id) in [
+        (format!("/studies/{study_a}/patient"), &patient),
+        (format!("/series/{series_a}/patient"), &patient),
+        (format!("/series/{series_a}/study"), &study_a),
+        (format!("/instances/{instance}/patient"), &patient),
+        (format!("/instances/{instance}/study"), &study_a),
+        (format!("/instances/{instance}/series"), &series_a),
+    ] {
+        assert_eq!(
+            json(&app, "GET", &uri, Bytes::new()).await["ID"],
+            *id,
+            "{uri}"
+        );
+    }
+    for uri in ["/patients/x", "/patients/x/studies", "/studies/x/patient"] {
+        let (status, _, _) = call(&app, "GET", uri, Bytes::new()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
     }
 }

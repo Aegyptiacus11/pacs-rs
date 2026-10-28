@@ -1,4 +1,4 @@
-//! `GET /studies/{id}/archive`: a study's files in a ZIP, one folder per patient,
+//! `GET /studies/{id}/archive`, `/patients/{id}/archive`: the files in a ZIP, one folder per patient,
 //! study and series, as the reference server (26.9.1) lays it out:
 //! `PatientID - PatientName/AccessionNumber - StudyDescription/
 //! SeriesNumber - Modality - SeriesDescription/CT000001.dcm`. Streamed: see [`zip_stream`].
@@ -56,6 +56,31 @@ pub(crate) async fn study(
 ) -> Result<Response, RestError> {
     let index = state.archive.index();
     let study = index.rest_study(&id).await?.ok_or(RestError::NotFound)?;
+    let entries = study_entries(index, study).await?;
+    Ok(zip_response(&state, &id, entries))
+}
+
+/// `GET /patients/{id}/archive`: each of the patient's studies, laid out as above.
+pub(crate) async fn patient(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, RestError> {
+    let index = state.archive.index();
+    let patient = index.rest_patient(&id).await?.ok_or(RestError::NotFound)?;
+    let mut entries = Vec::new();
+    for study_id in &patient.studies {
+        if let Some(study) = index.rest_study(study_id).await? {
+            entries.extend(study_entries(index, study).await?);
+        }
+    }
+    Ok(zip_response(&state, &id, entries))
+}
+
+/// (path in the ZIP, storage key) of a study's files, in series then instance order.
+async fn study_entries(
+    index: &pacs_index::Index,
+    study: pacs_index::RestStudy,
+) -> Result<Vec<(String, String)>, RestError> {
     let patient_dir = name(&[
         tag(&study.patient_main_tags, "PatientID"),
         tag(&study.patient_main_tags, "PatientName"),
@@ -77,10 +102,9 @@ pub(crate) async fn study(
         }
     }
 
-    // (path in the ZIP, storage key), in series then instance order
     let mut entries = Vec::new();
     let mut counters: HashMap<String, usize> = HashMap::new();
-    for instance in index.rest_study_instances(&id).await? {
+    for instance in index.rest_study_instances(&study.public_id).await? {
         let (dir, prefix) = series_dirs
             .get(&instance.parent_series)
             .cloned()
@@ -90,9 +114,12 @@ pub(crate) async fn study(
         let path = format!("{patient_dir}/{study_dir}/{dir}/{prefix}{n:06}.dcm");
         entries.push((path, instance.object_key));
     }
+    Ok(entries)
+}
 
+fn zip_response(state: &AppState, id: &str, entries: Vec<(String, String)>) -> Response {
     let body = Body::from_stream(zip_stream(state.archive.clone(), entries));
-    Ok((
+    (
         [
             (CONTENT_TYPE, "application/zip".to_owned()),
             (
@@ -102,7 +129,7 @@ pub(crate) async fn study(
         ],
         body,
     )
-        .into_response())
+        .into_response()
 }
 
 /// Where the ZIP writer puts its bytes, for the stream to take them from as they come.

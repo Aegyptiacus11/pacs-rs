@@ -10,7 +10,7 @@ use pacs_index::StudyFilter;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::resources::{instance_json, series_json, study_json};
+use crate::resources::{instance_json, patient_json, series_json, study_json};
 use crate::{AppState, RestError};
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +63,26 @@ pub(crate) async fn find(
     let index = state.archive.index();
     let q = &find.query;
     let found: Vec<Value> = match find.level.to_ascii_lowercase().as_str() {
+        "patient" => {
+            only(q, &["PatientID"])?;
+            let ids = index
+                .patient_public_ids(exact(q, "PatientID")?)
+                .await?
+                .into_iter()
+                .skip(find.since.unwrap_or(0).max(0) as usize)
+                .take(find.limit.map_or(usize::MAX, |l| l.max(0) as usize));
+            let mut found = Vec::new();
+            for id in ids {
+                if find.expand {
+                    if let Some(p) = index.rest_patient(&id).await? {
+                        found.push(patient_json(p));
+                    }
+                } else {
+                    found.push(json!(id));
+                }
+            }
+            found
+        }
         "study" => {
             only(
                 q,
