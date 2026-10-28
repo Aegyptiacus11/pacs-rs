@@ -13,7 +13,9 @@ pacs-core.workspace = true
 pacs-index.workspace = true
 pacs-store.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
 
 [dev-dependencies]
 pacs-core = { workspace = true, features = ["synthetic"] }
-tokio.workspace = true
+tempfile.workspace = true

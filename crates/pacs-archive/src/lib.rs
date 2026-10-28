@@ -1,11 +1,14 @@
 //! The pacs-rs archive: each instance's file in the store and its entry in the index,
 //! kept in step. Every way in (DICOMweb STOW-RS, a plain upload, DIMSE C-STORE later)
-//! goes through [`Archive::ingest`].
+//! goes through [`Archive::ingest`], every way out through [`Archive::delete`].
+
+use std::sync::Arc;
 
 use bytes::Bytes;
 use pacs_core::{Instance, InstanceKey};
-use pacs_index::{Index, InstanceEntry, NewInstance, Recorded};
+use pacs_index::{Deleted, Index, InstanceEntry, Level, NewInstance, Recorded};
 use pacs_store::Store;
+use tokio::sync::RwLock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -58,6 +61,10 @@ pub struct Archive {
     store: Store,
     index: Index,
     overwrite: bool,
+    /// Uploads share it, a deletion holds it alone: a file's storage key comes from its
+    /// UIDs, so an upload of an instance being deleted would otherwise have its new file
+    /// removed by the deletion. One server process; several on one index would need more.
+    writes: Arc<RwLock<()>>,
 }
 
 impl Archive {
@@ -68,6 +75,7 @@ impl Archive {
             store,
             index,
             overwrite: false,
+            writes: Arc::default(),
         }
     }
 
@@ -104,6 +112,7 @@ impl Archive {
         bytes: Bytes,
         expected_study: Option<&str>,
     ) -> Result<Ingested, IngestError> {
+        let _writing = self.writes.read().await;
         let instance = Instance::from_bytes(&bytes)?;
         if let Some(expected) = expected_study
             && expected != instance.key.study_instance_uid
@@ -151,6 +160,33 @@ impl Archive {
                 Err(e.into())
             }
         }
+    }
+
+    /// Delete a resource and everything under it, index entries first, then files, so the
+    /// index never names a file that is gone. `None` when there is no such resource.
+    ///
+    /// A file that cannot be removed stays in the store, unindexed, and is logged: the
+    /// resource is deleted all the same.
+    pub async fn delete(
+        &self,
+        level: Level,
+        public_id: &str,
+    ) -> Result<Option<Deleted>, pacs_index::Error> {
+        let _deleting = self.writes.write().await;
+        let Some(deleted) = self.index.delete(level, public_id).await? else {
+            return Ok(None);
+        };
+        let failed = self.store.delete_many(deleted.object_keys.clone()).await;
+        if !failed.is_empty() {
+            tracing::warn!(
+                level = level.name(),
+                id = public_id,
+                left = failed.len(),
+                first = %failed[0],
+                "deleted from the index, but some files could not be removed"
+            );
+        }
+        Ok(Some(deleted))
     }
 
     /// The stored file of an indexed instance.

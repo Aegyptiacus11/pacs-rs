@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use pacs_archive::{Archive, IngestError, Outcome};
 use pacs_core::synthetic::SyntheticSeries;
-use pacs_index::Index;
+use pacs_index::{Index, Level};
 use pacs_store::Store;
 
 async fn archive() -> Archive {
@@ -116,4 +116,54 @@ async fn the_first_copy_is_kept_unless_overwriting() {
         store.get(&store.key_for(&key).unwrap()).await.unwrap(),
         second
     );
+}
+
+#[tokio::test]
+async fn deleting_removes_files_and_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::local(dir.path(), "").unwrap();
+    let archive = Archive::new(store, Index::in_memory().await.unwrap());
+    let series = SyntheticSeries::new(55, 3);
+    for bytes in series.all_bytes() {
+        archive.ingest(Bytes::from(bytes)).await.unwrap();
+    }
+    let files = || {
+        walk(dir.path())
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "dcm"))
+            .count()
+    };
+    assert_eq!(files(), 3);
+
+    let study = pacs_core::public_ids::study("SYN55", &series.study_uid());
+    let deleted = archive.delete(Level::Study, &study).await.unwrap().unwrap();
+    assert_eq!(deleted.object_keys.len(), 3);
+    assert_eq!(deleted.remaining_ancestor, None);
+    assert_eq!(files(), 0);
+    assert!(archive.index().rest_study(&study).await.unwrap().is_none());
+    assert!(
+        archive
+            .delete(Level::Study, &study)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // and it can be sent again
+    let again = archive.ingest(series.slice_bytes(0).into()).await.unwrap();
+    assert_eq!(again.outcome, Outcome::Added);
+    assert_eq!(files(), 1);
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }
