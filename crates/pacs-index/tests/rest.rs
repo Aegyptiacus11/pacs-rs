@@ -76,6 +76,7 @@ async fn studies_series_and_instances_by_public_id() {
         assert_eq!(
             index.study_statistics(&study_id).await.unwrap(),
             Some(Statistics {
+                studies: 1,
                 series: 2,
                 instances: 5,
                 size_bytes: size

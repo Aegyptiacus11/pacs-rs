@@ -50,6 +50,18 @@ fn freshness(last_ms: Option<i64>) -> (String, bool) {
     }
 }
 
+/// A patient: the studies with its patient ID.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestPatient {
+    pub public_id: String,
+    /// The patient's main tags as its first study brought them.
+    pub main_tags: Value,
+    /// Public IDs of its studies, by study date.
+    pub studies: Vec<String>,
+    pub last_update: String,
+    pub is_stable: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestStudy {
     pub public_id: String,
@@ -96,6 +108,8 @@ pub struct RestInstance {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Statistics {
+    /// 1 for a study.
+    pub studies: i64,
     pub series: i64,
     pub instances: i64,
     pub size_bytes: i64,
@@ -119,6 +133,25 @@ macro_rules! instance_query {
     };
 }
 
+/// Totals under the studies where `$key = $1`.
+macro_rules! statistics_query {
+    ($key:literal) => {
+        concat!(
+            "SELECT count(DISTINCT st.study_instance_uid) AS studies,
+                    count(DISTINCT se.series_instance_uid) AS series,
+                    count(i.sop_instance_uid) AS instances,
+                    CAST(coalesce(sum(i.size_bytes), 0) AS BIGINT) AS size_bytes,
+                    count(st.study_instance_uid) AS found
+               FROM studies st
+               LEFT JOIN series se ON se.study_instance_uid = st.study_instance_uid
+               LEFT JOIN instances i ON i.series_instance_uid = se.series_instance_uid
+              WHERE ",
+            $key,
+            " = $1"
+        )
+    };
+}
+
 fn instance(row: AnyRow) -> Result<RestInstance, Error> {
     Ok(RestInstance {
         public_id: row.try_get("public_id")?,
@@ -137,6 +170,96 @@ fn instance(row: AnyRow) -> Result<RestInstance, Error> {
 }
 
 impl Index {
+    /// Public IDs of every patient, or of those with Patient ID `patient_id`.
+    pub async fn patient_public_ids(&self, patient_id: Option<&str>) -> Result<Vec<String>, Error> {
+        Ok(sqlx::query_scalar(
+            "SELECT DISTINCT patient_public_id FROM studies
+              WHERE patient_public_id IS NOT NULL
+                AND (CAST($1 AS TEXT) IS NULL OR patient_id = $1)
+              ORDER BY patient_public_id",
+        )
+        .bind(patient_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn rest_patient(&self, public_id: &str) -> Result<Option<RestPatient>, Error> {
+        // the first study to arrive gives the patient's main tags, as the patient was
+        // created with it
+        let rows = sqlx::query(
+            "SELECT st.public_id, st.patient_main_tags,
+                    (SELECT min(i.received_ms) FROM instances i JOIN series se
+                       USING (series_instance_uid)
+                      WHERE se.study_instance_uid = st.study_instance_uid) AS first_ms,
+                    (SELECT max(i.received_ms) FROM instances i JOIN series se
+                       USING (series_instance_uid)
+                      WHERE se.study_instance_uid = st.study_instance_uid) AS last_ms
+               FROM studies st WHERE st.patient_public_id = $1
+              ORDER BY st.study_date NULLS LAST, st.study_instance_uid",
+        )
+        .bind(public_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut first: Option<(i64, &AnyRow)> = None;
+        let mut last_ms: Option<i64> = None;
+        let mut studies = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let first_ms: Option<i64> = row.try_get("first_ms")?;
+            let first_ms = first_ms.unwrap_or(i64::MAX);
+            if first.is_none_or(|(ms, _)| first_ms < ms) {
+                first = Some((first_ms, row));
+            }
+            let row_last: Option<i64> = row.try_get("last_ms")?;
+            last_ms = last_ms.max(row_last);
+            if let Some(id) = row.try_get::<Option<String>, _>("public_id")? {
+                studies.push(id);
+            }
+        }
+        let Some((_, first)) = first else {
+            return Ok(None);
+        };
+        let (last_update, is_stable) = freshness(last_ms);
+        Ok(Some(RestPatient {
+            public_id: public_id.to_owned(),
+            main_tags: parse(first.try_get("patient_main_tags")?)?,
+            studies,
+            last_update,
+            is_stable,
+        }))
+    }
+
+    /// Public IDs of a patient's series, by study date then series number.
+    pub async fn patient_series_ids(&self, patient_public_id: &str) -> Result<Vec<String>, Error> {
+        Ok(sqlx::query_scalar(
+            "SELECT se.public_id FROM series se JOIN studies st USING (study_instance_uid)
+              WHERE st.patient_public_id = $1 AND se.public_id IS NOT NULL
+              ORDER BY st.study_date NULLS LAST, st.study_instance_uid,
+                       se.series_number IS NULL, se.series_number, se.series_instance_uid",
+        )
+        .bind(patient_public_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// A patient's instances, by study date, series number then instance number.
+    pub async fn rest_patient_instances(
+        &self,
+        patient_public_id: &str,
+    ) -> Result<Vec<RestInstance>, Error> {
+        sqlx::query(instance_query!(
+            "WHERE st.patient_public_id = $1
+              ORDER BY st.study_date NULLS LAST, st.study_instance_uid,
+                       se.series_number IS NULL, se.series_number, se.series_instance_uid,
+                       i.instance_number IS NULL, i.instance_number, i.sop_instance_uid"
+        ))
+        .bind(patient_public_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(instance)
+        .collect()
+    }
+
     /// Public IDs of every study.
     pub async fn study_public_ids(&self) -> Result<Vec<String>, Error> {
         Ok(sqlx::query_scalar(
@@ -275,24 +398,27 @@ impl Index {
         &self,
         study_public_id: &str,
     ) -> Result<Option<Statistics>, Error> {
-        let row = sqlx::query(
-            "SELECT count(DISTINCT se.series_instance_uid) AS series,
-                    count(i.sop_instance_uid) AS instances,
-                    CAST(coalesce(sum(i.size_bytes), 0) AS BIGINT) AS size_bytes,
-                    count(st.study_instance_uid) AS found
-               FROM studies st
-               LEFT JOIN series se ON se.study_instance_uid = st.study_instance_uid
-               LEFT JOIN instances i ON i.series_instance_uid = se.series_instance_uid
-              WHERE st.public_id = $1",
-        )
-        .bind(study_public_id)
-        .fetch_one(&self.pool)
-        .await?;
+        self.statistics(statistics_query!("st.public_id"), study_public_id)
+            .await
+    }
+
+    /// Totals over a patient's studies.
+    pub async fn patient_statistics(
+        &self,
+        patient_public_id: &str,
+    ) -> Result<Option<Statistics>, Error> {
+        self.statistics(statistics_query!("st.patient_public_id"), patient_public_id)
+            .await
+    }
+
+    async fn statistics(&self, sql: &'static str, id: &str) -> Result<Option<Statistics>, Error> {
+        let row = sqlx::query(sql).bind(id).fetch_one(&self.pool).await?;
         let found: i64 = row.try_get("found")?;
         if found == 0 {
             return Ok(None);
         }
         Ok(Some(Statistics {
+            studies: row.try_get("studies")?,
             series: row.try_get("series")?,
             instances: row.try_get("instances")?,
             size_bytes: row.try_get("size_bytes")?,

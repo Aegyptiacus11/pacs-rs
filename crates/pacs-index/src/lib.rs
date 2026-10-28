@@ -17,7 +17,7 @@ use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
 mod rest;
-pub use rest::{RestInstance, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
+pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
