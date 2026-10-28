@@ -65,6 +65,11 @@ const ALLOWED_VALUES: &[(&str, &str, &str)] = &[
         "LastUpdate",
         "each server's own clock at arrival",
     ),
+    (
+        "rest-patient",
+        "LastUpdate",
+        "each server's own clock at arrival",
+    ),
 ];
 
 /// Lists compared as sets, their order being a deliberate difference: (where, tag, why).
@@ -78,6 +83,11 @@ const ALLOWED_ORDER: &[(&str, &str, &str)] = &[
         "rest-study",
         "Series",
         "pacs-rs lists a study's series by Series Number; the reference by ID",
+    ),
+    (
+        "rest-patient",
+        "Studies",
+        "pacs-rs lists a patient's studies by Study Date; the reference by ID",
     ),
 ];
 
@@ -133,6 +143,16 @@ impl Server {
             .send()
             .await
             .unwrap_or_else(|e| panic!("{} POST {path}: {e}", self.name));
+        reply(response).await
+    }
+
+    async fn delete(&self, path: &str) -> Reply {
+        let response = self
+            .client
+            .delete(format!("{}{path}", self.base))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{} DELETE {path}: {e}", self.name));
         reply(response).await
     }
 
@@ -416,10 +436,13 @@ async fn same_rest_answers_as_the_reference_server() {
         + 100_000;
     let big = SyntheticSeries::new(run * 10 + 6, 3);
     let small = SyntheticSeries::new(run * 10 + 7, 2).in_study(run * 10 + 6, 2);
+    // a second study of the same patient
+    let other = SyntheticSeries::new(run * 10 + 8, 1).for_patient(run * 10 + 6);
     let files: Vec<Vec<u8>> = big
         .all_bytes()
         .into_iter()
         .chain(small.all_bytes())
+        .chain(other.all_bytes())
         .collect();
 
     // uploads, then the same file again
@@ -557,7 +580,105 @@ async fn same_rest_answers_as_the_reference_server() {
             }
         }
     }
-    for path in ["/studies/unknown", "/series/unknown", "/instances/unknown"] {
+    // the patient, by its ID and from its study
+    let patient_id = pacs_core::public_ids::patient(&big.patient_id());
+    for (place, path) in [
+        ("rest-patient", format!("/patients/{patient_id}")),
+        ("rest-patient", format!("/studies/{study_id}/patient")),
+        (
+            "rest-statistics",
+            format!("/patients/{patient_id}/statistics"),
+        ),
+    ] {
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        if report.status(&path, &r, &p) {
+            report.objects(place, &path, &reference.json(&r), &pacs.json(&p));
+        }
+    }
+    let ids = |v: &Value| -> BTreeSet<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .map(|i| i["ID"].as_str().unwrap_or("?").to_owned())
+            .collect()
+    };
+    for tail in ["studies", "series", "instances"] {
+        let path = format!("/patients/{patient_id}/{tail}");
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        if report.status(&path, &r, &p) && ids(&reference.json(&r)) != ids(&pacs.json(&p)) {
+            report.push(format!("{path}: different IDs"));
+        }
+    }
+    let find = serde_json::json!({"Level": "Patient", "Query": {"PatientID": big.patient_id()}});
+    let (r, p) = (
+        reference
+            .post("/tools/find", find.to_string().into_bytes())
+            .await,
+        pacs.post("/tools/find", find.to_string().into_bytes())
+            .await,
+    );
+    if report.status("/tools/find Patient", &r, &p) && reference.json(&r) != pacs.json(&p) {
+        report.push(format!(
+            "/tools/find Patient: reference {} | pacs-rs {}",
+            reference.json(&r),
+            pacs.json(&p)
+        ));
+    }
+
+    // deletions, from an instance up to the patient, each leaving a different ancestor
+    let p = big.patient_id();
+    let deletions = [
+        format!(
+            "/instances/{}",
+            pacs_core::public_ids::instance(
+                &p,
+                &big.study_uid(),
+                &big.series_uid(),
+                &big.instance_uid(0)
+            )
+        ),
+        format!(
+            "/series/{}",
+            pacs_core::public_ids::series(&p, &small.study_uid(), &small.series_uid())
+        ),
+        format!("/studies/{study_id}"),
+        format!("/patients/{patient_id}"),
+        format!("/patients/{patient_id}"),
+    ];
+    for path in &deletions {
+        let (r, p) = (reference.delete(path).await, pacs.delete(path).await);
+        let what = format!("DELETE {path}");
+        if report.status(&what, &r, &p) && reference.json(&r) != pacs.json(&p) {
+            report.push(format!(
+                "{what}: reference {} | pacs-rs {}",
+                reference.json(&r),
+                pacs.json(&p)
+            ));
+        }
+    }
+    for path in [
+        format!("/patients/{patient_id}"),
+        format!("/studies/{study_id}"),
+    ] {
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        report.status(&path, &r, &p);
+    }
+
+    for path in [
+        "/patients/unknown",
+        "/studies/unknown",
+        "/series/unknown",
+        "/instances/unknown",
+    ] {
         let (r, p) = (
             reference.get(path, "*/*").await,
             pacs.get(path, "*/*").await,
