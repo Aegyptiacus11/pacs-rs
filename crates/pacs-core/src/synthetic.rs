@@ -12,6 +12,8 @@ pub struct SyntheticSeries {
     pub seed: u32,
     /// Goes into the study UID and patient ID; series with the same one share a study.
     pub study_seed: u32,
+    /// Goes into the patient ID instead of `study_seed`, so studies can share a patient.
+    pub patient_seed: Option<u32>,
     pub series_number: u32,
     pub slices: u32,
     pub rows: u16,
@@ -26,6 +28,7 @@ impl SyntheticSeries {
         SyntheticSeries {
             seed,
             study_seed: seed,
+            patient_seed: None,
             series_number: 1,
             slices,
             rows: 4,
@@ -40,6 +43,16 @@ impl SyntheticSeries {
         self.study_seed = study_seed;
         self.series_number = number;
         self
+    }
+
+    /// The same series, but for the patient of `patient_seed`.
+    pub fn for_patient(mut self, patient_seed: u32) -> Self {
+        self.patient_seed = Some(patient_seed);
+        self
+    }
+
+    pub fn patient_id(&self) -> String {
+        format!("SYN{}", self.patient_seed.unwrap_or(self.study_seed))
     }
 
     /// The same series for a patient named `name`, in `character_set` (e.g. `ISO_IR 100`).
@@ -126,7 +139,7 @@ impl SyntheticSeries {
             DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, self.instance_uid(slice)),
             DataElement::new(tags::MODALITY, VR::CS, "CT"),
             DataElement::new(tags::PATIENT_NAME, VR::PN, self.patient_name.as_str()),
-            DataElement::new(tags::PATIENT_ID, VR::LO, format!("SYN{}", self.study_seed)),
+            DataElement::new(tags::PATIENT_ID, VR::LO, self.patient_id()),
             DataElement::new(tags::PATIENT_BIRTH_DATE, VR::DA, "19700101"),
             DataElement::new(tags::PATIENT_SEX, VR::CS, "O"),
             DataElement::new(tags::STUDY_DATE, VR::DA, "20260101"),
