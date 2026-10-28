@@ -247,14 +247,13 @@ impl Index {
         self.dialect
     }
 
-    /// Record a stored instance. Re-sending an instance replaces its entry; study and
-    /// series attributes follow the latest instance received.
-    pub async fn record(&self, new: &NewInstance) -> Result<Recorded, Error> {
+    /// A transaction that holds the index's one write lock from its start.
+    pub(crate) async fn begin_write(&self) -> Result<sqlx::Transaction<'static, sqlx::Any>, Error> {
         // One writer at a time, taken before the first read. In SQLite, IMMEDIATE takes the
         // write lock: a deferred transaction would read, then fail at once with "database
         // is locked" upgrading while another upload writes. In Postgres, a transaction-wide
-        // advisory lock does the same, so the checks below see every earlier upload.
-        let mut tx = match self.dialect {
+        // advisory lock does the same, so a writer's checks see every earlier write.
+        let tx = match self.dialect {
             Dialect::Sqlite => self.pool.begin_with("BEGIN IMMEDIATE").await?,
             Dialect::Postgres => {
                 let mut tx = self.pool.begin().await?;
@@ -264,6 +263,13 @@ impl Index {
                 tx
             }
         };
+        Ok(tx)
+    }
+
+    /// Record a stored instance. Re-sending an instance replaces its entry; study and
+    /// series attributes follow the latest instance received.
+    pub async fn record(&self, new: &NewInstance) -> Result<Recorded, Error> {
+        let mut tx = self.begin_write().await?;
 
         let series_study: Option<String> = sqlx::query_scalar(
             "SELECT study_instance_uid FROM series WHERE series_instance_uid = $1",
