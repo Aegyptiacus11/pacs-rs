@@ -16,7 +16,9 @@ use sqlx::AnyPool;
 use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
+mod delete;
 mod rest;
+pub use delete::{Deleted, Level};
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
 
 #[derive(Debug, thiserror::Error)]
