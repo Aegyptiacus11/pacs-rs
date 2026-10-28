@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 bytes.workspace = true
+futures.workspace = true
 object_store.workspace = true
 pacs-core.workspace = true
 thiserror.workspace = true

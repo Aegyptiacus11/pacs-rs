@@ -3,7 +3,7 @@ use pacs_core::Instance;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_store::{Error, S3Config, Store};
 
-/// Put a series, read every file back byte for byte, delete one.
+/// Put a series, read every file back byte for byte, delete one, then the rest at once.
 async fn round_trip(store: &Store, seed: u32) {
     let series = SyntheticSeries::new(seed, 3);
     let mut keys = Vec::new();
@@ -27,6 +27,12 @@ async fn round_trip(store: &Store, seed: u32) {
     // deleting twice is fine
     store.delete(&keys[0]).await.unwrap();
     assert_eq!(store.get(&keys[1]).await.unwrap(), series.slice_bytes(1));
+    // all of them, the one already gone included
+    let failed = store.delete_many(keys.clone()).await;
+    assert!(failed.is_empty(), "{failed:?}");
+    for key in &keys {
+        assert!(matches!(store.get(key).await, Err(Error::NotFound(_))));
+    }
 }
 
 #[tokio::test]
@@ -38,15 +44,22 @@ async fn memory_round_trip() {
 async fn local_disk_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::local(dir.path(), "dicom").unwrap();
-    round_trip(&store, 12).await;
-    let series = SyntheticSeries::new(12, 3);
+    let series = SyntheticSeries::new(12, 1);
+    let instance = Instance::from_bytes(&series.slice_bytes(0)).unwrap();
+    let key = store
+        .put(&instance.key, series.slice_bytes(0).into())
+        .await
+        .unwrap();
     let on_disk = dir
         .path()
         .join("dicom")
         .join(series.study_uid())
         .join(series.series_uid())
-        .join(format!("{}.dcm", series.instance_uid(1)));
+        .join(format!("{}.dcm", series.instance_uid(0)));
     assert!(on_disk.is_file(), "{on_disk:?}");
+    assert!(store.delete_many(vec![key]).await.is_empty());
+    assert!(!on_disk.exists(), "{on_disk:?}");
+    round_trip(&store, 15).await;
 }
 
 #[tokio::test]

@@ -1598,8 +1598,10 @@ dependencies = [
  "pacs-core",
  "pacs-index",
  "pacs-store",
+ "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1699,6 +1701,7 @@ name = "pacs-store"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "futures",
  "object_store",
  "pacs-core",
  "tempfile",

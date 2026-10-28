@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::StreamExt;
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
@@ -124,5 +125,22 @@ impl Store {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Remove many objects, in batches where the backend has a bulk delete (S3's
+    /// DeleteObjects). Objects already gone are not errors; the errors returned are the
+    /// objects that could not be removed.
+    pub async fn delete_many(&self, object_keys: Vec<String>) -> Vec<Error> {
+        let paths = futures::stream::iter(object_keys.into_iter().map(|k| Ok(Path::from(k))));
+        self.backend
+            .delete_stream(paths.boxed())
+            .filter_map(|result| async move {
+                match result {
+                    Ok(_) | Err(object_store::Error::NotFound { .. }) => None,
+                    Err(e) => Some(e.into()),
+                }
+            })
+            .collect()
+            .await
     }
 }
