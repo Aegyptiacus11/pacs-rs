@@ -390,3 +390,80 @@ async fn patients_and_parents() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
     }
 }
+
+#[tokio::test]
+async fn deleting_answers_with_the_remaining_ancestor() {
+    let app = app().await;
+    let [a, b, c] = two_studies(&app).await;
+    let patient = public_ids::patient("SYN96");
+    let study_a = public_ids::study("SYN96", &a.study_uid());
+    let series_a = public_ids::series("SYN96", &a.study_uid(), &a.series_uid());
+    let series_b = public_ids::series("SYN96", &b.study_uid(), &b.series_uid());
+    let instance = |slice| {
+        public_ids::instance(
+            "SYN96",
+            &a.study_uid(),
+            &a.series_uid(),
+            &a.instance_uid(slice),
+        )
+    };
+
+    let reply = json(
+        &app,
+        "DELETE",
+        &format!("/instances/{}", instance(0)),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(
+        reply,
+        json!({"RemainingAncestor": {
+            "ID": series_a,
+            "Path": format!("/series/{series_a}"),
+            "Type": "Series",
+        }})
+    );
+    let (status, _, body) = call(
+        &app,
+        "GET",
+        &format!("/instances/{}/file", instance(0)),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty());
+
+    let reply = json(&app, "DELETE", &format!("/series/{series_a}"), Bytes::new()).await;
+    assert_eq!(reply["RemainingAncestor"]["ID"], study_a);
+    let reply = json(&app, "DELETE", &format!("/series/{series_b}"), Bytes::new()).await;
+    assert_eq!(
+        reply["RemainingAncestor"],
+        json!({"ID": patient, "Path": format!("/patients/{patient}"), "Type": "Patient"})
+    );
+    let (status, _, body) =
+        call(&app, "DELETE", &format!("/studies/{study_a}"), Bytes::new()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty());
+
+    let reply = json(
+        &app,
+        "DELETE",
+        &format!("/patients/{patient}"),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(reply, json!({"RemainingAncestor": null}));
+    assert_eq!(
+        json(&app, "GET", "/patients", Bytes::new()).await,
+        json!([])
+    );
+    assert_eq!(json(&app, "GET", "/studies", Bytes::new()).await, json!([]));
+
+    // a deleted study can be uploaded again
+    upload_all(&app, &c).await;
+    let study_c = public_ids::study("SYN96", &c.study_uid());
+    assert_eq!(
+        json(&app, "GET", "/studies", Bytes::new()).await,
+        json!([study_c])
+    );
+}
