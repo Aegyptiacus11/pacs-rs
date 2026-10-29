@@ -12,7 +12,7 @@ use axum::Router;
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::routing::get;
 use clap::Parser;
-use pacs_archive::Archive;
+use pacs_archive::{Archive, Compression};
 use pacs_index::Index;
 use pacs_store::{S3Config, Store};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -55,6 +55,12 @@ pub struct Settings {
     #[arg(long, env = "PACS_OVERWRITE_INSTANCES", default_value_t = false)]
     pub overwrite_instances: bool,
 
+    /// How uncompressed pixel data is stored: `jpeg-ls` (lossless, each frame checked to
+    /// decode back exactly) or `off` (as received). Compressed instances are always kept
+    /// as received.
+    #[arg(long, env = "PACS_COMPRESSION", value_enum, default_value_t = StoredCompression::JpegLs)]
+    pub compression: StoredCompression,
+
     /// Largest accepted request body, in bytes (STOW-RS, uploads).
     #[arg(long, env = "PACS_MAX_UPLOAD_BYTES", default_value_t = 1 << 30)]
     pub max_upload_bytes: usize,
@@ -67,6 +73,21 @@ pub struct Settings {
     /// Origins browsers may call from, comma-separated, or `*`. None by default.
     #[arg(long, env = "PACS_CORS_ORIGINS", value_delimiter = ',')]
     pub cors_origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum StoredCompression {
+    JpegLs,
+    Off,
+}
+
+impl From<StoredCompression> for Compression {
+    fn from(c: StoredCompression) -> Self {
+        match c {
+            StoredCompression::JpegLs => Compression::JpegLs,
+            StoredCompression::Off => Compression::Off,
+        }
+    }
 }
 
 /// Where the files are kept, parsed from `--storage`.
@@ -162,7 +183,9 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
                 .with_context(|| format!("opening the index {}", path.display()))?
         }
     };
-    Ok(Archive::new(store, index).with_overwrite(settings.overwrite_instances))
+    Ok(Archive::new(store, index)
+        .with_overwrite(settings.overwrite_instances)
+        .with_compression(settings.compression.into()))
 }
 
 /// Where the index is, parsed from `--index`.

@@ -3,7 +3,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use pacs_archive::Archive;
+use pacs_archive::{Archive, Compression};
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_dicomweb::media::MediaType;
 use pacs_dicomweb::{Config, multipart, router};
@@ -37,7 +37,8 @@ impl Reply {
 }
 
 async fn app() -> Router {
-    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off);
     router(archive, Config::default())
 }
 
@@ -446,7 +447,8 @@ async fn searches_it_cannot_do_exactly_are_refused() {
 
 #[tokio::test]
 async fn retrieve_urls_follow_the_proxy_and_the_mount_path() {
-    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off);
     let config = Config {
         mount_path: "/dicom-web/".into(),
         ..Config::default()
@@ -473,7 +475,8 @@ async fn retrieve_urls_follow_the_proxy_and_the_mount_path() {
         )
     );
 
-    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off);
     let config = Config {
         base_url: Some("https://fixed.example/root/".into()),
         ..Config::default()

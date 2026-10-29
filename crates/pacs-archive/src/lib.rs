@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use pacs_core::codec::{self, JPEG_LS_LOSSLESS};
 use pacs_core::{Instance, InstanceKey};
 use pacs_index::{Deleted, Index, InstanceEntry, Level, NewInstance, Recorded};
 use pacs_store::Store;
@@ -46,6 +47,18 @@ pub struct Ingested {
     pub outcome: Outcome,
 }
 
+/// How native (uncompressed) pixel data is stored.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Compression {
+    /// As received.
+    Off,
+    /// JPEG-LS lossless, each frame decoded back and compared before the file is kept;
+    /// an instance the codec does not handle, or one that does not come back exact, is
+    /// stored as received.
+    #[default]
+    JpegLs,
+}
+
 /// What became of an ingested instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -61,6 +74,7 @@ pub struct Archive {
     store: Store,
     index: Index,
     overwrite: bool,
+    compression: Compression,
     /// Uploads share it, a deletion holds it alone: a file's storage key comes from its
     /// UIDs, so an upload of an instance being deleted would otherwise have its new file
     /// removed by the deletion. One server process; several on one index would need more.
@@ -75,6 +89,7 @@ impl Archive {
             store,
             index,
             overwrite: false,
+            compression: Compression::default(),
             writes: Arc::default(),
         }
     }
@@ -85,11 +100,18 @@ impl Archive {
         self
     }
 
+    /// How native pixel data is stored; JPEG-LS lossless unless set otherwise.
+    pub fn with_compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
+        self
+    }
+
     pub fn index(&self) -> &Index {
         &self.index
     }
 
-    /// Store a DICOM Part 10 file as received and index it.
+    /// Store a DICOM Part 10 file and index it: native pixel data compressed as
+    /// [`Archive::with_compression`] says, anything else as received.
     ///
     /// The file goes to the store first, so an indexed instance always has its file. If
     /// the index then refuses the instance, the file just written is removed again: its
@@ -136,6 +158,7 @@ impl Archive {
                 outcome: Outcome::AlreadyStored,
             });
         }
+        let (instance, bytes) = self.compress(instance, bytes).await;
         let size = bytes.len();
         let object_key = self.store.put(&instance.key, bytes).await?;
         let new = match NewInstance::new(&instance, object_key.clone(), size) {
@@ -159,6 +182,39 @@ impl Archive {
                 }
                 Err(e.into())
             }
+        }
+    }
+
+    /// `instance` as it is to be stored: compressed when it is native and compression is
+    /// on, else unchanged.
+    async fn compress(&self, instance: Instance, bytes: Bytes) -> (Instance, Bytes) {
+        if self.compression == Compression::Off
+            || !codec::is_native(&instance.key.transfer_syntax_uid)
+        {
+            return (instance, bytes);
+        }
+        let compressed = tokio::task::spawn_blocking(move || {
+            let result = instance
+                .transcoded(JPEG_LS_LOSSLESS, true)
+                .map_err(|e| e.to_string())
+                .and_then(|file| {
+                    let parsed = Instance::from_bytes(&file).map_err(|e| e.to_string())?;
+                    Ok((parsed, Bytes::from(file)))
+                });
+            (instance, result)
+        })
+        .await;
+        match compressed {
+            Ok((_, Ok(compressed))) => compressed,
+            Ok((instance, Err(reason))) => {
+                tracing::debug!(
+                    sop_instance_uid = %instance.key.sop_instance_uid,
+                    %reason,
+                    "stored as received, not compressed"
+                );
+                (instance, bytes)
+            }
+            Err(e) => std::panic::resume_unwind(e.into_panic()),
         }
     }
 

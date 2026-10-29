@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use pacs_archive::{Archive, IngestError, Outcome};
+use pacs_archive::{Archive, Compression, IngestError, Outcome};
+use pacs_core::Instance;
+use pacs_core::codec::{EXPLICIT_VR_LE, JPEG_LS_LOSSLESS};
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::{Index, Level};
 use pacs_store::Store;
@@ -8,9 +10,14 @@ async fn archive() -> Archive {
     Archive::new(Store::memory(), Index::in_memory().await.unwrap())
 }
 
+/// One that stores files exactly as received.
+async fn uncompressed() -> Archive {
+    archive().await.with_compression(Compression::Off)
+}
+
 #[tokio::test]
 async fn ingest_then_read_the_same_bytes_back() {
-    let archive = archive().await;
+    let archive = uncompressed().await;
     let series = SyntheticSeries::new(51, 2);
     for bytes in series.all_bytes() {
         let ingested = archive.ingest(Bytes::from(bytes)).await.unwrap();
@@ -28,6 +35,72 @@ async fn ingest_then_read_the_same_bytes_back() {
         .unwrap();
     assert_eq!(archive.file(&entry).await.unwrap(), series.slice_bytes(1));
     assert_eq!(entry.size_bytes as usize, series.slice_bytes(1).len());
+}
+
+#[tokio::test]
+async fn native_pixels_are_stored_as_jpeg_ls_and_decode_back_exactly() {
+    let archive = archive().await;
+    let mut series = SyntheticSeries::new(57, 1);
+    (series.rows, series.columns) = (64, 64);
+    let sent = series.multiframe_bytes(0, 2);
+    archive.ingest(Bytes::from(sent.clone())).await.unwrap();
+    let entry = archive
+        .index()
+        .instance(
+            &series.study_uid(),
+            &series.series_uid(),
+            &series.instance_uid(0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.transfer_syntax_uid, JPEG_LS_LOSSLESS);
+    let stored = archive.file(&entry).await.unwrap();
+    assert_eq!(entry.size_bytes as usize, stored.len());
+    assert!(stored.len() < sent.len());
+
+    let (sent, stored) = (
+        Instance::from_bytes(&sent).unwrap(),
+        Instance::from_bytes(&stored).unwrap(),
+    );
+    assert_eq!(stored.key.transfer_syntax_uid, JPEG_LS_LOSSLESS);
+    let shape = sent.shape().unwrap();
+    for frame in 1..=2 {
+        assert_eq!(
+            stored.native_frame(frame, shape).unwrap(),
+            sent.native_frame(frame, shape).unwrap()
+        );
+    }
+    assert_eq!(
+        stored.transcoded(EXPLICIT_VR_LE, true).unwrap().len(),
+        sent.transcoded(EXPLICIT_VR_LE, true).unwrap().len()
+    );
+}
+
+#[tokio::test]
+async fn what_the_codecs_do_not_handle_is_stored_as_received() {
+    let archive = archive().await;
+    let series = SyntheticSeries::new(58, 1);
+    // already compressed (opaque JPEG baseline bytes)
+    let jpeg = series.encapsulated_bytes(
+        0,
+        "1.2.840.10008.1.2.4.50",
+        1,
+        vec![],
+        vec![vec![0xFF, 0xD8, 0xFF, 0xD9]],
+    );
+    archive.ingest(Bytes::from(jpeg.clone())).await.unwrap();
+    let entry = archive
+        .index()
+        .instance(
+            &series.study_uid(),
+            &series.series_uid(),
+            &series.instance_uid(0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(archive.file(&entry).await.unwrap(), jpeg);
 }
 
 #[tokio::test]
@@ -100,7 +173,8 @@ async fn the_first_copy_is_kept_unless_overwriting() {
         .slice_bytes(0);
     let key = pacs_core::Instance::from_bytes(&first).unwrap().key;
 
-    let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap());
+    let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off);
     archive.ingest(first.clone().into()).await.unwrap();
     let again = archive.ingest(second.clone().into()).await.unwrap();
     assert_eq!(again.outcome, Outcome::AlreadyStored);

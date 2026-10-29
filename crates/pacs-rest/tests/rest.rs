@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use pacs_archive::Archive;
+use pacs_archive::{Archive, Compression};
 use pacs_core::public_ids;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::Index;
@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 async fn app() -> Router {
-    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off);
     pacs_rest::router(archive, 1 << 30)
 }
 
