@@ -1679,7 +1679,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "pacs-archive"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "pacs-core",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "charls",
  "dicom-core",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-dicomweb"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-index"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "dicom-dictionary-std",
  "pacs-core",
@@ -1742,7 +1742,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-rest"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-server"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-store"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "futures",
