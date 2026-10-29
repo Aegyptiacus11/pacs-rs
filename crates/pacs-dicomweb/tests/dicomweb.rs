@@ -317,11 +317,116 @@ async fn multiframe_and_encapsulated_frames() {
     assert_eq!(parts[0].content, fragments[1]);
     assert!(reply.content_type.contains(r#"type="image/jls""#));
 
-    // asking for uncompressed frames of a compressed instance: no transcoding
+    // uncompressed frames of fragments that are not real JPEG-LS: nothing to decode
     let reply = get(
         &app,
         &frames_uri(&jls, "1"),
         r#"multipart/related; type="application/octet-stream""#,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_ACCEPTABLE);
+}
+
+#[tokio::test]
+async fn stored_as_jpeg_ls_and_transcoded_on_request() {
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let app = router(archive, Config::default());
+    let mut series = SyntheticSeries::new(66, 1);
+    (series.rows, series.columns) = (48, 40);
+    let sent = series.multiframe_bytes(0, 2);
+    assert_eq!(
+        stow(&app, "/studies", vec![sent.clone()]).await.status,
+        StatusCode::OK
+    );
+    let frames_uri = |list: &str| {
+        format!(
+            "/studies/{}/series/{}/instances/{}/frames/{list}",
+            series.study_uid(),
+            series.series_uid(),
+            series.instance_uid(0)
+        )
+    };
+    let instance_uri = format!(
+        "/studies/{}/series/{}/instances/{}",
+        series.study_uid(),
+        series.series_uid(),
+        series.instance_uid(0)
+    );
+    let expected = [
+        le_bytes(&series.pixels(0, 0)),
+        le_bytes(&series.pixels(0, 1)),
+    ];
+    let shape = pacs_core::codec::Shape::new(48, 40, 16, 12);
+
+    // the viewer takes whatever is stored: JPEG-LS
+    let reply = get(&app, &frames_uri("1,2"), CORNERSTONE_FRAMES).await;
+    let parts = reply.parts();
+    assert_eq!(
+        parts[0].content_type.as_deref(),
+        Some("image/jls; transfer-syntax=1.2.840.10008.1.2.4.80")
+    );
+    for (part, expected) in parts.iter().zip(&expected) {
+        let decoded = pacs_core::codec::decode(JPEG_LS, shape, &part.content).unwrap();
+        assert_eq!(&decoded, expected);
+    }
+
+    // a client that wants uncompressed frames gets them, exactly as sent
+    let reply = get(
+        &app,
+        &frames_uri("2"),
+        r#"multipart/related; type="application/octet-stream""#,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let parts = reply.parts();
+    assert_eq!(
+        parts[0].content_type.as_deref(),
+        Some("application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1")
+    );
+    assert_eq!(parts[0].content, expected[1]);
+
+    // and one that wants JPEG XL gets JPEG XL
+    let reply = get(
+        &app,
+        &frames_uri("1"),
+        r#"multipart/related; type="image/jxl""#,
+    )
+    .await;
+    let parts = reply.parts();
+    assert_eq!(
+        parts[0].content_type.as_deref(),
+        Some("image/jxl; transfer-syntax=1.2.840.10008.1.2.4.110")
+    );
+    let decoded =
+        pacs_core::codec::decode("1.2.840.10008.1.2.4.110", shape, &parts[0].content).unwrap();
+    assert_eq!(decoded, expected[0]);
+
+    // the instance: stored JPEG-LS, or uncompressed when asked, pixels the same either way
+    let reply = get(&app, &instance_uri, "application/dicom").await;
+    let stored = pacs_core::Instance::from_bytes(&reply.body).unwrap();
+    assert_eq!(stored.key.transfer_syntax_uid, JPEG_LS);
+    let reply = get(
+        &app,
+        &instance_uri,
+        r#"multipart/related; type="application/dicom"; transfer-syntax=1.2.840.10008.1.2.1"#,
+    )
+    .await;
+    let parts = reply.parts();
+    assert_eq!(
+        parts[0].content_type.as_deref(),
+        Some("application/dicom; transfer-syntax=1.2.840.10008.1.2.1")
+    );
+    let native = pacs_core::Instance::from_bytes(&parts[0].content).unwrap();
+    assert_eq!(native.key.transfer_syntax_uid, "1.2.840.10008.1.2.1");
+    for (n, expected) in (1..=2).zip(&expected) {
+        assert_eq!(&native.native_frame(n, shape).unwrap(), expected);
+    }
+
+    // nothing it cannot make
+    let reply = get(
+        &app,
+        &instance_uri,
+        r#"multipart/related; type="application/dicom"; transfer-syntax=1.2.840.10008.1.2.4.50"#,
     )
     .await;
     assert_eq!(reply.status, StatusCode::NOT_ACCEPTABLE);
