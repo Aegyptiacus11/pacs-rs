@@ -69,35 +69,52 @@ pub enum Packaging {
 }
 
 /// Whether some range of `ranges` accepts `part_type` content in transfer syntax `ts`,
-/// and how to package it. `None` means 406 Not Acceptable: this server does not
-/// transcode, so it can only send what it stores.
+/// and how to package it. `None` means 406 Not Acceptable, unless
+/// [`negotiate_transcoded`] finds something else the server can make.
 pub fn negotiate(accept: &Accept, part_type: &str, ts: &str) -> Option<Packaging> {
     let Some(ranges) = &accept.0 else {
         return Some(Packaging::Multipart);
     };
-    for range in ranges {
-        let ts_ok = |requested: Option<&str>| requested.is_none_or(|r| r == "*" || r == ts);
-        match range.essence.as_str() {
-            "*/*" | "multipart/*" => return Some(Packaging::Multipart),
-            "multipart/related" => {
-                let requested_ts = range.param("transfer-syntax");
-                if requested_ts == Some("*") {
-                    return Some(Packaging::Multipart);
-                }
-                let type_ok = range
-                    .param("type")
-                    .is_none_or(|t| t.eq_ignore_ascii_case(part_type) || t == "*/*");
-                if type_ok && ts_ok(requested_ts) {
-                    return Some(Packaging::Multipart);
-                }
+    ranges
+        .iter()
+        .find_map(|range| range_accepts(range, part_type, ts))
+}
+
+/// For content that is not acceptable as stored: the first of `candidates` (part type,
+/// transfer syntax) that a range accepts, ranges taken in the client's order, and how to
+/// package it. Returns the candidate's index.
+pub fn negotiate_transcoded(
+    accept: &Accept,
+    candidates: &[(&str, &str)],
+) -> Option<(usize, Packaging)> {
+    let ranges = accept.0.as_ref()?;
+    ranges.iter().find_map(|range| {
+        candidates
+            .iter()
+            .enumerate()
+            .find_map(|(i, (part_type, ts))| range_accepts(range, part_type, ts).map(|p| (i, p)))
+    })
+}
+
+fn range_accepts(range: &MediaType, part_type: &str, ts: &str) -> Option<Packaging> {
+    let ts_ok = |requested: Option<&str>| requested.is_none_or(|r| r == "*" || r == ts);
+    match range.essence.as_str() {
+        "*/*" | "multipart/*" => Some(Packaging::Multipart),
+        "multipart/related" => {
+            let requested_ts = range.param("transfer-syntax");
+            if requested_ts == Some("*") {
+                return Some(Packaging::Multipart);
             }
-            essence if essence == part_type && ts_ok(range.param("transfer-syntax")) => {
-                return Some(Packaging::Single);
-            }
-            _ => {}
+            let type_ok = range
+                .param("type")
+                .is_none_or(|t| t.eq_ignore_ascii_case(part_type) || t == "*/*");
+            (type_ok && ts_ok(requested_ts)).then_some(Packaging::Multipart)
         }
+        essence if essence == part_type && ts_ok(range.param("transfer-syntax")) => {
+            Some(Packaging::Single)
+        }
+        _ => None,
     }
-    None
 }
 
 /// Whether the client takes DICOM JSON.
@@ -174,6 +191,37 @@ mod tests {
         assert_eq!(
             negotiate(&ranges, "application/octet-stream", ELE),
             Some(Packaging::Multipart)
+        );
+    }
+
+    #[test]
+    fn transcoding_follows_the_clients_order() {
+        const JXL: &str = "1.2.840.10008.1.2.4.110";
+        let candidates = [
+            ("application/octet-stream", ELE),
+            ("image/jls", JLS),
+            ("image/jxl", JXL),
+        ];
+        let ranges = Accept::parse(Some(
+            r#"multipart/related; type="image/jxl", multipart/related; type="application/octet-stream""#,
+        ));
+        assert_eq!(negotiate(&ranges, "image/jls", JLS), None);
+        assert_eq!(
+            negotiate_transcoded(&ranges, &candidates),
+            Some((2, Packaging::Multipart))
+        );
+        let ranges = Accept::parse(Some(
+            r#"multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.1"#,
+        ));
+        assert_eq!(
+            negotiate_transcoded(&ranges, &candidates),
+            Some((0, Packaging::Multipart))
+        );
+        let ranges = Accept::parse(Some("image/png"));
+        assert_eq!(negotiate_transcoded(&ranges, &candidates), None);
+        assert_eq!(
+            negotiate_transcoded(&Accept::parse(None), &candidates),
+            None
         );
     }
 
