@@ -18,6 +18,7 @@ pub mod main_tags;
 pub mod public_ids;
 #[cfg(feature = "synthetic")]
 pub mod synthetic;
+pub mod transcode;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
