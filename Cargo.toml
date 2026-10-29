@@ -13,6 +13,8 @@ repository = "https://github.com/Aegyptiacus11/pacs-rs"
 anyhow = "1.0.104"
 axum = "0.8.9"
 bytes = "1.12.1"
+# CharLS (JPEG-LS), C++ built by cmake and linked statically.
+charls = { version = "0.4.2", features = ["static"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 dicom-core = "0.10.0"
 dicom-dictionary-std = "0.10.0"
@@ -20,6 +22,8 @@ dicom-json = "0.10.0"
 dicom-object = "0.10.0"
 futures = "0.3.34"
 http-body-util = "0.1.5"
+# jxl-rs, the libjxl project's JPEG XL decoder.
+jxl = "0.8.0"
 memchr = "2.8.3"
 mimalloc = { version = "0.1.52", default-features = false }
 object_store = { version = "0.14.2", features = ["aws"] }
@@ -42,6 +46,8 @@ tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zune-core = { version = "0.5.3", default-features = false, features = ["std"] }
+zune-jpegxl = { version = "0.5.2", default-features = false, features = ["std"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 # Small and fast: one codegen unit with LTO, no symbols. Panics still unwind, so one failing
