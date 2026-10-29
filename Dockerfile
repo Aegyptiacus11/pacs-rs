@@ -1,7 +1,8 @@
 # pacs-server: a static musl binary on an empty image, with only the CA bundle that S3 over
 # HTTPS needs. Runs as an unprivileged user; index and files in /data.
 FROM rust:1.99.1-alpine3.24 AS build
-RUN apk add --no-cache musl-dev
+# g++ and cmake build CharLS (JPEG-LS), which is linked in statically.
+RUN apk add --no-cache musl-dev g++ cmake make
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p pacs-server \
