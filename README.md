@@ -10,10 +10,10 @@ S3 and a SQLite index.
 
 | Crate | What |
 |---|---|
-| `pacs-core` | parse a DICOM file, its UIDs, per-level attributes, DICOM JSON, frames |
+| `pacs-core` | parse a DICOM file, its UIDs, per-level attributes, DICOM JSON, frames; lossless codecs and transcoding |
 | `pacs-store` | the files, as received: local disk, S3-compatible storage or memory |
 | `pacs-index` | the index, SQLite or Postgres: hierarchy, counts, attributes, metadata, storage keys |
-| `pacs-archive` | ingest (store then index, undone if the index refuses) and deletion (index then files) |
+| `pacs-archive` | ingest (compress, store, then index, undone if the index refuses) and deletion (index then files) |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web` |
@@ -23,15 +23,43 @@ S3 and a SQLite index.
 | Request | |
 |---|---|
 | `GET /studies`, `/studies/{study}/series`, `.../series/{series}/instances` | QIDO-RS; counts, Modalities in Study and Retrieve URL always included |
-| `GET /studies/{study}`, `.../series/{series}`, `.../instances/{instance}` | WADO-RS retrieve, `multipart/related; type="application/dicom"`, as stored |
+| `GET /studies/{study}`, `.../series/{series}`, `.../instances/{instance}` | WADO-RS retrieve, `multipart/related; type="application/dicom"`, as stored or transcoded (below) |
 | `GET .../metadata` (study, series, instance) | DICOM JSON without pixel data |
-| `GET .../instances/{instance}/frames/{list}` | frames in the stored transfer syntax: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
+| `GET .../instances/{instance}/frames/{list}` | frames as stored or transcoded: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
 | `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
 
 Not yet: wildcard, range, list and fuzzy matching (answered with 400, not ignored);
-`includefield` for attributes beyond the stored levels; transcoding (406 when the client wants
-a transfer syntax other than the stored one); rendered media; JSON/XML + bulk data STOW;
-BulkDataURI in metadata.
+`includefield` for attributes beyond the stored levels; rendered media; JSON/XML + bulk data
+STOW; BulkDataURI in metadata.
+
+### Compression and transcoding
+
+Uncompressed pixel data is stored as **JPEG-LS lossless** (`1.2.840.10008.1.2.4.80`, CharLS):
+each frame is decoded back and compared with what arrived before the file is kept, and an
+instance that does not come back exact, or that the codecs do not handle (colour, more than 16
+bits), is stored as received. So is anything that arrives compressed, **JPEG XL** included.
+`PACS_COMPRESSION=off` stores everything as received.
+
+A retrieve goes out as stored whenever the client accepts it (a viewer asking for
+`transfer-syntax=*` gets the stored JPEG-LS untouched). Otherwise instances and frames are
+transcoded to the first of these the client asks for, and anything else is 406:
+
+| Transfer syntax | Frames | Decoded by | Encoded by |
+|---|---|---|---|
+| Explicit VR Little Endian `1.2.840.10008.1.2.1` | `application/octet-stream` | - | - |
+| JPEG-LS lossless `1.2.840.10008.1.2.4.80` (`.81` read) | `image/jls` | CharLS | CharLS |
+| JPEG XL lossless `1.2.840.10008.1.2.4.110` (`.112` read) | `image/jxl` | jxl-rs | zune-jpegxl |
+
+Grayscale, 8 or 16 bits allocated; signed pixels are coded as their raw bit pattern, as DCMTK and
+GDCM do.
+
+JPEG XL is served and accepted, not chosen for storage. On 172 slices of a public CT (3D-IRCADb
+patient 1.2, signed 16-bit, one core) JPEG-LS took the pixels to 1/3.38 at about 5 ms a slice;
+zune-jpegxl, the pure-Rust encoder, reached 1/2.82, and libjxl at effort 7 1/3.37 at about
+100 ms a slice. Through the server the study went from 90.4 MB to 26.8 MB, ingested in 3.3 s,
+and every frame came back exact as uncompressed, JPEG-LS and JPEG XL (checked with CharLS and
+libjxl, not only with the codecs above); jxl-rs decoded libjxl's own effort-7 output of the same
+slices exactly.
 
 DICOM JSON numbers: IS and DS values are written as JSON numbers, padding trimmed (PS3.18 Table
 F.2.3-1 allows numbers or strings).
@@ -93,11 +121,12 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_S3_REGION` | `us-east-1` | |
 | `PACS_S3_ACCESS_KEY_ID`, `PACS_S3_SECRET_ACCESS_KEY` | | environment only, or `..._FILE` naming a file |
 | `PACS_OVERWRITE_INSTANCES` | `false` | replace an instance sent again, instead of keeping the first copy |
+| `PACS_COMPRESSION` | `jpeg-ls` | how uncompressed pixel data is stored: `jpeg-ls` (lossless, checked) or `off` |
 | `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
 | `RUST_LOG` | `info` | log filter |
 
-In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 15 MB, run as
+In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
 an unprivileged user (uid 10001). It listens on `0.0.0.0:8080` and keeps the index and files in
 the `/data` volume unless `PACS_STORAGE` says otherwise. With no shell or curl inside, health
 checks call `/healthz` from outside.
@@ -137,7 +166,8 @@ runs on it.
 
 ## Building
 
-The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up.
+The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up. CharLS is C++, built by
+the `charls` crate and linked statically, so building also needs `cmake` and a C++ compiler.
 
 ```bash
 cargo test --workspace
