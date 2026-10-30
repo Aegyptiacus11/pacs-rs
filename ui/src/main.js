@@ -181,7 +181,7 @@ function compare(a, b) {
 // ---------- worklist ----------
 
 // kept across pages, so coming back from the viewer finds the list as it was
-const work = { q: "", modalities: new Set(), range: "all", from: "", to: "", sort: { key: "date", dir: -1 }, shown: 200, selected: null };
+const work = { q: "", modalities: new Set(), checked: new Set(), range: "all", from: "", to: "", sort: { key: "date", dir: -1 }, shown: 200, selected: null };
 
 const RANGES = [
   ["today", "Today", 0],
@@ -245,6 +245,7 @@ async function worklistPage([selected], params) {
   const head = h("thead");
   const body = h("tbody");
   const more = h("div");
+  const bulk = h("div", { class: "bulk", hidden: true, role: "region", "aria-label": "Checked studies" });
   const pane = h("aside", { class: "pane", "aria-label": "Selected study" });
   const scroll = h("div", { class: "scroll" }, h("table", { class: "grid" }, head, body), more);
 
@@ -257,6 +258,7 @@ async function worklistPage([selected], params) {
         { class: "list" },
         h("div", { class: "filters" }, h("label", { class: "field" }, searchIcon(), input, h("kbd", { class: "hide-sm" }, "/")), modBox, rangeBox, dates, patientChip, count),
         scroll,
+        bulk,
       ),
       pane,
     ),
@@ -339,22 +341,128 @@ async function worklistPage([selected], params) {
     );
   }
 
+  // checkboxes: several studies at once, for one ZIP or one deletion
+  let lastChecked = null;
+  function check(id, on, range, list) {
+    const ids = [id];
+    if (range && lastChecked) {
+      const a = list.findIndex((s) => s.id === lastChecked), b = list.findIndex((s) => s.id === id);
+      if (a >= 0 && b >= 0) ids.splice(0, 1, ...list.slice(Math.min(a, b), Math.max(a, b) + 1).map((s) => s.id));
+    }
+    for (const x of ids) on ? work.checked.add(x) : work.checked.delete(x);
+    lastChecked = id;
+    render();
+  }
+
+  function renderBulk() {
+    const ids = [...work.checked].filter((id) => studies.some((s) => s.id === id));
+    work.checked = new Set(ids);
+    bulk.hidden = !ids.length;
+    if (!ids.length) return bulk.replaceChildren();
+    const chosen = studies.filter((s) => work.checked.has(s.id));
+    const shown = new Set(visible().map((s) => s.id));
+    const hidden = ids.filter((id) => !shown.has(id)).length;
+    const images = chosen.reduce((n, s) => n + s.instances, 0);
+    // a link, so the browser streams the ZIP to disk; IDs are 44 characters each
+    const tooMany = ids.length > 1000;
+    bulk.replaceChildren(
+      h("b", {}, `${plural(ids.length, "study", "studies")} checked`),
+      h("span", { class: "muted" }, `${images.toLocaleString()} images${hidden ? ` · ${hidden} hidden by the filters` : ""}`),
+      h("span", { class: "spacer" }),
+      h(
+        "a",
+        {
+          class: "btn",
+          href: tooMany ? null : new URL(`tools/create-archive?resources=${ids.join(",")}`, ROOT).href,
+          download: "",
+          title: tooMany ? "More than 1000 studies: download them in parts" : "One ZIP, a folder per patient, study and series",
+        },
+        "Download ZIP",
+      ),
+      h("button", { class: "btn danger", type: "button", onclick: () => deleteChecked(chosen) }, "Delete…"),
+      h("button", { class: "btn", type: "button", title: "Uncheck all (Esc)", onclick: () => (work.checked.clear(), render()) }, "Clear"),
+    );
+  }
+
+  async function deleteChecked(chosen) {
+    const images = chosen.reduce((n, s) => n + s.instances, 0);
+    const patients = new Set(chosen.map((s) => s.patient)).size;
+    if (!(await confirmDelete(`Delete ${plural(chosen.length, "study", "studies")}?`, `${plural(chosen.length, "study", "studies")} of ${plural(patients, "patient")}, ${plural(images, "image")}. The files are removed from storage; this cannot be undone.`))) return;
+    const gone = new Set();
+    const failed = [];
+    for (const [i, s] of chosen.entries()) {
+      bulk.querySelector("b").textContent = `Deleting ${i + 1} of ${chosen.length}…`;
+      try {
+        await api(`studies/${s.id}`, { method: "DELETE" });
+        gone.add(s.id);
+      } catch (e) {
+        if (e.status === 404) gone.add(s.id);
+        else failed.push(`${s.description || s.id}: ${e.message}`);
+      }
+    }
+    for (const id of gone) work.checked.delete(id);
+    toast(failed.length ? `${gone.size} deleted, ${failed.length} not: ${failed[0]}` : `${plural(gone.size, "study", "studies")} deleted`, failed.length ? "error" : "");
+    const wasSelected = work.selected && gone.has(work.selected);
+    studies = store.studies = studies.filter((s) => !gone.has(s.id));
+    render();
+    if (wasSelected) history.replaceState(null, "", "#/studies");
+    if (wasSelected || !work.selected) summary();
+  }
+
+  function columns(list) {
+    const all = list.length > 0 && list.every((s) => work.checked.has(s.id));
+    const some = list.some((s) => work.checked.has(s.id));
+    const box = h("input", {
+      type: "checkbox",
+      "aria-label": "Check all shown studies",
+      onclick: (e) => {
+        e.stopPropagation();
+        for (const s of list) e.target.checked ? work.checked.add(s.id) : work.checked.delete(s.id);
+        render();
+      },
+    });
+    box.checked = all;
+    box.indeterminate = some && !all;
+    return [
+      {
+        key: "check",
+        label: box,
+        class: "chk",
+        cell: (s) => {
+          const c = h("input", {
+            type: "checkbox",
+            "aria-label": `Check ${s.description || "study"} of ${personName(s.name)}`,
+            onclick: (e) => {
+              e.stopPropagation();
+              check(s.id, e.target.checked, e.shiftKey, list);
+            },
+          });
+          c.checked = work.checked.has(s.id);
+          return c;
+        },
+      },
+      ...STUDY_COLUMNS,
+    ];
+  }
+
   function render() {
     renderFilters();
+    const list = visible();
+    const cols = columns(list);
     head.replaceChildren(
-      sortHeader(STUDY_COLUMNS, work.sort, (key) => {
+      sortHeader(cols, work.sort, (key) => {
         work.sort = { key, dir: work.sort.key === key ? -work.sort.dir : key === "date" ? -1 : 1 };
         render();
       }),
     );
-    const list = visible();
+    renderBulk();
     count.textContent = list.length === studies.length ? plural(studies.length, "study", "studies") : `${list.length} of ${plural(studies.length, "study", "studies")}`;
     const rows = [];
     let group = null;
     for (const s of list.slice(0, work.shown)) {
       if (work.sort.key === "date") {
         const g = groupLabel(s.date);
-        if (g !== group) rows.push(h("tr", { class: "group" }, h("td", { colspan: STUDY_COLUMNS.length }, (group = g))));
+        if (g !== group) rows.push(h("tr", { class: "group" }, h("td", { colspan: cols.length }, (group = g))));
       }
       rows.push(
         h(
@@ -362,16 +470,17 @@ async function worklistPage([selected], params) {
           {
             "data-id": s.id,
             "aria-selected": String(s.id === work.selected),
-            onclick: () => select(s.id),
+            class: work.checked.has(s.id) ? "checked" : null,
+            onclick: (e) => (e.target.closest(".chk") ? null : select(s.id)),
             ondblclick: () => openViewer(s.id),
           },
-          STUDY_COLUMNS.map((c) => h("td", { class: [c.class, c.td].filter(Boolean).join(" ") || null }, c.cell(s))),
+          cols.map((c) => h("td", { class: [c.class, c.td].filter(Boolean).join(" ") || null }, c.cell(s))),
         ),
       );
     }
     body.replaceChildren(...rows);
-    if (!studies.length) body.replaceChildren(h("tr", {}, h("td", { colspan: STUDY_COLUMNS.length }, emptyArchive())));
-    else if (!list.length) body.replaceChildren(h("tr", {}, h("td", { colspan: STUDY_COLUMNS.length, class: "nothing" }, h("b", {}, "No study matches"), "Change the search or the filters.")));
+    if (!studies.length) body.replaceChildren(h("tr", {}, h("td", { colspan: cols.length }, emptyArchive())));
+    else if (!list.length) body.replaceChildren(h("tr", {}, h("td", { colspan: cols.length, class: "nothing" }, h("b", {}, "No study matches"), "Change the search or the filters.")));
     more.replaceChildren(
       list.length > work.shown
         ? h("button", { class: "more", type: "button", onclick: () => ((work.shown += 200), render()) }, `Show more (${(list.length - work.shown).toLocaleString()} left)`)
@@ -380,7 +489,7 @@ async function worklistPage([selected], params) {
     const patients = new Set(list.map((s) => s.patient)).size;
     setStatus(
       [h("b", {}, plural(list.length, "study", "studies")), plural(patients, "patient"), `${list.reduce((n, s) => n + s.instances, 0).toLocaleString()} images`],
-      [["↑↓", "select"], ["↵", "open"], ["/", "search"], ["Del", "delete"]],
+      [["↑↓", "select"], ["↵", "open"], ["x", "check"], ["/", "search"], ["Del", "delete"]],
     );
   }
 
@@ -429,7 +538,7 @@ async function worklistPage([selected], params) {
         h(
           "div",
           { class: "hint" },
-          [["/", "search"], ["↑ ↓", "move through the list"], ["↵", "open the selected study"], ["Del", "delete it"], ["Esc", "clear the search"]].map(([k, w]) =>
+          [["/", "search"], ["↑ ↓", "move through the list"], ["↵", "open the selected study"], ["x", "check it; shift-click checks a range"], ["Del", "delete the selected or checked"], ["Esc", "clear the search or the checks"]].map(([k, w]) =>
             h("div", {}, h("kbd", {}, k), w),
           ),
         ),
@@ -596,7 +705,12 @@ async function worklistPage([selected], params) {
       return;
     }
     if (isTyping(e) && !(document.activeElement === input && ["ArrowDown", "ArrowUp", "Enter"].includes(e.key))) return;
-    if (e.key === "Escape" && work.selected && matchMedia("(max-width: 980px)").matches) {
+    if (e.key === "x" && work.selected) {
+      check(work.selected, !work.checked.has(work.selected), false, visible());
+    } else if (e.key === "Escape" && work.checked.size) {
+      work.checked.clear();
+      render();
+    } else if (e.key === "Escape" && work.selected && matchMedia("(max-width: 980px)").matches) {
       history.replaceState(null, "", "#/studies");
       summary();
     } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -606,6 +720,8 @@ async function worklistPage([selected], params) {
     } else if (e.key === "Enter" && work.selected) {
       e.preventDefault();
       openViewer(work.selected);
+    } else if (e.key === "Delete" && work.checked.size) {
+      deleteChecked(studies.filter((x) => work.checked.has(x.id)));
     } else if (e.key === "Delete" && work.selected) {
       const s = studies.find((x) => x.id === work.selected);
       if (s) deleteStudy(s, null);
