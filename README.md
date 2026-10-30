@@ -109,11 +109,11 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Studies**: search, modality and date filters (presets or a range), sortable columns. A row
-  opens the viewer on its largest series; the chevron shows the series and details inline; `⋯`
-  or a right click has the actions (open, download ZIP, copy the Study UID, the patient's
-  studies, delete). Checkboxes download or delete several studies at once (one ZIP from
-  `/tools/create-archive`).
+- **Studies**: search, and filter chips with counts: modality (every DICOM imaging modality),
+  date, sex; sortable columns. Each row has view (the largest series), download (ZIP) and
+  delete; a click on the row shows its series and details inline; a right click has the rest
+  (copy the Study UID, the patient's studies). Checkboxes download or delete several studies
+  at once (one ZIP from `/tools/create-archive`).
 - **Patients**: one row per Patient ID; a row shows that patient's studies.
 - **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
