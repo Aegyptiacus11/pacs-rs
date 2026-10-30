@@ -216,6 +216,8 @@ async fn delete_study(conn: &mut AnyConnection, study: &str) -> Result<(), Error
            (SELECT series_instance_uid FROM series WHERE study_instance_uid = $1)",
         "DELETE FROM series WHERE study_instance_uid = $1",
         "DELETE FROM studies WHERE study_instance_uid = $1",
+        // the web interface's measurements of it
+        "DELETE FROM ui_annotations WHERE study_instance_uid = $1",
     ] {
         sqlx::query(sql).bind(study).execute(&mut *conn).await?;
     }

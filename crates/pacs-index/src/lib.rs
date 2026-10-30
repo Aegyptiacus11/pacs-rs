@@ -16,6 +16,7 @@ use sqlx::AnyPool;
 use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
+mod annotations;
 mod delete;
 mod protocols;
 mod rest;
