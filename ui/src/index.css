@@ -185,6 +185,8 @@
 .viewer-grid .cell[data-plane="axial"] .cell-bar-dot { background: rgb(232, 84, 84); }
 .viewer-grid .cell[data-plane="sagittal"] .cell-bar-dot { background: rgb(92, 196, 120); }
 .viewer-grid .cell[data-plane="coronal"] .cell-bar-dot { background: rgb(96, 150, 255); }
+.viewer-grid .cell[data-kind="3d"] .cell-bar { display: none; }
+.viewer-grid[data-tool] .cell[data-kind="3d"] { cursor: grab; }
 .viewer-grid .cell-menus {
   position: absolute;
   bottom: 30px;

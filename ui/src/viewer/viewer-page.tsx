@@ -10,6 +10,7 @@ import {
   ArrowLeftRight,
   ArrowUpDown,
   Axis3d,
+  Box,
   Check,
   ChevronDown,
   Circle,
@@ -109,6 +110,7 @@ const SHORTCUTS: [string, string][] = [
   ["Drag a series", "Show it in that viewport"],
   ["Middle drag, Shift drag", "Pan, whatever tool is chosen"],
   ["Right drag", "Zoom, whatever tool is chosen"],
+  ["In a 3D view", "Drag to turn it, wheel or right drag to zoom"],
   [", .", "Previous or next hanging protocol"],
   ["Esc", "Back to the studies"],
 ];
@@ -425,6 +427,13 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
                   This series, {plane}
                 </DropdownMenuItem>
               ))}
+              <DropdownMenuItem disabled={!s.canMpr} onSelect={() => v.addView({ plane: "3d" })}>
+                <Box />
+                <div className="flex flex-col">
+                  <span>This series, in 3D</span>
+                  <span className="text-xs text-muted-foreground">Drag to turn it; bone, muscle, vessels, lung, skin, MIP</span>
+                </div>
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => v.addView({ nextSeries: true })}>
                 <SquarePlus /> The next series of the study
               </DropdownMenuItem>
@@ -459,7 +468,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
                 </div>
                 <DropdownMenuShortcut>X</DropdownMenuShortcut>
               </DropdownMenuItem>
-              <div className="px-2 pb-1.5 text-xs text-muted-foreground">Any viewport can also show another plane: use the plane menu at its bottom.</div>
+              <div className="px-2 pb-1.5 text-xs text-muted-foreground">Any viewport can also show another plane, or 3D: use the plane menu at its bottom.</div>
               <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem checked={s.linked} disabled={mpr || s.cells.length < 2} onSelect={(e) => e.preventDefault()} onCheckedChange={(on) => v.setLinked(on)}>
                 <div className="flex flex-col">

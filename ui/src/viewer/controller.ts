@@ -35,6 +35,7 @@ import {
   StackScrollTool,
   MagnifyTool,
   CrosshairsTool,
+  TrackballRotateTool,
   LengthTool,
   ProbeTool,
   AngleTool,
@@ -83,14 +84,35 @@ export const SLABS = [
   { name: "MIP full", mm: 10_000 },
 ] as const;
 
-/** The plane a viewport shows: the images as acquired, or one of the volume's. */
+/** The plane a viewport shows: the images as acquired, one of the volume's, or the volume
+ * rendered in 3D. */
 export const PLANES = [
   { plane: "original", name: "Original" },
   { plane: "axial", name: "Axial" },
   { plane: "sagittal", name: "Sagittal" },
   { plane: "coronal", name: "Coronal" },
+  { plane: "3d", name: "3D" },
 ] as const;
 export type Plane = (typeof PLANES)[number]["plane"];
+
+/** How a 3D view renders the volume: Cornerstone's transfer functions, by modality. */
+export const RENDERS = {
+  CT: [
+    { name: "Bone", preset: "CT-Bones" },
+    { name: "Muscle and bone", preset: "CT-Muscle" },
+    { name: "Vessels", preset: "CT-Chest-Contrast-Enhanced" },
+    { name: "Lung", preset: "CT-Lung" },
+    { name: "Skin", preset: "CT-Soft-Tissue" },
+    { name: "MIP", preset: "CT-MIP" },
+  ],
+  MR: [
+    { name: "Default", preset: "MR-Default" },
+    { name: "Angio", preset: "MR-Angio" },
+    { name: "T2 brain", preset: "MR-T2-Brain" },
+    { name: "MIP", preset: "MR-MIP" },
+  ],
+} as const;
+const rendersOf = (data: Loaded | null) => (data?.series.MainDicomTags.Modality === "CT" ? RENDERS.CT : RENDERS.MR);
 
 export const LAYOUTS = [
   { name: "1 × 1", cols: 1, rows: 1 },
@@ -104,6 +126,7 @@ export const LAYOUTS = [
 const ENGINE = "pacs-rs";
 const STACK_GROUP = "pacs-rs-stack";
 const MPR_GROUP = "pacs-rs-mpr";
+const VR_GROUP = "pacs-rs-3d";
 const PLANE_COLOR: Record<string, string> = { axial: "rgb(232, 84, 84)", sagittal: "rgb(92, 196, 120)", coronal: "rgb(96, 150, 255)" };
 
 // How images are drawn. "gpu": WebGL, the image copied to the page as usual. "readback":
@@ -203,7 +226,7 @@ export function initCornerstone() {
         textBoxBackground: "rgba(0, 0, 0, 0.65)",
       },
     });
-    for (const tool of [StackScrollTool, ...Object.values(TOOLS)]) addTool(tool);
+    for (const tool of [StackScrollTool, TrackballRotateTool, ...Object.values(TOOLS)]) addTool(tool);
   })();
   return ready;
 }
@@ -243,7 +266,8 @@ type Orientation = "axial" | "sagittal" | "coronal";
 type Cell = {
   i: number;
   id: string;
-  kind: "stack" | "mpr";
+  /** "3d": the volume rendered, turned with the mouse */
+  kind: "stack" | "mpr" | "3d";
   orientation: Orientation | null;
   element: HTMLDivElement;
   wrap: HTMLDivElement;
@@ -255,9 +279,9 @@ type Cell = {
   presetSelect: HTMLSelectElement;
   slabSelect: HTMLSelectElement;
   planeSelect: HTMLSelectElement;
-  /** the tool group: "mpr" for the three crosshair views, "stack" for every other viewport,
-   * planes of a volume included */
-  group: "stack" | "mpr";
+  /** the tool group: "mpr" for the three crosshair views, "3d" for a 3D view, "stack" for
+   * every other viewport, planes of a volume included */
+  group: "stack" | "mpr" | "3d";
   viewport: Types.IViewport;
   seriesId: string | null;
   data: Loaded | null;
@@ -273,6 +297,7 @@ type Cell = {
 };
 
 export type CellState = { seriesId: string | null; studyId: string | null; kind: Cell["kind"]; orientation: Orientation | null };
+const planeOf = (c: Cell): Plane => (c.kind === "3d" ? "3d" : (c.orientation ?? "original"));
 export type ViewerState = {
   mode: "stack" | "mpr";
   layout: number;
@@ -299,6 +324,7 @@ export class Viewer {
   private engine: RenderingEngine;
   private stackGroup: NonNullable<ReturnType<typeof ToolGroupManager.createToolGroup>>;
   private mprGroup: NonNullable<ReturnType<typeof ToolGroupManager.createToolGroup>>;
+  private vrGroup: NonNullable<ReturnType<typeof ToolGroupManager.createToolGroup>>;
   private cells: Cell[] = [];
   private current = 0;
   private layout = 0;
@@ -327,7 +353,7 @@ export class Viewer {
     /** where a series of the patient comes from: its study and REST series object */
     private resolve: (seriesId: string) => Promise<{ study: any; series: any }>,
   ) {
-    for (const g of [STACK_GROUP, MPR_GROUP]) ToolGroupManager.destroyToolGroup(g);
+    for (const g of [STACK_GROUP, MPR_GROUP, VR_GROUP]) ToolGroupManager.destroyToolGroup(g);
     this.engine = new RenderingEngine(ENGINE);
     this.stackGroup = ToolGroupManager.createToolGroup(STACK_GROUP)!;
     this.mprGroup = ToolGroupManager.createToolGroup(MPR_GROUP)!;
@@ -345,6 +371,16 @@ export class Viewer {
       }
       group.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: ToolEnums.MouseBindings.Wheel }] });
     }
+    // a 3D view has its own mouse, whatever tool is chosen: left turns it, middle or
+    // shift-left pans, right or the wheel zooms
+    const { MouseBindings, KeyboardBindings } = ToolEnums;
+    this.vrGroup = ToolGroupManager.createToolGroup(VR_GROUP)!;
+    for (const tool of [TrackballRotateTool, PanTool, ZoomTool]) this.vrGroup.addTool(tool.toolName);
+    this.vrGroup.setToolActive(TrackballRotateTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+    this.vrGroup.setToolActive(PanTool.toolName, {
+      bindings: [{ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }],
+    });
+    this.vrGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }] });
     this.applyTool(null, "windowLevel");
     // measurements belong to this viewing only
     annotation.state.removeAllAnnotations();
@@ -365,7 +401,7 @@ export class Viewer {
     eventTarget.removeEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
     this.resize.disconnect();
     for (const cell of this.cells) this.dropCell(cell, false);
-    for (const g of [STACK_GROUP, MPR_GROUP]) ToolGroupManager.destroyToolGroup(g);
+    for (const g of [STACK_GROUP, MPR_GROUP, VR_GROUP]) ToolGroupManager.destroyToolGroup(g);
     this.engine.destroy();
   }
 
@@ -435,7 +471,11 @@ export class Viewer {
 
   private cellIds = 0;
 
-  private makeCell(i: number, kind: Cell["kind"], orientation: Orientation | null, group: Cell["group"] = kind === "stack" ? "stack" : "mpr", before?: HTMLElement): Cell {
+  private groupOf(cell: Pick<Cell, "group">) {
+    return cell.group === "stack" ? this.stackGroup : cell.group === "mpr" ? this.mprGroup : this.vrGroup;
+  }
+
+  private makeCell(i: number, kind: Cell["kind"], orientation: Orientation | null, group: Cell["group"] = kind === "mpr" ? "mpr" : kind, before?: HTMLElement): Cell {
     const div = (cls: string) => Object.assign(document.createElement("div"), { className: cls });
     const element = div("cs absolute inset-0") as HTMLDivElement;
     const ov = Object.fromEntries((["tl", "tr", "bl", "br", "ol", "or", "ot", "ob"] as const).map((k) => [k, div(`ov ov-${k}`)])) as Cell["ov"];
@@ -453,30 +493,36 @@ export class Viewer {
       s.append(...options.map((o, j) => Object.assign(document.createElement("option"), { value: String(j), textContent: o })));
       return s;
     };
-    const presetSelect = select(PRESETS.map((p) => p.name), "Window preset");
+    // in a 3D view, how the volume is rendered (the CT list until the series is known)
+    const presetSelect = kind === "3d" ? select(RENDERS.CT.map((r) => r.name), "Rendering") : select(PRESETS.map((p) => p.name), "Window preset");
     const slabSelect = select(SLABS.map((s) => s.name), "Slab");
     // the plane any viewport outside MPR shows: the images as acquired, or a plane of the volume
     const planeSelect = select(PLANES.map((p) => p.name), "Plane");
-    planeSelect.value = String(PLANES.findIndex((p) => p.plane === (orientation ?? "original")));
+    planeSelect.value = String(PLANES.findIndex((p) => p.plane === (kind === "3d" ? "3d" : (orientation ?? "original"))));
     const remove = Object.assign(document.createElement("button"), { type: "button", className: "cell-close", textContent: "×", title: "Remove this view" });
     remove.setAttribute("aria-label", "Remove this view");
-    if (group === "stack") menus.append(planeSelect);
+    if (group !== "mpr") menus.append(planeSelect);
     menus.append(presetSelect);
     if (kind === "mpr") menus.append(slabSelect);
     const wrap = div("cell") as HTMLDivElement;
     wrap.tabIndex = 0;
     if (orientation) wrap.dataset.plane = orientation;
+    if (kind === "3d") wrap.dataset.kind = "3d";
     wrap.append(element, bar, ...Object.values(ov), scale, note, menus);
-    if (group === "stack") menus.append(remove);
+    if (group !== "mpr") menus.append(remove);
     this.grid.insertBefore(wrap, before ?? null);
     const id = `vp${++this.cellIds}-${kind}${orientation ? `-${orientation}` : ""}`;
     this.engine.enableElement({
       viewportId: id,
-      type: kind === "stack" ? Enums.ViewportType.STACK : Enums.ViewportType.ORTHOGRAPHIC,
+      type: kind === "stack" ? Enums.ViewportType.STACK : kind === "3d" ? Enums.ViewportType.VOLUME_3D : Enums.ViewportType.ORTHOGRAPHIC,
       element,
-      defaultOptions: { background: [0, 0, 0], ...(orientation ? { orientation: orientation as Enums.OrientationAxis } : {}) },
+      defaultOptions: {
+        background: [0, 0, 0],
+        // a 3D view starts from the front, as the patient faces you
+        ...(kind === "3d" ? { orientation: Enums.OrientationAxis.CORONAL } : orientation ? { orientation: orientation as Enums.OrientationAxis } : {}),
+      },
     });
-    (group === "stack" ? this.stackGroup : this.mprGroup).addViewport(id, ENGINE);
+    this.groupOf({ group }).addViewport(id, ENGINE);
     const cell: Cell = {
       i, id, kind, orientation, group, element, wrap, ov, note, bar, dot: dotEl, scale, presetSelect, slabSelect, planeSelect,
       viewport: this.engine.getViewport(id),
@@ -490,7 +536,7 @@ export class Viewer {
     wrap.addEventListener("pointerdown", () => this.activate(cell.i), true);
     this.lens(cell);
     wrap.addEventListener("contextmenu", (e) => e.preventDefault());
-    wrap.addEventListener("dblclick", (e) => !(e.target as HTMLElement).closest("select") && this.reset(cell));
+    wrap.addEventListener("dblclick", (e) => !(e.target as HTMLElement).closest("select, button") && this.reset(cell));
     // a series dropped from the study browser
     wrap.addEventListener("dragover", (e) => {
       if (e.dataTransfer?.types.includes("application/x-pacs-series")) {
@@ -632,7 +678,7 @@ export class Viewer {
     try {
       toolUtilities.stackPrefetch.disable(cell.element);
     } catch {}
-    (cell.group === "stack" ? this.stackGroup : this.mprGroup).removeViewports(ENGINE, cell.id);
+    this.groupOf(cell).removeViewports(ENGINE, cell.id);
     if (remove) {
       this.engine.disableElement(cell.id);
       cell.wrap.remove();
@@ -689,7 +735,11 @@ export class Viewer {
     if (!data?.slots.length) return;
     const p = data.study.PatientMainDicomTags, t = data.study.MainDicomTags, st = data.series.MainDicomTags;
     let slot: Slot, index: number, count: number;
-    if (cell.kind === "stack") {
+    if (cell.kind === "3d") {
+      slot = data.slots[Math.floor(data.slots.length / 2)];
+      index = 0;
+      count = 1;
+    } else if (cell.kind === "stack") {
       slot = data.slots[cell.index];
       index = cell.index;
       count = data.slots.length;
@@ -712,10 +762,10 @@ export class Viewer {
     const wl = voi ? utilities.windowLevel.toWindowLevel(voi.lower, voi.upper) : null;
     ov.tl.textContent = [
       `${st.Modality || ""} ${st.SeriesNumber ?? ""}  ${st.SeriesDescription || ""}`.trim(),
-      cell.orientation ? `${cell.orientation[0].toUpperCase()}${cell.orientation.slice(1)}${SLABS[cell.slab].mm ? `  ·  ${SLABS[cell.slab].name}` : ""}` : rows ? `${columns} × ${rows}` : "",
+      cell.kind === "3d" ? `3D  ·  ${rendersOf(data)[cell.preset]?.name ?? ""}` : cell.orientation ? `${cell.orientation[0].toUpperCase()}${cell.orientation.slice(1)}${SLABS[cell.slab].mm ? `  ·  ${SLABS[cell.slab].name}` : ""}` : rows ? `${columns} × ${rows}` : "",
     ].filter(Boolean).join("\n");
     ov.tr.textContent = `${personName(p.PatientName)}\n${[p.PatientID, sexAge(p.PatientSex, p.PatientBirthDate, t.StudyDate)].filter(Boolean).join("  ·  ")}\n${t.StudyDescription || ""}\n${formatDate(t.StudyDate)} ${formatTime(t.StudyTime)}`;
-    ov.bl.textContent = [
+    ov.bl.textContent = cell.kind === "3d" ? `Zoom ${Math.round(zoom * 100)}%` : [
       `Image ${index + 1} / ${count}${slot.frames > 1 ? `  ·  frame ${slot.frame}` : ""}`,
       wl ? `W ${Math.round(wl.windowWidth)}  L ${Math.round(wl.windowCenter)}` : "",
       `Zoom ${Math.round(zoom * 100)}%`,
@@ -725,7 +775,9 @@ export class Viewer {
       for (const [k, v] of Object.entries(markers(cell.viewport))) ov[k as keyof Cell["ov"]].textContent = v;
     } catch {}
     cell.dot.style.left = count > 1 ? `${(100 * index) / (count - 1)}%` : "50%";
-    this.drawScale(cell);
+    // a rendering has no one scale: what is near and far differ
+    if (cell.kind === "3d") cell.scale.innerHTML = "";
+    else this.drawScale(cell);
     cell.note.textContent = cell.kind === "stack" && cell.failed.has(slot.imageId) ? "This image could not be decoded" : "";
   }
 
@@ -934,14 +986,18 @@ export class Viewer {
   async setPlane(plane: Plane, cell = this.active()) {
     if (this.mode === "mpr" || !cell.data) return;
     if (plane !== "original" && !this.planesPossible(cell.data)) {
-      cell.planeSelect.value = String(PLANES.findIndex((p) => p.plane === (cell.orientation ?? "original")));
+      cell.planeSelect.value = String(PLANES.findIndex((p) => p.plane === planeOf(cell)));
       cell.note.textContent = getShouldUseCPURendering() ? "Other planes need WebGL" : "Other planes need a series of at least 8 slices";
       setTimeout(() => (cell.note.textContent = ""), 2500);
       return;
     }
     const data = cell.data;
     const next =
-      plane === "original" ? this.makeCell(cell.i, "stack", null, "stack", cell.wrap) : this.makeCell(cell.i, "mpr", plane, "stack", cell.wrap);
+      plane === "original"
+        ? this.makeCell(cell.i, "stack", null, "stack", cell.wrap)
+        : plane === "3d"
+          ? this.makeCell(cell.i, "3d", null, "3d", cell.wrap)
+          : this.makeCell(cell.i, "mpr", plane, "stack", cell.wrap);
     next.invert = cell.invert;
     this.dropCell(cell);
     this.cells[cell.i] = next;
@@ -956,7 +1012,11 @@ export class Viewer {
         const volumeId = await this.volumeOf(data);
         await (next.viewport as Types.IVolumeViewport).setVolumes([{ volumeId }]);
         next.note.textContent = "";
-        if (next.invert) (next.viewport as any).setProperties({ invert: true });
+        if (plane === "3d") {
+          const renders = rendersOf(data);
+          next.presetSelect.replaceChildren(...renders.map((r, j) => Object.assign(document.createElement("option"), { value: String(j), textContent: r.name })));
+          this.setPreset(0, next);
+        } else if (next.invert) (next.viewport as any).setProperties({ invert: true });
         next.viewport.render();
         this.measureFit(next);
       } catch {
@@ -978,7 +1038,7 @@ export class Viewer {
     if (this.mode === "mpr") await this.exitMpr();
     if (this.cells.length >= 6) return;
     const active = this.active();
-    const keep = this.cells.map((c) => ({ seriesId: c.seriesId, plane: c.orientation }));
+    const keep = this.cells.map((c) => ({ seriesId: c.seriesId, plane: planeOf(c) }));
     let seriesId = active.seriesId;
     let plane: Exclude<Plane, "original"> | null = choice.plane ?? null;
     if (!plane && !choice.nextSeries && this.planesPossible(active.data)) {
@@ -994,7 +1054,7 @@ export class Viewer {
     }
     await this.hang(this.layoutFor(keep.length + 1), [...keep.map((k) => k.seriesId), seriesId], this.linked);
     // the planes the viewports had stay as they were
-    for (const [i, k] of keep.entries()) if (k.plane) await this.setPlane(k.plane, this.cells[i]);
+    for (const [i, k] of keep.entries()) if (k.plane !== "original") await this.setPlane(k.plane, this.cells[i]);
     const added = this.cells[this.cells.length - 1];
     if (plane && added) await this.setPlane(plane, added);
     this.activate(this.cells.length - 1);
@@ -1003,9 +1063,9 @@ export class Viewer {
   /** Remove a viewport; the others close up. */
   async removeView(cell: Cell) {
     if (this.cells.length <= 1) return;
-    const keep = this.cells.filter((c) => c !== cell).map((c) => ({ seriesId: c.seriesId, plane: c.orientation }));
+    const keep = this.cells.filter((c) => c !== cell).map((c) => ({ seriesId: c.seriesId, plane: planeOf(c) }));
     await this.hang(this.layoutFor(keep.length), keep.map((k) => k.seriesId), this.linked);
-    for (const [i, k] of keep.entries()) if (k.plane) await this.setPlane(k.plane, this.cells[i]);
+    for (const [i, k] of keep.entries()) if (k.plane !== "original") await this.setPlane(k.plane, this.cells[i]);
   }
 
   /** Into MPR; if the volume can't be built, back to the stacks as they were. */
@@ -1097,6 +1157,7 @@ export class Viewer {
   }
   step(n: number) {
     const cell = this.active();
+    if (cell.kind === "3d") return;
     if (cell.kind === "stack") this.go(cell.index + n);
     else utilities.scroll(cell.viewport as any, { delta: n });
   }
@@ -1108,6 +1169,16 @@ export class Viewer {
   }
 
   setPreset(i: number, cell = this.active()) {
+    if (cell.kind === "3d") {
+      const render = rendersOf(cell.data)[i];
+      if (!render) return;
+      cell.preset = i;
+      cell.presetSelect.value = String(i);
+      (cell.viewport as any).setProperties({ preset: render.preset });
+      cell.viewport.render();
+      this.overlays(cell);
+      return this.emit();
+    }
     cell.preset = i;
     cell.presetSelect.value = String(i);
     const w = PRESETS[i].window;
@@ -1121,6 +1192,7 @@ export class Viewer {
     this.emit();
   }
   toggleInvert(cell = this.active()) {
+    if (cell.kind === "3d") return;
     cell.invert = !cell.invert;
     (cell.viewport as any).setProperties({ invert: cell.invert });
     cell.viewport.render();
@@ -1163,7 +1235,7 @@ export class Viewer {
   }
   cine(on?: boolean, cell = this.active()) {
     on ??= !cell.playing;
-    if (cell.count < 2) return;
+    if (cell.count < 2 || cell.kind === "3d") return;
     cell.playing = on;
     if (on) toolUtilities.cine.playClip(cell.element, { framesPerSecond: 15, loop: true });
     else toolUtilities.cine.stopClip(cell.element);
