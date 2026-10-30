@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Search, Upload, Users } from "lucide-react";
+import { FileStack, Search, Upload, Users, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CommandMenu } from "@/components/command-menu";
 import { useUpload } from "@/components/upload";
-import { config, ROOT } from "@/lib/api";
+import { ROOT } from "@/lib/api";
 import { href, type Route } from "@/lib/route";
 import { cn } from "@/lib/utils";
 
@@ -21,23 +21,24 @@ export function Logo({ className }: { className?: string }) {
   );
 }
 
+// nothing while the server answers; a clear warning when it doesn't
 function ServerStatus() {
   const health = useQuery({
     queryKey: ["health"],
     queryFn: async () => (await fetch(new URL("healthz", ROOT), { cache: "no-store" })).ok,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
     retry: false,
   });
-  const ok = health.data === true;
+  if (health.isPending || health.data === true) return null;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
-          <span className={cn("size-1.5 rounded-full", health.isPending ? "bg-muted-foreground/40" : ok ? "bg-emerald-500" : "bg-destructive")} />
-          <span className="hidden lg:inline">{health.isPending ? "Connecting" : ok ? "Connected" : "Offline"}</span>
+        <span className="flex h-8 items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 text-xs font-medium text-destructive">
+          <WifiOff className="size-3.5" />
+          Server unreachable
         </span>
       </TooltipTrigger>
-      <TooltipContent>{ok ? `pacs-rs ${config.version} is up` : "The server does not answer"}</TooltipContent>
+      <TooltipContent>pacs-rs does not answer; retrying every 15 seconds</TooltipContent>
     </Tooltip>
   );
 }

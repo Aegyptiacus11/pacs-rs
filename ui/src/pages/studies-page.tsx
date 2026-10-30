@@ -25,7 +25,6 @@ import {
   Eye,
   FileStack,
   Filter,
-  MoreHorizontal,
   Search,
   Trash2,
   Upload,
@@ -48,9 +47,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { FacetedFilter } from "@/components/faceted-filter";
+import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { SeriesThumb } from "@/components/series-thumb";
 import { useUpload } from "@/components/upload";
@@ -66,7 +68,17 @@ const RANGES = [
   ["30d", "Last 30 days", 30],
   ["1y", "Last 12 months", 365],
 ] as const;
-type Range = (typeof RANGES)[number][0] | "custom";
+type Range = (typeof RANGES)[number][0];
+const SEXES: Record<string, string> = { F: "Female", M: "Male", O: "Other" };
+
+function sinceFor(range: Range) {
+  const days = RANGES.find(([k]) => k === range)?.[2];
+  if (days == null) return null;
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  since.setDate(since.getDate() - days);
+  return since;
+}
 
 async function openStudy(id: string, seriesId?: string) {
   if (seriesId) return go(href.view(id, seriesId));
@@ -122,8 +134,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [query, setQuery] = useState("");
   const [modalities, setModalities] = useState<string[]>([]);
   const [range, setRange] = useState<Range>("any");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [sexes, setSexes] = useState<string[]>([]);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [expanded, setExpanded] = useState<string | null>(open);
@@ -132,30 +143,42 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
   const all = studies.data ?? [];
   const owner = patient ? all.find((s) => s.patient === patient) : null;
-  const allModalities = useMemo(() => [...new Set(all.flatMap((s) => s.modalities))].sort(), [all]);
 
   const rows = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const days = RANGES.find(([k]) => k === range)?.[2];
-    let since: Date | null = null;
-    if (days != null) {
-      since = new Date();
-      since.setHours(0, 0, 0, 0);
-      since.setDate(since.getDate() - days);
-    }
-    const lo = range === "custom" && from ? from.replaceAll("-", "") : null;
-    const hi = range === "custom" && to ? to.replaceAll("-", "") : null;
+    const since = sinceFor(range);
     return all.filter((s) => {
       if (patient && s.patient !== patient) return false;
       if (modalities.length && !s.modalities.some((m) => modalities.includes(m))) return false;
+      if (sexes.length && !sexes.includes(s.sex || "O")) return false;
       if (since && !(parseDate(s.date) && parseDate(s.date)! >= since)) return false;
-      if (lo && s.date < lo) return false;
-      if (hi && !(s.date && s.date <= hi)) return false;
       if (!words.length) return true;
       const text = `${s.name} ${personName(s.name)} ${s.patientId} ${s.accession} ${s.description} ${s.modalities.join(" ")} ${s.date}`.toLowerCase();
       return words.every((w) => text.includes(w));
     });
-  }, [all, query, modalities, range, from, to, patient]);
+  }, [all, query, modalities, sexes, range, patient]);
+
+  // what each filter can pick, with how many studies have it
+  const facets = useMemo(() => {
+    const scope = patient ? all.filter((s) => s.patient === patient) : all;
+    const count = (pred: (s: Study) => boolean) => scope.filter(pred).length;
+    const modalityList = [...new Set(scope.flatMap((s) => s.modalities))].sort();
+    const sexList = [...new Set(scope.map((s) => s.sex || "O"))].sort();
+    return {
+      // every imaging modality, then whatever else the archive holds (SEG, SR, ...)
+      modalities: [...IMAGING_MODALITIES, ...modalityList.filter((m) => !IMAGING_MODALITIES.some(([c]) => c === m)).map((m) => [m, ""] as [string, string])].map(([m, name]) => ({
+        value: m,
+        label: m,
+        hint: name,
+        count: count((s) => s.modalities.includes(m)),
+      })),
+      ranges: RANGES.slice(1).map(([value, label]) => {
+        const since = sinceFor(value)!;
+        return { value, label, count: count((s) => !!parseDate(s.date) && parseDate(s.date)! >= since) };
+      }),
+      sexes: sexList.map((x) => ({ value: x, label: SEXES[x] ?? x, count: count((s) => (s.sex || "O") === x) })),
+    };
+  }, [all, patient]);
 
   const columns = useMemo<ColumnDef<Study>[]>(
     () => [
@@ -214,11 +237,13 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         cell: ({ row: { original: s } }) => (
           <div className="min-w-0">
             <div className="truncate">{s.description || <span className="text-muted-foreground">No description</span>}</div>
-            {s.accession && <div className="truncate text-xs text-muted-foreground">Accession {s.accession}</div>}
+            <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+              <Modalities list={s.modalities} />
+              {s.accession && <span className="truncate">Accession {s.accession}</span>}
+            </div>
           </div>
         ),
       },
-      { id: "modalities", accessorFn: (s) => s.modalities.join(","), header: "Modality", cell: ({ row }) => <Modalities list={row.original.modalities} /> },
       {
         id: "date",
         accessorFn: (s) => s.date + s.time,
@@ -248,17 +273,42 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
       {
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
+        // the actions in plain sight: view, download, delete
         cell: ({ row: { original: s } }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Study actions" onClick={(e) => e.stopPropagation()}>
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56" onClick={(e) => e.stopPropagation()}>
-              <StudyActions study={s} kind="dropdown" onExpand={() => setExpanded(s.id)} onDelete={setPending} />
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="View" className="text-muted-foreground hover:text-foreground" onClick={() => openStudy(s.id)}>
+                  <Eye />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>View</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" asChild className="text-muted-foreground hover:text-foreground">
+                  <a href={url(`studies/${s.id}/archive`)} download aria-label="Download ZIP">
+                    <Download />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Download ZIP</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Delete study"
+                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setPending(deleteOne(s))}
+                >
+                  <Trash2 />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Delete</TooltipContent>
+            </Tooltip>
+          </div>
         ),
       },
     ],
@@ -280,7 +330,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   });
 
   const selected = all.filter((s) => selection[s.id]);
-  const filtered = !!query || modalities.length > 0 || range !== "any";
+  const filtered = !!query || modalities.length > 0 || sexes.length > 0 || range !== "any";
   const patients = new Set(rows.map((s) => s.patient)).size;
   const { pageIndex, pageSize } = table.getState().pagination;
 
@@ -310,79 +360,15 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="relative w-full max-w-sm">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter by name, ID, accession, description" className="h-9 bg-card pl-9" />
+        <div className="relative w-full sm:w-72">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search studies…" className="h-8 bg-card pl-8" />
         </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className={cn("h-9 bg-card", modalities.length && "border-selection/50")}>
-              <Filter className="text-muted-foreground" />
-              Modality
-              {modalities.length > 0 && <Badge className="ml-1 h-5 rounded px-1.5 font-mono text-[11px]">{modalities.join(", ")}</Badge>}
-              <ChevronDown className="text-muted-foreground" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuLabel>Show modalities</DropdownMenuLabel>
-            {allModalities.map((m) => (
-              <DropdownMenuCheckboxItem
-                key={m}
-                checked={modalities.includes(m)}
-                onSelect={(e) => e.preventDefault()}
-                onCheckedChange={(on) => setModalities((list) => (on ? [...list, m] : list.filter((x) => x !== m)))}
-              >
-                <span className="font-mono">{m}</span>
-              </DropdownMenuCheckboxItem>
-            ))}
-            {modalities.length > 0 && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setModalities([])}>Show all</DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" className={cn("h-9 bg-card", range !== "any" && "border-selection/50")}>
-              <CalendarDays className="text-muted-foreground" />
-              {range === "custom" ? `${from ? formatDate(from.replaceAll("-", "")) : "…"} – ${to ? formatDate(to.replaceAll("-", "")) : "…"}` : RANGES.find(([k]) => k === range)![1]}
-              <ChevronDown className="text-muted-foreground" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-72 p-0">
-            <div className="p-1">
-              {RANGES.map(([key, label]) => (
-                <button
-                  key={key}
-                  className={cn("flex w-full items-center rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent", range === key && "font-medium")}
-                  onClick={() => {
-                    setRange(key);
-                    setFrom("");
-                    setTo("");
-                  }}
-                >
-                  {label}
-                  {range === key && <span className="ml-auto size-1.5 rounded-full bg-selection" />}
-                </button>
-              ))}
-            </div>
-            <div className="space-y-2 border-t p-3">
-              <div className="text-xs font-medium text-muted-foreground">Custom range</div>
-              <div className="flex items-center gap-2">
-                <Input type="date" value={from} onChange={(e) => (setFrom(e.target.value), setRange("custom"))} className="h-8" aria-label="From" />
-                <span className="text-muted-foreground">–</span>
-                <Input type="date" value={to} onChange={(e) => (setTo(e.target.value), setRange("custom"))} className="h-8" aria-label="To" />
-              </div>
-            </div>
-          </PopoverContent>
-        </Popover>
-
+        <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
+        <FacetedFilter title="Date" options={facets.ranges} selected={range === "any" ? [] : [range]} onChange={(v) => setRange((v[0] as Range) ?? "any")} single searchable={false} />
+        <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
         {owner && (
-          <Badge variant="secondary" className="h-9 gap-1.5 rounded-md pr-1 pl-3 text-sm font-normal">
+          <Badge variant="secondary" className="h-8 gap-1.5 rounded-md pr-1 pl-2.5 text-sm font-normal">
             <User className="size-3.5" />
             {personName(owner.name)}
             <Button variant="ghost" size="icon-xs" aria-label="Show every patient" onClick={() => go(href.studies())}>
@@ -393,16 +379,16 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         {filtered && (
           <Button
             variant="ghost"
-            className="h-9 text-muted-foreground"
+            size="sm"
+            className="h-8 px-2 lg:px-3"
             onClick={() => {
               setQuery("");
               setModalities([]);
+              setSexes([]);
               setRange("any");
-              setFrom("");
-              setTo("");
             }}
           >
-            Reset
+            Reset <X />
           </Button>
         )}
       </div>
@@ -412,12 +398,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <colgroup>
             <col className="w-10" />
             <col className="w-10" />
-            <col className="w-[26%]" />
+            <col className="w-[24%]" />
             <col />
-            <col className="w-28" />
-            <col className="w-40" />
             <col className="w-36" />
-            <col className="w-12" />
+            <col className="w-28" />
+            <col className="w-32" />
           </colgroup>
           <TableHeader>
             {table.getHeaderGroups().map((group) => (
@@ -434,7 +419,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             {studies.isPending &&
               Array.from({ length: 6 }, (_, i) => (
                 <TableRow key={i} className="h-14 hover:bg-transparent">
-                  <TableCell colSpan={8}>
+                  <TableCell colSpan={7}>
                     <div className="flex items-center gap-3">
                       <Skeleton className="size-8 rounded-full" />
                       <Skeleton className="h-3 w-48" />
@@ -451,10 +436,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                       data-state={row.getIsSelected() ? "selected" : undefined}
                       className={cn("group h-14 cursor-pointer", expanded === row.id && "border-b-0 bg-muted/40")}
                       tabIndex={0}
-                      onClick={() => openStudy(row.id)}
+                      aria-expanded={expanded === row.id}
+                      onClick={() => setExpanded((x) => (x === row.id ? null : row.id))}
                       onKeyDown={(e) => {
                         if (e.target !== e.currentTarget) return;
-                        if (e.key === "Enter") openStudy(row.id);
+                        if (e.key === "Enter") setExpanded((x) => (x === row.id ? null : row.id));
                         if (e.key === " ") {
                           e.preventDefault();
                           row.toggleSelected();
@@ -476,7 +462,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                 </ContextMenu>
                 {expanded === row.id && (
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableCell colSpan={8} className="p-0">
+                    <TableCell colSpan={7} className="p-0">
                       <StudyDetails study={row.original} onDelete={setPending} />
                     </TableCell>
                   </TableRow>
@@ -559,15 +545,23 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   );
 }
 
+function deleteOne(s: Study): PendingDelete {
+  return {
+    ids: [s.id],
+    title: "Delete this study?",
+    description: `${s.description || "The study"} of ${personName(s.name)} (${formatDate(s.date)}): ${plural(s.instances, "image")} will be removed from storage. This can't be undone.`,
+  };
+}
+
 function StudyActions({ study: s, kind, onExpand, onDelete }: { study: Study; kind: "dropdown" | "context"; onExpand: () => void; onDelete: (p: PendingDelete) => void }) {
   const [Item, Separator, Shortcut] = kind === "dropdown" ? [DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut] : [ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut];
   return (
     <>
       <Item onSelect={() => openStudy(s.id)}>
-        <Eye /> Open in viewer <Shortcut>↵</Shortcut>
+        <Eye /> View
       </Item>
       <Item onSelect={onExpand}>
-        <ChevronRight /> Show details <Shortcut>→</Shortcut>
+        <ChevronRight /> Show details <Shortcut>↵</Shortcut>
       </Item>
       <Item asChild>
         <a href={url(`studies/${s.id}/archive`)} download>
@@ -583,13 +577,7 @@ function StudyActions({ study: s, kind, onExpand, onDelete }: { study: Study; ki
       <Separator />
       <Item
         variant="destructive"
-        onSelect={() =>
-          onDelete({
-            ids: [s.id],
-            title: "Delete this study?",
-            description: `${s.description || "The study"} of ${personName(s.name)} (${formatDate(s.date)}): ${plural(s.instances, "image")} will be removed from storage. This can't be undone.`,
-          })
-        }
+        onSelect={() => onDelete(deleteOne(s))}
       >
         <Trash2 /> Delete study…
       </Item>
@@ -643,7 +631,7 @@ function StudyDetails({ study: s, onDelete }: { study: Study; onDelete: (p: Pend
         </dl>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button size="sm" onClick={() => openStudy(s.id)}>
-            <Eye /> Open
+            <Eye /> View
           </Button>
           <Button size="sm" variant="outline" asChild>
             <a href={url(`studies/${s.id}/archive`)} download>
@@ -654,13 +642,7 @@ function StudyDetails({ study: s, onDelete }: { study: Study; onDelete: (p: Pend
             size="sm"
             variant="ghost"
             className="ml-auto text-muted-foreground hover:text-destructive"
-            onClick={() =>
-              onDelete({
-                ids: [s.id],
-                title: "Delete this study?",
-                description: `${s.description || "The study"} of ${personName(s.name)} (${formatDate(s.date)}): ${plural(s.instances, "image")} will be removed from storage. This can't be undone.`,
-              })
-            }
+            onClick={() => onDelete(deleteOne(s))}
           >
             <Trash2 /> Delete
           </Button>

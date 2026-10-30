@@ -1,14 +1,14 @@
 // Patients: one row per Patient ID; a row shows that patient's studies.
 
 import { useMemo, useState } from "react";
-import { Download, FileStack, MoreHorizontal, Search, Trash2, Users } from "lucide-react";
+import { Download, FileStack, Search, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { api, formatDate, initials, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
@@ -45,7 +45,7 @@ export function PatientsPage() {
               <TableHead className="h-10 text-xs font-medium text-muted-foreground">Modalities</TableHead>
               <TableHead className="h-10 text-xs font-medium text-muted-foreground">Last study</TableHead>
               <TableHead className="h-10 text-right text-xs font-medium text-muted-foreground">Studies</TableHead>
-              <TableHead className="h-10 w-12" />
+              <TableHead className="h-10 w-24"><span className="sr-only">Actions</span></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -84,36 +84,38 @@ export function PatientsPage() {
                   <span className="ml-1.5 text-xs text-muted-foreground">{p.instances.toLocaleString()} images</span>
                 </TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-sm" aria-label="Patient actions">
-                        <MoreHorizontal />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-52">
-                      <DropdownMenuItem onSelect={() => go(href.studies(p.id))}>
-                        <FileStack /> Show studies
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild>
-                        <a href={url(`patients/${p.id}/archive`)} download>
-                          <Download /> Download ZIP
-                        </a>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={() =>
-                          setPending({
-                            ids: [p.id],
-                            title: "Delete this patient?",
-                            description: `${personName(p.name)} (${p.patientId || "no ID"}) and all ${plural(p.studies.length, "study", "studies")}, ${plural(p.instances, "image")}, will be removed from storage. This can't be undone.`,
-                          })
-                        }
-                      >
-                        <Trash2 /> Delete patient…
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <div className="flex items-center justify-end gap-0.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" asChild className="text-muted-foreground hover:text-foreground">
+                          <a href={url(`patients/${p.id}/archive`)} download aria-label="Download ZIP">
+                            <Download />
+                          </a>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Download ZIP</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Delete patient"
+                          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() =>
+                            setPending({
+                              ids: [p.id],
+                              title: "Delete this patient?",
+                              description: `${personName(p.name)} (${p.patientId || "no ID"}) and all ${plural(p.studies.length, "study", "studies")}, ${plural(p.instances, "image")}, will be removed from storage. This can't be undone.`,
+                            })
+                          }
+                        >
+                          <Trash2 />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete</TooltipContent>
+                    </Tooltip>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
