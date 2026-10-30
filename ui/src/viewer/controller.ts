@@ -659,7 +659,7 @@ export class Viewer {
     this.emit();
   }
 
-  async setLayout(i: number) {
+  async setLayout(i: number, fill = true) {
     if (this.mode === "mpr") await this.exitMpr();
     const { cols, rows } = LAYOUTS[i];
     this.layout = i;
@@ -675,6 +675,7 @@ export class Viewer {
     this.refit();
     if (this.current >= this.cells.length) this.current = 0;
     this.frame();
+    if (!fill) return this.emit();
     // new viewports show the series after the first one's, in its study
     const firstData = this.cells[0].data;
     const siblings: string[] = firstData ? (await this.seriesOfStudy(firstData.study.ID)) : [];
@@ -694,6 +695,21 @@ export class Viewer {
         ),
       );
     return this.seriesOfStudyCache.get(studyId)!;
+  }
+
+  /** A hanging protocol's plan: this layout, these series in these viewports. */
+  async hang(layout: number, series: (string | null)[], linked: boolean, mpr = false) {
+    if (this.mode === "mpr") await this.exitMpr();
+    // viewports keep nothing of the previous arrangement
+    for (const cell of this.cells) this.dropCell(cell);
+    this.cells = [];
+    this.current = 0;
+    await this.setLayout(layout, false);
+    await Promise.all(this.cells.map((cell, i) => (series[i] ? this.show(cell, series[i]!) : null)));
+    for (const cell of this.cells) if (!series[cell.i]) cell.note.textContent = "Drop a series here";
+    this.setLinked(linked);
+    if (mpr) await this.enterMpr();
+    this.cells[0]?.wrap.focus();
   }
 
   async showSeries(id: string) {
