@@ -105,24 +105,25 @@ DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after.
 
 ## Web interface
 
-At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other client:
+At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other client. Built with
+React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
+viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Worklist**: every study, newest first and grouped by month, with search (name, patient ID,
-  accession, description), modality and date filters, and sortable columns. Selecting a study
-  shows its series, sizes and details beside the list, with download (ZIP) and deletion for the
-  study or its patient. Checkboxes (shift-click for a range, `x` for the selected row) download
-  or delete several studies at once. Keys: `/` search, `↑` `↓` select, `Enter` open, `Del`
-  delete.
-- **Patients**: one row per patient; opening one shows only their studies.
-- **Viewer**: [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0. Frames come over WADO-RS
-  in the transfer syntax they are stored in and are decoded in the browser (JPEG-LS, JPEG,
-  JPEG 2000, HTJ2K, JPEG XL). One to four viewports (1×1, 1×2, 2×1, 2×2); the study's series
-  beside them load into the active one, and Link scrolls viewports of one frame of reference
-  together by slice position. Window/level with presets, zoom, pan, invert, rotate, flip;
-  length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI (area,
-  mean, standard deviation); orientation markers, cine, full screen, the DICOM tags.
-- **Upload**: drop files or folders anywhere on the page, or pick them from Upload; each file
-  is sent to `POST /instances` and counted as new, already stored or skipped.
+- **Studies**: search, modality and date filters (presets or a range), sortable columns. A row
+  opens the viewer on its largest series; the chevron shows the series and details inline; `⋯`
+  or a right click has the actions (open, download ZIP, copy the Study UID, the patient's
+  studies, delete). Checkboxes download or delete several studies at once (one ZIP from
+  `/tools/create-archive`).
+- **Patients**: one row per Patient ID; a row shows that patient's studies.
+- **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
+- **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
+  to `POST /instances` and is counted as new, already stored or skipped.
+- **Viewer**: full screen and dark. Frames come over WADO-RS in the transfer syntax they are
+  stored in and are decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). One
+  toolbar: window/level with presets, pan, zoom, measurements (length, pixel value, angle,
+  Cobb angle, bidirectional, elliptical and rectangle ROI), layouts up to 2 × 2 with linked
+  scrolling, rotate, flip, invert, cine, the DICOM tags. Orientation markers on each image;
+  every action has a key (`?` lists them).
 
 Like the REST API, it has no login yet: whoever reaches it can delete. `PACS_UI=false` turns it
 off.
@@ -212,7 +213,8 @@ cargo build --release -p pacs-server
 ```
 
 For work on the interface, `npm run dev` in `ui/` serves it with hot reload and sends API
-requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`).
+requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`);
+`npm run check` type-checks it. Components from shadcn/ui live in `ui/src/components/ui`.
 
 The Postgres tests run only when `PACS_TEST_POSTGRES_URL` names a server; each test makes a
 database of its own there. Every index test, the server tests and the reference comparison then
