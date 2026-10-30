@@ -106,32 +106,68 @@ const STACK_GROUP = "pacs-rs-stack";
 const MPR_GROUP = "pacs-rs-mpr";
 const PLANE_COLOR: Record<string, string> = { axial: "rgb(232, 84, 84)", sagittal: "rgb(92, 196, 120)", coronal: "rgb(96, 150, 255)" };
 
-// How images are drawn: "gpu" (WebGL, needed for MPR) or "cpu" (no WebGL at all). Kept in
-// this browser; the viewer switches to "cpu" by itself when WebGL draws blank.
-const RENDER_KEY = "pacs-rs-rendering";
-export function renderingMode(): "gpu" | "cpu" {
+// How images are drawn. "gpu": WebGL, the image copied to the page as usual. "readback":
+// WebGL, the image read out of WebGL and written into the page's canvas, for browsers where
+// the usual copy draws nothing (Chrome with ANGLE on Vulkan and Mesa RADV: "invalid mailbox
+// name", "texture is not a shared image"). "cpu": no WebGL at all, so no MPR. Kept in this
+// browser; the viewer moves one step down by itself when an image comes out blank.
+export type RenderingMode = "gpu" | "readback" | "cpu";
+const RENDER_KEY = "pacs-rs-rendering-mode";
+export function renderingMode(): RenderingMode {
   try {
-    return localStorage.getItem(RENDER_KEY) === "cpu" ? "cpu" : "gpu";
+    const m = localStorage.getItem(RENDER_KEY);
+    return m === "readback" || m === "cpu" ? m : "gpu";
   } catch {
     return "gpu";
   }
 }
-export function setRenderingMode(mode: "gpu" | "cpu") {
+export function setRenderingMode(mode: RenderingMode) {
   try {
-    if (mode === "cpu") localStorage.setItem(RENDER_KEY, "cpu");
-    else localStorage.removeItem(RENDER_KEY);
+    if (mode === "gpu") localStorage.removeItem(RENDER_KEY);
+    else localStorage.setItem(RENDER_KEY, mode);
+    // the first version's flag, which went straight to the CPU
+    localStorage.removeItem("pacs-rs-rendering");
   } catch {}
 }
+try {
+  localStorage.removeItem("pacs-rs-rendering");
+} catch {}
 
-// Cornerstone draws with WebGL off screen, then copies each image into a 2D canvas on the page.
-// On some GPU stacks (Chrome with ANGLE on Vulkan, Mesa RADV) that copy hands a GPU texture to
-// the compositor and fails ("invalid mailbox name", "texture is not a shared image"): the
-// canvas stays blank. A 2D canvas made to be read from keeps its pixels in memory instead, and
-// the copy then goes through a read back, which works everywhere. Only the viewer's canvases.
+// Which canvases have a WebGL context: those are the ones Cornerstone renders on, off screen.
+const webgl = new WeakMap<HTMLCanvasElement, WebGLRenderingContext | WebGL2RenderingContext>();
 const getContext = HTMLCanvasElement.prototype.getContext;
 HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, options?: any) {
+  // the page's own canvases keep their pixels in memory: the blank check reads them
   if (type === "2d" && this.closest(".viewer-grid")) options = { ...options, willReadFrequently: true };
-  return (getContext as any).call(this, type, options);
+  const context = (getContext as any).call(this, type, options);
+  if (context && (type === "webgl" || type === "webgl2")) webgl.set(this, context);
+  return context;
+} as any;
+
+// "readback": a WebGL canvas drawn into a 2D one is read with readPixels (right after
+// rendering, while its buffer still holds the image) and put in with putImageData.
+const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+CanvasRenderingContext2D.prototype.drawImage = function (this: CanvasRenderingContext2D, image: any, ...args: number[]) {
+  const gl = renderingMode() === "readback" && image instanceof HTMLCanvasElement ? webgl.get(image) : undefined;
+  if (!gl) return (drawImage as any).call(this, image, ...args);
+  let [sx, sy, sw, sh, dx, dy, dw, dh] = args.length >= 8 ? args : [0, 0, image.width, image.height, ...(args.length === 4 ? args : [args[0], args[1], image.width, image.height])];
+  sx = Math.round(sx);
+  sy = Math.round(sy);
+  sw = Math.round(sw);
+  sh = Math.round(sh);
+  if (sw <= 0 || sh <= 0) return;
+  const pixels = new Uint8ClampedArray(sw * sh * 4);
+  gl.readPixels(sx, image.height - sy - sh, sw, sh, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  // WebGL rows go bottom up
+  const out = new ImageData(sw, sh);
+  const row = sw * 4;
+  for (let y = 0; y < sh; y++) out.data.set(pixels.subarray((sh - 1 - y) * row, (sh - y) * row), y * row);
+  if (Math.round(dw) === sw && Math.round(dh) === sh) this.putImageData(out, Math.round(dx), Math.round(dy));
+  else {
+    const scratch = new OffscreenCanvas(sw, sh);
+    scratch.getContext("2d")!.putImageData(out, 0, 0);
+    (drawImage as any).call(this, scratch, 0, 0, sw, sh, dx, dy, dw, dh);
+  }
 } as any;
 
 let ready: Promise<void> | null = null;
@@ -522,8 +558,14 @@ export class Viewer {
       const range = image.scalarData ? image.imageData?.getPointData?.().getScalars?.().getRange?.() : null;
       const flat = range && range[0] === range[1];
       if (lit === 0 && !flat) {
-        setRenderingMode("cpu");
-        this.onBlank?.("This browser's WebGL drew a blank image, so the viewer now draws on the CPU. 3 planes and other planes need WebGL and are off.");
+        // one step down: the read back keeps WebGL (and MPR); only if that is blank too, the CPU
+        if (renderingMode() === "gpu") {
+          setRenderingMode("readback");
+          this.onBlank?.("This browser didn't show the WebGL image; the viewer now reads it out of WebGL itself.");
+        } else {
+          setRenderingMode("cpu");
+          this.onBlank?.("This browser's WebGL draws blank images, so the viewer now draws on the CPU. 3 planes and other planes need WebGL and are off.");
+        }
       }
     }, 600);
   }
