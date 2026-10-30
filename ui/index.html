@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>pacs-rs</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<script src="/src/main.js" type="module"></script>
+</head>
+<body>
+<header class="bar">
+  <a class="mark" href="#/studies" aria-label="pacs-rs, worklist"><i></i>PACS-RS</a>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#/studies" data-tab="studies">Worklist</a>
+    <a href="#/patients" data-tab="patients">Patients</a>
+  </nav>
+  <div class="bar-end">
+    <div class="upload-wrap">
+      <button class="btn" type="button" id="upload-button" aria-haspopup="menu" aria-expanded="false">Upload</button>
+      <div class="menu" id="upload-menu" role="menu" hidden>
+        <button type="button" role="menuitem" data-pick="files">Files…</button>
+        <button type="button" role="menuitem" data-pick="folder">Folder…</button>
+        <p>or drop them anywhere on the page</p>
+      </div>
+    </div>
+    <span class="health" id="health" title="Server status"><i></i><span>…</span></span>
+  </div>
+  <input type="file" id="pick-files" multiple hidden>
+  <input type="file" id="pick-folder" multiple webkitdirectory hidden>
+</header>
+<main id="view" tabindex="-1"></main>
+<footer class="status" id="status"></footer>
+<div class="dropzone" id="dropzone" hidden><div><b>Drop to store</b><span>DICOM files or folders</span></div></div>
+<section class="tray" id="tray" hidden aria-live="polite"></section>
+<div id="toasts" aria-live="polite"></div>
+<dialog id="confirm">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-text"></p>
+    <div class="dialog-actions">
+      <button value="cancel" class="btn" autofocus>Cancel</button>
+      <button value="ok" class="btn danger" id="confirm-ok">Delete</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
