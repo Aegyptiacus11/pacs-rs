@@ -1,18 +1,19 @@
-//! `GET /studies/{id}/archive`, `/patients/{id}/archive`: the files in a ZIP, one folder per patient,
-//! study and series, as the reference server (26.9.1) lays it out:
-//! `PatientID - PatientName/AccessionNumber - StudyDescription/
+//! `GET /studies/{id}/archive`, `/patients/{id}/archive` and `/tools/create-archive`: the files
+//! in a ZIP, one folder per patient, study and series, as the reference server (26.9.1) lays it
+//! out: `PatientID - PatientName/AccessionNumber - StudyDescription/
 //! SeriesNumber - Modality - SeriesDescription/CT000001.dcm`. Streamed: see [`zip_stream`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use pacs_archive::Archive;
+use serde::Deserialize;
 use serde_json::Value;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
@@ -57,7 +58,7 @@ pub(crate) async fn study(
     let index = state.archive.index();
     let study = index.rest_study(&id).await?.ok_or(RestError::NotFound)?;
     let entries = study_entries(index, study).await?;
-    Ok(zip_response(&state, &id, entries))
+    Ok(zip_response(&state, &format!("{id}.zip"), files(entries)))
 }
 
 /// `GET /patients/{id}/archive`: each of the patient's studies, laid out as above.
@@ -73,14 +74,127 @@ pub(crate) async fn patient(
             entries.extend(study_entries(index, study).await?);
         }
     }
-    Ok(zip_response(&state, &id, entries))
+    Ok(zip_response(&state, &format!("{id}.zip"), files(entries)))
 }
 
-/// (path in the ZIP, storage key) of a study's files, in series then instance order.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateArchive {
+    #[serde(rename = "Resources")]
+    resources: Vec<String>,
+    #[serde(rename = "Synchronous", default = "yes")]
+    synchronous: bool,
+    #[serde(rename = "Transcode")]
+    transcode: Option<Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// `POST /tools/create-archive` with `{"Resources": [...]}`: patients, studies, series and
+/// instances in one ZIP, each file once however many of the resources hold it.
+pub(crate) async fn create_archive(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Response, RestError> {
+    let request: CreateArchive = serde_json::from_slice(&body).map_err(|e| {
+        RestError::bad_request("Bad request", format!("not an archive request: {e}"))
+    })?;
+    if !request.synchronous {
+        return Err(RestError::bad_request(
+            "Not supported yet",
+            "only synchronous archives: there are no jobs yet",
+        ));
+    }
+    if request.transcode.is_some() {
+        return Err(RestError::bad_request(
+            "Not supported yet",
+            "archives hold the files as stored: no Transcode",
+        ));
+    }
+    resources_archive(&state, &request.resources).await
+}
+
+/// `GET /tools/create-archive?resources=a,b`: the same, so that a link can download it.
+pub(crate) async fn create_archive_get(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Response, RestError> {
+    let ids: Vec<String> = params
+        .get("resources")
+        .map(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    resources_archive(&state, &ids).await
+}
+
+/// The files of `ids` (any level) in the order they are named. A series or instance keeps
+/// the folder and number it has in its study's archive. An unknown ID fails the whole
+/// request, before anything is sent.
+async fn resources_archive(state: &AppState, ids: &[String]) -> Result<Response, RestError> {
+    let index = state.archive.index();
+    let mut studies: HashMap<String, Vec<Entry>> = HashMap::new();
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    for id in ids {
+        // (study, series to keep, instance to keep); None keeps all
+        let mut wanted: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+        if let Some(patient) = index.rest_patient(id).await? {
+            wanted.extend(patient.studies.into_iter().map(|s| (s, None, None)));
+        } else if index.rest_study(id).await?.is_some() {
+            wanted.push((id.clone(), None, None));
+        } else if let Some(series) = index.rest_series(id).await? {
+            wanted.push((series.parent_study, Some(id.clone()), None));
+        } else if let Some(instance) = index.rest_instance(id).await? {
+            wanted.push((instance.parent_study, None, Some(id.clone())));
+        } else {
+            return Err(RestError::NotFound);
+        }
+        for (study_id, series, instance) in wanted {
+            if !studies.contains_key(&study_id) {
+                let Some(study) = index.rest_study(&study_id).await? else {
+                    continue;
+                };
+                studies.insert(study_id.clone(), study_entries(index, study).await?);
+            }
+            for entry in &studies[&study_id] {
+                let keep = series.as_ref().is_none_or(|s| *s == entry.series)
+                    && instance.as_ref().is_none_or(|i| *i == entry.instance);
+                if keep && seen.insert(entry.instance.clone()) {
+                    entries.push(entry.clone());
+                }
+            }
+        }
+    }
+    Ok(zip_response(state, "Archive.zip", files(entries)))
+}
+
+/// One file of an archive.
+#[derive(Debug, Clone)]
+struct Entry {
+    instance: String,
+    series: String,
+    path: String,
+    object_key: String,
+}
+
+fn files(entries: Vec<Entry>) -> Vec<(String, String)> {
+    entries
+        .into_iter()
+        .map(|e| (e.path, e.object_key))
+        .collect()
+}
+
+/// A study's files, in series then instance order.
 async fn study_entries(
     index: &pacs_index::Index,
     study: pacs_index::RestStudy,
-) -> Result<Vec<(String, String)>, RestError> {
+) -> Result<Vec<Entry>, RestError> {
     let patient_dir = name(&[
         tag(&study.patient_main_tags, "PatientID"),
         tag(&study.patient_main_tags, "PatientName"),
@@ -112,19 +226,24 @@ async fn study_entries(
         let n = counters.entry(instance.parent_series.clone()).or_default();
         *n += 1;
         let path = format!("{patient_dir}/{study_dir}/{dir}/{prefix}{n:06}.dcm");
-        entries.push((path, instance.object_key));
+        entries.push(Entry {
+            instance: instance.public_id,
+            series: instance.parent_series,
+            path,
+            object_key: instance.object_key,
+        });
     }
     Ok(entries)
 }
 
-fn zip_response(state: &AppState, id: &str, entries: Vec<(String, String)>) -> Response {
+fn zip_response(state: &AppState, filename: &str, entries: Vec<(String, String)>) -> Response {
     let body = Body::from_stream(zip_stream(state.archive.clone(), entries));
     (
         [
             (CONTENT_TYPE, "application/zip".to_owned()),
             (
                 CONTENT_DISPOSITION,
-                format!(r#"attachment; filename="{id}.zip""#),
+                format!(r#"attachment; filename="{filename}""#),
             ),
         ],
         body,

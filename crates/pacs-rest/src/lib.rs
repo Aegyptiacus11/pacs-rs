@@ -69,6 +69,10 @@ pub fn router(archive: Archive, max_upload_bytes: usize) -> Router {
         )
         .route("/patients/{id}/archive", get(archive::patient))
         .route("/tools/find", post(find::find))
+        .route(
+            "/tools/create-archive",
+            get(archive::create_archive_get).post(archive::create_archive),
+        )
         .layer(DefaultBodyLimit::max(max_upload_bytes))
         .with_state(AppState { archive })
 }
