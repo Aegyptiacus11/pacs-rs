@@ -22,6 +22,7 @@ import {
   Info,
   Keyboard,
   LayoutGrid,
+  SquarePlus,
   Link2,
   Maximize,
   Minimize,
@@ -41,7 +42,16 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -74,16 +84,18 @@ const SHORTCUTS: [string, string][] = [
   ["Wheel, ↑ ↓", "Previous or next image"],
   ["Page Up / Down", "Ten images back or forward"],
   ["[ ]", "Previous or next series"],
-  ["W P Z M", "Window, pan, zoom, magnify"],
+  ["W P Z", "Window, pan, zoom"],
+  ["M", "Magnifying glass: hold over a spot"],
+  ["N", "Add a viewport"],
   ["L H A C B R G", "Measurement tools"],
   ["X", "Crosshairs (MPR)"],
-  ["V", "MPR on or off"],
+  ["V", "3 planes with crosshairs, on or off"],
   ["Shift Delete", "Remove all measurements"],
   ["1 – 6", "Window presets"],
   ["I", "Invert"],
   ["E", "Rotate 90°"],
   ["Space", "Play or stop"],
-  ["K", "Link scrolling"],
+  ["K", "Scroll the viewports together"],
   ["O", "Show or hide image text"],
   ["T", "DICOM tags"],
   ["F", "Full screen"],
@@ -286,6 +298,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       else if (e.key === "i") v.toggleInvert();
       else if (e.key === "e") v.rotate();
       else if (e.key === "v") state?.mode === "mpr" ? v.exitMpr() : startMpr();
+      else if (e.key === "n") v.addView();
       else if (e.key === " ") {
         e.preventDefault();
         v.cine();
@@ -349,8 +362,35 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               </DropdownMenuItem>
             </ToolMenu>
             <ToolBtn label="Pan" Icon={Move} shortcut="P" active={s.tool === "pan"} onClick={() => v.useTool("pan")} />
-            <ToolBtn label="Zoom" Icon={ZoomIn} shortcut="Z" active={s.tool === "zoom"} onClick={() => v.useTool("zoom")} />
-            <ToolBtn label="Magnify" Icon={ScanSearch} shortcut="M" active={s.tool === "magnify"} onClick={() => v.useTool("magnify")} />
+            <ToolMenu
+              label={s.tool === "magnify" ? "Magnifier" : "Zoom"}
+              menuLabel="Zoom options"
+              Icon={s.tool === "magnify" ? ScanSearch : ZoomIn}
+              shortcut={s.tool === "magnify" ? "M" : "Z"}
+              active={s.tool === "zoom" || s.tool === "magnify"}
+              onClick={() => v.useTool(s.tool === "magnify" ? "magnify" : "zoom")}
+            >
+              <DropdownMenuItem onSelect={() => v.useTool("zoom")}>
+                <ZoomIn />
+                <div className="flex flex-col">
+                  <span>Zoom</span>
+                  <span className="text-xs text-muted-foreground">Drag up or down to zoom the whole image</span>
+                </div>
+                <DropdownMenuShortcut>Z</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => v.useTool("magnify")}>
+                <ScanSearch />
+                <div className="flex flex-col">
+                  <span>Magnifying glass</span>
+                  <span className="text-xs text-muted-foreground">Hold the button over a spot to see it larger</span>
+                </div>
+                <DropdownMenuShortcut>M</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => v.reset()}>
+                <Maximize /> Fit to the viewport <DropdownMenuShortcut>dbl-click</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            </ToolMenu>
             <ToolMenu
               label={measuring?.label ?? "Measure"}
               menuLabel="Measurement tools"
@@ -389,8 +429,29 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
             <ToolBtn label="Reset" Icon={RotateCcw} onClick={() => v.reset()} />
             <Sep />
 
-            <ToolMenu label="Layout" menuLabel="Layouts" Icon={LayoutGrid}>
-              <DropdownMenuLabel>Viewports</DropdownMenuLabel>
+            <ToolMenu
+              label="Add view"
+              menuLabel="Add a viewport: which plane or series"
+              tip={s.canMpr ? "Add a viewport: this series in the next plane (sagittal, then coronal)" : "Add a viewport with the next series"}
+              Icon={SquarePlus}
+              shortcut="N"
+              disabled={!mpr && !s.canAdd}
+              onClick={() => v.addView()}
+            >
+              <DropdownMenuLabel>Add a viewport</DropdownMenuLabel>
+              {(["axial", "sagittal", "coronal"] as const).map((plane) => (
+                <DropdownMenuItem key={plane} disabled={!s.canMpr} onSelect={() => v.addView({ plane })}>
+                  <Axis3d />
+                  This series, {plane}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem onSelect={() => v.addView({ nextSeries: true })}>
+                <SquarePlus /> The next series of the study
+              </DropdownMenuItem>
+              {!s.canMpr && s.mprBlocked && <div className="px-2 pb-1.5 text-xs text-muted-foreground">{s.mprBlocked}.</div>}
+            </ToolMenu>
+            <ToolMenu label="Views" menuLabel="Views: how many, and which planes" Icon={LayoutGrid}>
+              <DropdownMenuLabel>How many viewports</DropdownMenuLabel>
               <div className="grid grid-cols-3 gap-1 p-1">
                 {LAYOUTS.map((l, i) => (
                   <DropdownMenuItem
@@ -408,10 +469,29 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
                   </DropdownMenuItem>
                 ))}
               </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Planes</DropdownMenuLabel>
+              <DropdownMenuItem disabled={!mpr && !s.canMpr} onSelect={() => (mpr ? v.exitMpr() : startMpr())}>
+                <Axis3d />
+                <div className="flex flex-col">
+                  <span>{mpr ? "Leave the 3 planes" : "3 planes with crosshairs"}</span>
+                  <span className="text-xs text-muted-foreground">{s.mprBlocked && !mpr ? s.mprBlocked : "Axial, sagittal, coronal and a MIP of this series"}</span>
+                </div>
+                <DropdownMenuShortcut>V</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <div className="px-2 pb-1.5 text-xs text-muted-foreground">Any viewport can also show another plane: use the plane menu at its bottom.</div>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem checked={s.linked} disabled={mpr || s.cells.length < 2} onSelect={(e) => e.preventDefault()} onCheckedChange={(on) => v.setLinked(on)}>
+                <div className="flex flex-col">
+                  <span>Scroll the viewports together</span>
+                  <span className="text-xs text-muted-foreground">Each one follows to the same slice position</span>
+                </div>
+                <DropdownMenuShortcut>K</DropdownMenuShortcut>
+              </DropdownMenuCheckboxItem>
             </ToolMenu>
             <ToolBtn
-              label={s.loadingVolume ? "Loading…" : "MPR"}
-              tip={!mpr && s.mprBlocked ? s.mprBlocked : "Axial, sagittal and coronal, with crosshairs and MIP"}
+              label={s.loadingVolume ? "Loading…" : "3 planes"}
+              tip={!mpr && s.mprBlocked ? s.mprBlocked : "Axial, sagittal and coronal of this series, with crosshairs, and a MIP"}
               Icon={Axis3d}
               shortcut="V"
               active={mpr}
@@ -419,7 +499,9 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               onClick={() => (mpr ? v.exitMpr() : startMpr())}
             />
             {mpr && <ToolBtn label="Crosshairs" Icon={Crosshair} shortcut="X" active={s.tool === "crosshairs"} onClick={() => v.useTool("crosshairs")} />}
-            {!mpr && <ToolBtn label="Link" Icon={Link2} shortcut="K" active={s.linked} disabled={s.cells.length < 2} onClick={() => v.setLinked(!s.linked)} />}
+            {!mpr && s.cells.length > 1 && (
+              <ToolBtn label="Sync" tip="Scroll the viewports together, to the same slice position" Icon={Link2} shortcut="K" active={s.linked} onClick={() => v.setLinked(!s.linked)} />
+            )}
             <ToolBtn label={s.playing ? "Stop" : "Cine"} Icon={s.playing ? Pause : Play} shortcut="Space" active={s.playing} onClick={() => v.cine()} />
             <Sep />
 

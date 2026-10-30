@@ -196,9 +196,10 @@
   opacity: 0;
   transition: opacity 120ms;
 }
+/* only while the pointer is over the view, so it never sits on the text for long */
 .viewer-grid .cell:hover .cell-menus,
-.viewer-grid .cell.active .cell-menus,
 .viewer-grid .cell-menus:focus-within { opacity: 1; }
+.viewer-grid .cell-menus { padding: 3px; border-radius: 6px; background: oklch(0.12 0.004 260 / 0.9); box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08); }
 .viewer-grid .cell-menus select {
   height: 22px;
   padding: 0 6px;
@@ -235,3 +236,15 @@
 }
 .viewer-grid .ov-scale svg { stroke: oklch(0.85 0.12 85); stroke-width: 1; filter: drop-shadow(0 0 1px #000); }
 .viewer-grid .ov-scale:empty { display: none; }
+.viewer-grid .cell-menus .cell-close {
+  width: 22px;
+  height: 22px;
+  border: 1px solid oklch(1 0 0 / 0.14);
+  border-radius: 4px;
+  background: oklch(0.18 0.004 260 / 0.85);
+  color: oklch(0.85 0.005 260);
+  font: 14px/1 var(--font-sans);
+  cursor: pointer;
+}
+.viewer-grid .cell-menus .cell-close:hover { color: #fff; background: var(--destructive); border-color: var(--destructive); }
+.viewer-grid .cell:only-child .cell-close { display: none; }
