@@ -119,12 +119,18 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Light or dark**: one button in the header, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
-- **Viewer**: full screen and dark. Frames come over WADO-RS in the transfer syntax they are
-  stored in and are decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). One
-  toolbar: window/level with presets, pan, zoom, measurements (length, pixel value, angle,
-  Cobb angle, bidirectional, elliptical and rectangle ROI), layouts up to 2 × 2 with linked
-  scrolling, rotate, flip, invert, cine, the DICOM tags. Orientation markers on each image;
-  every action has a key (`?` lists them).
+- **Viewer**: full screen and dark, laid out like a reading workstation. A toolbar of labelled
+  tools: window/level with presets and invert, pan, zoom, magnify, measurements (length, pixel
+  value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate and flip,
+  layouts up to 2 × 3 with linked scrolling, MPR, cine, DICOM tags, export (PNG of the view, or
+  the DICOM file), full screen. On the left, the patient's studies (current, priors and later
+  ones) and their series: a click shows one in the active viewport, a drag shows it in any.
+  Each viewport has its own text, orientation letters, a centimetre scale, its position in
+  the series along the top, and a preset menu. MPR shows the series as a volume, axial,
+  sagittal and coronal with crosshairs, and a full-thickness coronal MIP; each view takes a
+  thin slice or a MIP slab of 5, 10 or 20 mm. Frames come over WADO-RS as stored and are
+  decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). MPR needs WebGL; the rest
+  also renders without it. `?` lists the keys.
 
 Like the REST API, it has no login yet: whoever reaches it can delete. `PACS_UI=false` turns it
 off.
