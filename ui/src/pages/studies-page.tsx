@@ -1,20 +1,19 @@
 // The studies: a worklist on the left, the chosen study on the right. A click on a row shows
 // the study in the pane (its patient, series, details, the patient's other studies and the
 // actions, once); a double click or Enter opens it in the viewer; ↑ ↓ move through the list;
-// checkboxes act on several studies at once; a right click has the actions too.
+// checkboxes act on several studies at once; a right click has the actions too. The server
+// filters, sorts and pages (/ui/api/studies): the browser holds one page at a time.
 
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   useReactTable,
   type ColumnDef,
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,7 +41,20 @@ import { useUpload } from "@/components/upload";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
-import { deleteStudies, useRefreshStudies, useStudies, useStudySeries, type Study } from "@/lib/studies";
+import {
+  deleteStudies,
+  usePatientStudies,
+  useRefreshStudies,
+  useStudy,
+  useStudyFacets,
+  useStudyPage,
+  useStudySeries,
+  useStudySummary,
+  type Study,
+  type StudyFilters,
+  type StudyQuery,
+  type StudySummary,
+} from "@/lib/studies";
 import { cn } from "@/lib/utils";
 
 const RANGES = [
@@ -124,19 +136,33 @@ function SortHeader({ column, children, className }: { column: any; children: Re
   );
 }
 
+// the table's columns, as the server sorts them
+const SORT_KEYS: Record<string, StudyQuery["sort"]> = { name: "patient", description: "description", modality: "modality", date: "date", series: "series", instances: "images" };
+const ymd = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+
+/** The dates a range keeps, `YYYYMMDD`, either end open. */
+function rangeDates(range: Range | "custom", span: Span): { from: string | null; to: string | null } {
+  if (range === "custom") return { from: span.from ? key(span.from) : null, to: span.to ? key(span.to) : null };
+  const since = sinceFor(range);
+  return { from: since ? ymd(since) : null, to: null };
+}
+
 export function StudiesPage({ patient, open }: { patient: string | null; open: string | null }) {
-  const studies = useStudies();
   const refresh = useRefreshStudies();
   const upload = useUpload();
-  const [query, setQuery] = useState("");
+  const [typed, setTyped] = useState("");
+  const [q, setQ] = useState("");
   const [modalities, setModalities] = useState<string[]>([]);
   const [range, setRange] = useState<Range | "custom">("any");
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
   const [sexes, setSexes] = useState<string[]>([]);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: savedPageSize() });
   const [current, setCurrent] = useState<string | null>(open);
   const [pending, setPending] = useState<PendingDelete | null>(null);
+  // after ↑ or ↓ past the page's end: the row to choose once the next page is in
+  const [edge, setEdge] = useState<"first" | "last" | null>(null);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setCurrent(open), [open]);
   // the URL names the study shown, so a reload or a link comes back to it
@@ -144,49 +170,53 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     const to = href.studies(patient, current);
     if (location.hash !== to) history.replaceState(null, "", to);
   }, [patient, current]);
+  // the server is asked once typing pauses
+  useEffect(() => {
+    const t = setTimeout(() => setQ(typed), 250);
+    return () => clearTimeout(t);
+  }, [typed]);
 
-  const all = studies.data ?? [];
-  const owner = patient ? all.find((s) => s.patient === patient) : null;
-  const shown = all.find((s) => s.id === current) ?? null;
+  const filters: StudyFilters = { q, ...rangeDates(range, span), modalities, sexes, patient };
+  const filterKey = JSON.stringify(filters);
+  const sort = sorting[0] ?? { id: "date", desc: true };
+  // other filters or another order: back to the first page
+  useEffect(() => setPagination((p) => (p.pageIndex ? { ...p, pageIndex: 0 } : p)), [filterKey, sort.id, sort.desc]);
+  const { pageIndex, pageSize } = pagination;
+  const page = useStudyPage({ ...filters, sort: SORT_KEYS[sort.id] ?? "date", desc: sort.desc, offset: pageIndex * pageSize, limit: pageSize });
+  const summary = useStudySummary(filters);
+  const choices = useStudyFacets(patient);
+  const theirs = usePatientStudies(patient);
+  const rows = page.data?.studies ?? [];
+  const total = page.data?.total ?? 0;
 
-  const rows = useMemo(() => {
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const since = range === "custom" ? null : sinceFor(range);
-    return all.filter((s) => {
-      if (range === "custom" && !inSpan(s.date, span)) return false;
-      if (patient && s.patient !== patient) return false;
-      if (modalities.length && !s.modalities.some((m) => modalities.includes(m))) return false;
-      if (sexes.length && !sexes.includes(s.sex || "O")) return false;
-      if (since && !(parseDate(s.date) && parseDate(s.date)! >= since)) return false;
-      if (!words.length) return true;
-      const text = `${s.name} ${personName(s.name)} ${s.patientId} ${s.accession} ${s.description} ${s.referring} ${s.modalities.join(" ")} ${s.date}`.toLowerCase();
-      return words.every((w) => text.includes(w));
-    });
-  }, [all, query, modalities, sexes, range, span, patient]);
+  // every study seen on a page, for the selection and the pane
+  const known = useRef(new Map<string, Study>()).current;
+  for (const s of [...rows, ...(summary.data?.recent ?? []), ...(theirs.data ?? [])]) known.set(s.id, s);
+  const one = useStudy(current, current ? known.get(current) : undefined);
+  const shown = (current && (known.get(current) ?? one.data)) || null;
+  const owner = patient ? (theirs.data?.[0] ?? null) : null;
 
-  // what each filter can pick, with how many studies have it
+  // what each filter can pick, with how many studies have it (over every study, or the patient's)
   const facets = useMemo(() => {
-    const scope = patient ? all.filter((s) => s.patient === patient) : all;
-    const count = (pred: (s: Study) => boolean) => scope.filter(pred).length;
-    const modalityList = [...new Set(scope.flatMap((s) => s.modalities))].sort();
-    const sexList = [...new Set(scope.map((s) => s.sex || "O"))].sort();
+    const f = choices.data ?? { modalities: {}, sexes: {}, dates: {} };
+    const dates = Object.entries(f.dates);
+    const all = Object.values(f.sexes).reduce((n, c) => n + c, 0);
+    const extra = Object.keys(f.modalities).filter((m) => !IMAGING_MODALITIES.some(([c]) => c === m)).sort();
     return {
+      all,
       // every imaging modality, then whatever else the archive holds (SEG, SR, ...)
-      modalities: [...IMAGING_MODALITIES, ...modalityList.filter((m) => !IMAGING_MODALITIES.some(([c]) => c === m)).map((m) => [m, ""] as [string, string])].map(([m, name]) => ({
-        value: m,
-        label: m,
-        hint: name,
-        count: count((s) => s.modalities.includes(m)),
-      })),
+      modalities: [...IMAGING_MODALITIES, ...extra.map((m) => [m, ""] as [string, string])].map(([m, name]) => ({ value: m, label: m, hint: name, count: f.modalities[m] ?? 0 })),
       ranges: Object.fromEntries(
         RANGES.map(([value]) => {
           const since = sinceFor(value);
-          return [value, since ? count((s) => !!parseDate(s.date) && parseDate(s.date)! >= since) : scope.length];
+          return [value, since ? dates.filter(([d]) => d >= ymd(since)).reduce((n, [, c]) => n + c, 0) : all];
         }),
       ) as Record<Range, number>,
-      sexes: sexList.map((x) => ({ value: x, label: SEXES[x] ?? x, count: count((s) => (s.sex || "O") === x) })),
+      sexes: Object.entries(f.sexes).map(([x, n]) => ({ value: x, label: SEXES[x] ?? x, count: n })),
+      dates: dates.map(([d]) => d),
+      count: (s: Span) => dates.filter(([d]) => inSpan(d, s)).reduce((n, [, c]) => n + c, 0),
     };
-  }, [all, patient]);
+  }, [choices.data]);
 
   const columns = useMemo<ColumnDef<Study>[]>(
     () => [
@@ -267,35 +297,36 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     [],
   );
 
+  // the server sorts and pages; the table only lays the page out
   const table = useReactTable({
     data: rows,
     columns,
     getRowId: (s) => s.id,
-    state: { sorting, rowSelection: selection },
+    state: { sorting, rowSelection: selection, pagination },
     onSortingChange: setSorting,
     onRowSelectionChange: setSelection,
+    onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: savedPageSize(), pageIndex: 0 } },
-    autoResetPageIndex: true,
+    manualSorting: true,
+    manualPagination: true,
+    rowCount: total,
   });
 
-  const selected = all.filter((s) => selection[s.id]);
-  const filtered = !!query || modalities.length > 0 || sexes.length > 0 || range !== "any";
-  const patients = new Set(rows.map((s) => s.patient)).size;
-  const { pageIndex, pageSize } = table.getState().pagination;
+  const selected = Object.keys(selection).filter((id) => selection[id]).map((id) => known.get(id)).filter((x): x is Study => !!x);
+  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || range !== "any";
   const visible = table.getRowModel().rows;
-  // every row in order, all pages
-  const ordered = table.getPrePaginationRowModel().rows;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
   // what the summary covers: the date range, and whether other filters narrow it
-  const scope = (range === "custom" ? spanLabel(span) : RANGE_NAMES[range]) + (query || modalities.length || sexes.length ? ", filtered" : "");
+  const scope = (range === "custom" ? spanLabel(span) : RANGE_NAMES[range]) + (q || modalities.length || sexes.length ? ", filtered" : "");
 
-  // a study named by a link, on another page: that page
+  // a page reached by ↑ or ↓: its first or last row
   useEffect(() => {
-    const at = ordered.findIndex((r) => r.id === open);
-    if (at >= 0 && Math.floor(at / pageSize) !== pageIndex) table.setPageIndex(Math.floor(at / pageSize));
-  }, [open, studies.data]);
+    if (!edge || page.isPlaceholderData || !rows.length) return;
+    const row = edge === "first" ? rows[0] : rows[rows.length - 1];
+    setCurrent(row.id);
+    setEdge(null);
+    requestAnimationFrame(() => list.current?.querySelector(`[data-row="${row.id}"]`)?.scrollIntoView({ block: "nearest" }));
+  }, [edge, page.data, page.isPlaceholderData]);
 
   // ↑ ↓ through the list, onto the next or previous page at its ends; Enter opens, space ticks
   function onListKey(e: React.KeyboardEvent) {
@@ -303,13 +334,18 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     const at = visible.findIndex((r) => r.id === current);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const from = ordered.findIndex((r) => r.id === current);
-      const to = from < 0 ? pageIndex * pageSize : Math.max(0, Math.min(ordered.length - 1, from + (e.key === "ArrowDown" ? 1 : -1)));
-      const next = ordered[to];
-      if (next) {
-        if (Math.floor(to / pageSize) !== pageIndex) table.setPageIndex(Math.floor(to / pageSize));
-        setCurrent(next.id);
-        requestAnimationFrame(() => list.current?.querySelector(`[data-row="${next.id}"]`)?.scrollIntoView({ block: "nearest" }));
+      const down = e.key === "ArrowDown";
+      if (at < 0 && visible.length) return setCurrent(visible[down ? 0 : visible.length - 1].id);
+      const to = at + (down ? 1 : -1);
+      if (to >= visible.length && pageIndex < pages - 1) {
+        setPagination((p) => ({ ...p, pageIndex: p.pageIndex + 1 }));
+        setEdge("first");
+      } else if (to < 0 && pageIndex > 0) {
+        setPagination((p) => ({ ...p, pageIndex: p.pageIndex - 1 }));
+        setEdge("last");
+      } else if (visible[to]) {
+        setCurrent(visible[to].id);
+        list.current?.querySelector(`[data-row="${visible[to].id}"]`)?.scrollIntoView({ block: "nearest" });
       }
     } else if (e.key === "Enter" && current) openStudy(current);
     else if (e.key === " " && at >= 0) {
@@ -336,11 +372,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <div className="mr-auto min-w-0">
             <h1 className="truncate text-lg font-semibold tracking-tight">{owner ? personName(owner.name) : "Studies"}</h1>
             <p className="text-sm text-muted-foreground">
-              {studies.isPending
+              {page.isPending
                 ? "Loading…"
                 : owner
-                  ? [owner.patientId, sexAge(owner.sex, owner.birth), plural(rows.length, "study", "studies")].filter(Boolean).join(" · ")
-                  : `${plural(rows.length, "study", "studies")} from ${plural(patients, "patient")}${filtered ? " match" : ""}`}
+                  ? [owner.patientId, sexAge(owner.sex, owner.birth), plural(total, "study", "studies")].filter(Boolean).join(" · ")
+                  : `${plural(total, "study", "studies")}${summary.data ? ` from ${plural(summary.data.patients, "patient")}` : ""}${filtered ? " match" : ""}`}
             </p>
           </div>
           <ToggleGroup
@@ -362,8 +398,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <CustomRange
             active={range === "custom"}
             span={span}
-            dates={all.filter((x) => !patient || x.patient === patient).map((x) => x.date)}
-            count={(s) => all.filter((x) => (!patient || x.patient === patient) && inSpan(x.date, s)).length}
+            dates={facets.dates}
+            count={facets.count}
             onApply={(s) => {
               setSpan(s);
               setRange(s.from || s.to ? "custom" : "any");
@@ -374,7 +410,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
           <div className="relative w-full sm:w-72">
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name, ID, accession, description…" className="h-8 bg-card pl-8" />
+            <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Name, ID, accession, description…" className="h-8 bg-card pl-8" />
           </div>
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
           <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
@@ -393,7 +429,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               size="sm"
               className="h-8 px-2 text-muted-foreground"
               onClick={() => {
-                setQuery("");
+                setTyped("");
+                setQ("");
                 setModalities([]);
                 setSexes([]);
                 setRange("any");
@@ -427,7 +464,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               ))}
             </TableHeader>
             <TableBody>
-              {studies.isPending &&
+              {page.isPending &&
                 Array.from({ length: 8 }, (_, i) => (
                   <TableRow key={i} className="h-12 hover:bg-transparent">
                     <TableCell colSpan={7} className="px-6">
@@ -461,19 +498,19 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                     </TableRow>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-56">
-                    <StudyMenu study={row.original} all={all} kind="context" onDelete={setPending} />
+                    <StudyMenu study={row.original} kind="context" onDelete={setPending} />
                   </ContextMenuContent>
                 </ContextMenu>
               ))}
             </TableBody>
           </Table>
 
-          {!studies.isPending && rows.length === 0 && (
+          {!page.isPending && !page.isPlaceholderData && rows.length === 0 && (
             <div className="flex flex-col items-center px-6 py-20 text-center">
               <div className="mb-4 grid size-11 place-items-center rounded-full border bg-card">
                 <FileStack className="size-5 text-muted-foreground" strokeWidth={1.75} />
               </div>
-              {all.length === 0 ? (
+              {facets.all === 0 && !patient ? (
                 <>
                   <div className="font-medium">No studies yet</div>
                   <p className="mt-1 max-w-sm text-sm text-muted-foreground">Upload DICOM files or folders, or send them with STOW-RS or POST /instances.</p>
@@ -491,13 +528,14 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           )}
         </div>
 
-        {rows.length > 0 && (
+        {total > 0 && (
           <Pager
-            total={rows.length}
+            total={total}
             pageIndex={pageIndex}
             pageSize={pageSize}
+            loading={page.isPlaceholderData}
             onPage={(i) => {
-              table.setPageIndex(i);
+              setPagination((p) => ({ ...p, pageIndex: i }));
               list.current?.scrollTo({ top: 0 });
             }}
             onPageSize={(n) => {
@@ -505,7 +543,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                 localStorage.setItem(PAGE_KEY, String(n));
               } catch {}
               // the first row shown stays on the page shown
-              table.setPagination({ pageSize: n, pageIndex: Math.floor((pageIndex * pageSize) / n) });
+              setPagination({ pageSize: n, pageIndex: Math.floor((pageIndex * pageSize) / n) });
             }}
           />
         )}
@@ -513,9 +551,9 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
       <aside aria-label="The chosen study" className="hidden w-[400px] shrink-0 overflow-y-auto border-l bg-card lg:block">
         {shown ? (
-          <StudyPane key={shown.id} study={shown} all={all} onPick={setCurrent} onDelete={setPending} />
+          <StudyPane key={shown.id} study={shown} onPick={setCurrent} onDelete={setPending} />
         ) : (
-          <ArchiveSummary studies={rows} scope={scope} total={all.length} loading={studies.isPending} onPick={setCurrent} />
+          <ArchiveSummary summary={summary.data} scope={scope} total={facets.all} onPick={setCurrent} />
         )}
       </aside>
 
@@ -702,8 +740,9 @@ function deleteOne(s: Study): PendingDelete {
 }
 
 // the actions beyond Open and Download: in the pane's ⋯ menu and on a right click
-function StudyMenu({ study: s, all, kind, onDelete }: { study: Study; all: Study[]; kind: "dropdown" | "context"; onDelete: (p: PendingDelete) => void }) {
-  const theirs = all.filter((x) => x.patient === s.patient);
+function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown" | "context"; onDelete: (p: PendingDelete) => void }) {
+  // asked for when the menu opens
+  const theirs = usePatientStudies(s.patient).data ?? [s];
   const [Item, Separator] = kind === "dropdown" ? [DropdownMenuItem, DropdownMenuSeparator] : [ContextMenuItem, ContextMenuSeparator];
   return (
     <>
@@ -765,9 +804,9 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 }
 
 // the chosen study: who, what, its series, the patient's other studies, and what can be done
-function StudyPane({ study: s, all, onPick, onDelete }: { study: Study; all: Study[]; onPick: (id: string) => void; onDelete: (p: PendingDelete) => void }) {
+function StudyPane({ study: s, onPick, onDelete }: { study: Study; onPick: (id: string) => void; onDelete: (p: PendingDelete) => void }) {
   const details = useStudySeries(s.id);
-  const others = all.filter((x) => x.patient === s.patient && x.id !== s.id).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const others = (usePatientStudies(s.patient).data ?? []).filter((x) => x.id !== s.id);
   const facts: [string, ReactNode][] = [
     ["Accession", s.accession || "—"],
     ["Study ID", s.studyId || "—"],
@@ -812,7 +851,7 @@ function StudyPane({ study: s, all, onPick, onDelete }: { study: Study; all: Stu
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <StudyMenu study={s} all={all} kind="dropdown" onDelete={onDelete} />
+              <StudyMenu study={s} kind="dropdown" onDelete={onDelete} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -869,28 +908,24 @@ function StudyPane({ study: s, all, onPick, onDelete }: { study: Study; all: Stu
   );
 }
 
-// before a study is chosen: what the archive holds
-function ArchiveSummary({ studies, scope, total, loading, onPick }: { studies: Study[]; scope: string; total: number; loading: boolean; onPick: (id: string) => void }) {
-  const byModality = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const s of studies) for (const m of s.modalities) counts.set(m, (counts.get(m) ?? 0) + 1);
-    return [...counts].sort((a, b) => b[1] - a[1]);
-  }, [studies]);
-  const recent = useMemo(() => [...studies].sort((a, b) => (b.updated || "").localeCompare(a.updated || "")).slice(0, 5), [studies]);
+// before a study is chosen: what the list holds, all of its pages, from the server
+function ArchiveSummary({ summary, scope, total, onPick }: { summary: StudySummary | undefined; scope: string; total: number; onPick: (id: string) => void }) {
+  if (!summary) return <div className="space-y-3 p-5">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-10" />)}</div>;
+  const byModality = summary.modalities;
+  const recent = summary.recent;
   const top = byModality[0]?.[1] ?? 1;
   const numbers: [string, number][] = [
-    ["Patients", new Set(studies.map((s) => s.patient)).size],
-    ["Studies", studies.length],
-    ["Series", studies.reduce((n, s) => n + s.series, 0)],
-    ["Images", studies.reduce((n, s) => n + s.instances, 0)],
+    ["Patients", summary.patients],
+    ["Studies", summary.studies],
+    ["Series", summary.series],
+    ["Images", summary.instances],
   ];
-  if (loading) return <div className="space-y-3 p-5">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-10" />)}</div>;
   return (
     <div className="flex min-h-full flex-col">
       <div className="px-5 pt-5 pb-4">
         <div className="font-semibold">{scope}</div>
         <div className="text-xs text-muted-foreground">
-          {studies.length === total ? `Every study in the archive` : `${plural(studies.length, "study", "studies")} of ${total.toLocaleString()} in the archive`}
+          {summary.studies === total ? `Every study in the archive` : `${plural(summary.studies, "study", "studies")} of ${total.toLocaleString()} in the archive`}
         </div>
       </div>
       <section className="grid grid-cols-2 gap-px border-t bg-border">
@@ -939,7 +974,7 @@ function ArchiveSummary({ studies, scope, total, loading, onPick }: { studies: S
 }
 
 // the pages: where we are, rows per page, first, previous, numbered pages around this one, next, last
-function Pager({ total, pageIndex, pageSize, onPage, onPageSize }: { total: number; pageIndex: number; pageSize: number; onPage: (i: number) => void; onPageSize: (n: number) => void }) {
+function Pager({ total, pageIndex, pageSize, loading, onPage, onPageSize }: { total: number; pageIndex: number; pageSize: number; loading: boolean; onPage: (i: number) => void; onPageSize: (n: number) => void }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const near = [...new Set([0, pageIndex - 1, pageIndex, pageIndex + 1, pages - 1])].filter((i) => i >= 0 && i < pages).sort((a, b) => a - b);
   const items: (number | "gap")[] = [];
@@ -950,8 +985,9 @@ function Pager({ total, pageIndex, pageSize, onPage, onPageSize }: { total: numb
   }
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t bg-background px-6 py-2 text-sm text-muted-foreground">
-      <span className="tabular">
+      <span className="tabular inline-flex items-center gap-2">
         {(pageIndex * pageSize + 1).toLocaleString()}–{Math.min(total, (pageIndex + 1) * pageSize).toLocaleString()} of {total.toLocaleString()}
+        {loading && <Loader2 className="size-3.5 animate-spin" aria-label="Loading the page" />}
       </span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
