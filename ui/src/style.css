@@ -237,7 +237,7 @@ dialog p { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
 .vbar .title span { color: var(--muted); font: 11.5px var(--mono); margin-left: 8px; }
 .vbar .spacer { flex: 1; }
 .vbar select.toggle { background: var(--bg); display: none; }
-@container (max-width: 900px) {
+@container (max-width: 1080px) {
   .vbar .presets { display: none; }
   .vbar select.toggle { display: inline-block; }
   .vbar .btn .txt { display: none; }
@@ -248,14 +248,23 @@ dialog p { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
 .tool { height: 30px; padding: 0; background: none; border: 1px solid transparent; color: var(--muted); cursor: pointer; font: 600 10.5px var(--mono); letter-spacing: .02em; }
 .tool:hover { color: var(--bright); border-color: var(--line-strong); }
 .tool[aria-pressed="true"] { color: var(--signal); border-color: var(--signal); background: var(--signal-dim); }
-.stage { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; cursor: crosshair; user-select: none; }
-.stage .cs { position: absolute; inset: 0; }
-.stage:focus-visible { outline: none; }
-.ov { position: absolute; font: 11.5px/1.55 var(--mono); color: #cfd4d8; text-shadow: 0 0 3px #000, 0 0 1px #000; pointer-events: none; white-space: pre; }
+.vgrid { flex: 1; min-width: 0; min-height: 0; display: grid; gap: 2px; background: var(--line); }
+.cell { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #000; touch-action: none; cursor: crosshair; user-select: none; outline: none; }
+.cell.active::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--signal); pointer-events: none; z-index: 3; }
+.measuring .cell { cursor: default; }
+.cell .cs { position: absolute; inset: 0; }
+.ov { position: absolute; z-index: 2; font: 11.5px/1.55 var(--mono); color: #cfd4d8; text-shadow: 0 0 3px #000, 0 0 1px #000; pointer-events: none; white-space: pre; }
 .ov.tl { top: 8px; left: 10px; } .ov.tr { top: 8px; right: 10px; text-align: right; }
 .ov.bl { bottom: 8px; left: 10px; } .ov.br { bottom: 8px; right: 10px; text-align: right; }
 .ov.tl::first-line { color: var(--signal); }
-.stage .note { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); font: 12px var(--mono); pointer-events: none; }
+/* orientation markers at the middle of each edge */
+.ov.ol, .ov.or, .ov.ot, .ov.ob { color: var(--signal); font-weight: 600; font-size: 12.5px; }
+.ov.ol { left: 8px; top: 50%; transform: translateY(-50%); } .ov.or { right: 8px; top: 50%; transform: translateY(-50%); }
+.ov.ot { top: 6px; left: 50%; transform: translateX(-50%); } .ov.ob { bottom: 6px; left: 50%; transform: translateX(-50%); }
+.no-overlays .ov { display: none; }
+.cell .note { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; color: var(--faint); font: 12px var(--mono); pointer-events: none; }
+.rail .thumb.shown { border-color: #5a4a2c; }
+.viewer:fullscreen { height: 100vh; }
 .scrub { display: flex; align-items: center; gap: 12px; height: 30px; padding: 0 10px; background: var(--panel); border-top: 1px solid var(--line); }
 .scrub input { flex: 1; accent-color: var(--signal); }
 .scrub span { font: 11px var(--mono); color: var(--faint); white-space: nowrap; }
