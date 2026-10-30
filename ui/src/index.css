@@ -248,3 +248,14 @@
 }
 .viewer-grid .cell-menus .cell-close:hover { color: #fff; background: var(--destructive); border-color: var(--destructive); }
 .viewer-grid .cell:only-child .cell-close { display: none; }
+
+/* the magnifying glass */
+.viewer-grid .lens {
+  position: absolute;
+  z-index: 6;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px var(--selection), 0 6px 24px rgb(0 0 0 / 0.6);
+  cursor: none;
+}
+.viewer-grid[data-tool="magnify"] .cell { cursor: zoom-in; }

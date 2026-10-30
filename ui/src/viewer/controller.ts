@@ -422,6 +422,7 @@ export class Viewer {
     remove.addEventListener("click", () => this.removeView(cell));
     for (const s of [presetSelect, slabSelect, planeSelect, remove]) s.addEventListener("pointerdown", (e) => e.stopPropagation());
     wrap.addEventListener("pointerdown", () => this.activate(cell.i), true);
+    this.lens(cell);
     wrap.addEventListener("contextmenu", (e) => e.preventDefault());
     wrap.addEventListener("dblclick", (e) => !(e.target as HTMLElement).closest("select") && this.reset(cell));
     // a series dropped from the study browser
@@ -467,6 +468,63 @@ export class Viewer {
     });
     element.addEventListener(Enums.Events.CAMERA_MODIFIED, () => this.overlays(cell));
     return cell;
+  }
+
+  // the magnifying glass: while the left button is held, a round lens over the pointer shows
+  // what is under it larger, from the image as drawn (any viewport, any plane); the wheel
+  // changes how much, 1.5 to 8 times
+  private lensZoom = 3;
+  private lens(cell: Cell) {
+    const SIZE = 240;
+    let lens: HTMLCanvasElement | null = null;
+    const draw = (e: PointerEvent) => {
+      const source = cell.element.querySelector("canvas");
+      if (!lens || !source) return;
+      const box = cell.wrap.getBoundingClientRect();
+      const x = e.clientX - box.left, y = e.clientY - box.top;
+      lens.style.left = `${x - SIZE / 2}px`;
+      lens.style.top = `${y - SIZE / 2}px`;
+      const dpr = source.width / Math.max(source.clientWidth, 1);
+      const ctx = lens.getContext("2d")!;
+      const out = lens.width;
+      const span = (SIZE / this.lensZoom) * dpr;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, out, out);
+      ctx.imageSmoothingEnabled = this.lensZoom < 4;
+      ctx.drawImage(source, x * dpr - span / 2, y * dpr - span / 2, span, span, 0, 0, out, out);
+      lens.dataset.zoom = `${this.lensZoom.toFixed(1).replace(/\.0$/, "")}×`;
+    };
+    cell.wrap.addEventListener("pointerdown", (e) => {
+      if (this.tool !== "magnify" || e.button !== 0 || e.shiftKey || (e.target as HTMLElement).closest("select, button")) return;
+      lens = document.createElement("canvas");
+      lens.className = "lens";
+      lens.width = lens.height = Math.round(SIZE * (devicePixelRatio || 1));
+      lens.style.width = lens.style.height = `${SIZE}px`;
+      cell.wrap.append(lens);
+      cell.wrap.setPointerCapture(e.pointerId);
+      draw(e);
+    });
+    cell.wrap.addEventListener("pointermove", (e) => lens && draw(e));
+    const end = () => {
+      lens?.remove();
+      lens = null;
+    };
+    cell.wrap.addEventListener("pointerup", end);
+    cell.wrap.addEventListener("pointercancel", end);
+    let last: PointerEvent | null = null;
+    cell.wrap.addEventListener("pointermove", (e) => (last = e));
+    cell.wrap.addEventListener(
+      "wheel",
+      (e) => {
+        if (!lens) return;
+        // while the lens is out, the wheel is its magnification, not the next image
+        e.preventDefault();
+        e.stopPropagation();
+        this.lensZoom = Math.max(1.5, Math.min(8, this.lensZoom * (e.deltaY < 0 ? 1.25 : 0.8)));
+        if (last) draw(last);
+      },
+      { capture: true, passive: false },
+    );
   }
 
   private dropCell(cell: Cell, remove = true) {
@@ -655,6 +713,8 @@ export class Viewer {
   private bindings(name: ToolName, left: boolean) {
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     const b: any[] = [];
+    // the magnifying glass is ours (see `lens`), not Cornerstone's: no binding for it
+    if (name === "magnify") return b;
     if (left) b.push({ mouseButton: MouseBindings.Primary });
     if (name === "pan") b.push({ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift });
     if (name === "zoom") b.push({ mouseButton: MouseBindings.Secondary });
