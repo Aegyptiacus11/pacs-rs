@@ -83,6 +83,15 @@ export const SLABS = [
   { name: "MIP full", mm: 10_000 },
 ] as const;
 
+/** The plane a viewport shows: the images as acquired, or one of the volume's. */
+export const PLANES = [
+  { plane: "original", name: "Original" },
+  { plane: "axial", name: "Axial" },
+  { plane: "sagittal", name: "Sagittal" },
+  { plane: "coronal", name: "Coronal" },
+] as const;
+export type Plane = (typeof PLANES)[number]["plane"];
+
 export const LAYOUTS = [
   { name: "1 × 1", cols: 1, rows: 1 },
   { name: "1 × 2", cols: 2, rows: 1 },
@@ -179,6 +188,10 @@ type Cell = {
   scale: HTMLDivElement;
   presetSelect: HTMLSelectElement;
   slabSelect: HTMLSelectElement;
+  planeSelect: HTMLSelectElement;
+  /** the tool group: "mpr" for the three crosshair views, "stack" for every other viewport,
+   * planes of a volume included */
+  group: "stack" | "mpr";
   viewport: Types.IViewport;
   seriesId: string | null;
   data: Loaded | null;
@@ -210,6 +223,7 @@ export type ViewerState = {
   instanceFile: string | null;
   meta: any;
   canMpr: boolean;
+  canAdd: boolean;
   /** why MPR can't run here, when it can't */
   mprBlocked: string | null;
   loadingVolume: boolean;
@@ -309,7 +323,8 @@ export class Viewer {
       count: cell?.count ?? 0,
       instanceFile: slot ? new URL(`instances/${slot.instance.ID}/file`, ROOT).href : null,
       meta: slot?.meta ?? null,
-      canMpr: !getShouldUseCPURendering() && !!cell?.data && cell.data.slots.length >= 8 && cell.data.slots.every((s) => s.frames === 1),
+      canMpr: this.planesPossible(cell?.data ?? null),
+      canAdd: this.cells.length < 6,
       mprBlocked: getShouldUseCPURendering()
         ? "MPR needs WebGL, which this browser doesn't offer"
         : cell?.data && cell.data.slots.length < 8
@@ -352,7 +367,9 @@ export class Viewer {
     return this.loaded.get(id)!;
   }
 
-  private makeCell(i: number, kind: Cell["kind"], orientation: Orientation | null): Cell {
+  private cellIds = 0;
+
+  private makeCell(i: number, kind: Cell["kind"], orientation: Orientation | null, group: Cell["group"] = kind === "stack" ? "stack" : "mpr", before?: HTMLElement): Cell {
     const div = (cls: string) => Object.assign(document.createElement("div"), { className: cls });
     const element = div("cs absolute inset-0") as HTMLDivElement;
     const ov = Object.fromEntries((["tl", "tr", "bl", "br", "ol", "or", "ot", "ob"] as const).map((k) => [k, div(`ov ov-${k}`)])) as Cell["ov"];
@@ -372,29 +389,38 @@ export class Viewer {
     };
     const presetSelect = select(PRESETS.map((p) => p.name), "Window preset");
     const slabSelect = select(SLABS.map((s) => s.name), "Slab");
+    // the plane any viewport outside MPR shows: the images as acquired, or a plane of the volume
+    const planeSelect = select(PLANES.map((p) => p.name), "Plane");
+    planeSelect.value = String(PLANES.findIndex((p) => p.plane === (orientation ?? "original")));
+    const remove = Object.assign(document.createElement("button"), { type: "button", className: "cell-close", textContent: "×", title: "Remove this view" });
+    remove.setAttribute("aria-label", "Remove this view");
+    if (group === "stack") menus.append(planeSelect);
     menus.append(presetSelect);
     if (kind === "mpr") menus.append(slabSelect);
     const wrap = div("cell") as HTMLDivElement;
     wrap.tabIndex = 0;
     if (orientation) wrap.dataset.plane = orientation;
     wrap.append(element, bar, ...Object.values(ov), scale, note, menus);
-    this.grid.append(wrap);
-    const id = `vp${i}-${kind}${orientation ? `-${orientation}` : ""}`;
+    if (group === "stack") menus.append(remove);
+    this.grid.insertBefore(wrap, before ?? null);
+    const id = `vp${++this.cellIds}-${kind}${orientation ? `-${orientation}` : ""}`;
     this.engine.enableElement({
       viewportId: id,
       type: kind === "stack" ? Enums.ViewportType.STACK : Enums.ViewportType.ORTHOGRAPHIC,
       element,
       defaultOptions: { background: [0, 0, 0], ...(orientation ? { orientation: orientation as Enums.OrientationAxis } : {}) },
     });
-    (kind === "stack" ? this.stackGroup : this.mprGroup).addViewport(id, ENGINE);
+    (group === "stack" ? this.stackGroup : this.mprGroup).addViewport(id, ENGINE);
     const cell: Cell = {
-      i, id, kind, orientation, element, wrap, ov, note, bar, dot: dotEl, scale, presetSelect, slabSelect,
+      i, id, kind, orientation, group, element, wrap, ov, note, bar, dot: dotEl, scale, presetSelect, slabSelect, planeSelect,
       viewport: this.engine.getViewport(id),
       seriesId: null, data: null, index: 0, count: 0, preset: 0, slab: 0, invert: false, rotation: 0, fitZoom: null, failed: new Set(), playing: false,
     };
     presetSelect.addEventListener("change", () => this.setPreset(Number(presetSelect.value), cell));
     slabSelect.addEventListener("change", () => this.setSlab(Number(slabSelect.value), cell));
-    for (const s of [presetSelect, slabSelect]) s.addEventListener("pointerdown", (e) => e.stopPropagation());
+    planeSelect.addEventListener("change", () => this.setPlane(PLANES[Number(planeSelect.value)].plane, cell));
+    remove.addEventListener("click", () => this.removeView(cell));
+    for (const s of [presetSelect, slabSelect, planeSelect, remove]) s.addEventListener("pointerdown", (e) => e.stopPropagation());
     wrap.addEventListener("pointerdown", () => this.activate(cell.i), true);
     wrap.addEventListener("contextmenu", (e) => e.preventDefault());
     wrap.addEventListener("dblclick", (e) => !(e.target as HTMLElement).closest("select") && this.reset(cell));
@@ -448,7 +474,7 @@ export class Viewer {
     try {
       toolUtilities.stackPrefetch.disable(cell.element);
     } catch {}
-    (cell.kind === "stack" ? this.stackGroup : this.mprGroup).removeViewports(ENGINE, cell.id);
+    (cell.group === "stack" ? this.stackGroup : this.mprGroup).removeViewports(ENGINE, cell.id);
     if (remove) {
       this.engine.disableElement(cell.id);
       cell.wrap.remove();
@@ -726,6 +752,101 @@ export class Viewer {
 
   // ---- MPR ----
 
+  /** The series as a volume, made and loading once. */
+  private async volumeOf(data: Loaded) {
+    const volumeId = `cornerstoneStreamingImageVolume:${data.series.ID}`;
+    if (!cache.getVolume(volumeId)) {
+      const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: data.slots.map((s) => s.imageId) });
+      (volume as any).load?.();
+    }
+    return volumeId;
+  }
+
+  /** Whether a series can be shown in other planes: enough slices, WebGL. */
+  private planesPossible(data: Loaded | null) {
+    return !getShouldUseCPURendering() && !!data && data.slots.length >= 8 && data.slots.every((s) => s.frames === 1);
+  }
+
+  // ---- viewports: their plane, adding and removing them ----
+
+  /** One viewport's plane: its series as acquired, or a plane of its volume. */
+  async setPlane(plane: Plane, cell = this.active()) {
+    if (this.mode === "mpr" || !cell.data) return;
+    if (plane !== "original" && !this.planesPossible(cell.data)) {
+      cell.planeSelect.value = String(PLANES.findIndex((p) => p.plane === (cell.orientation ?? "original")));
+      cell.note.textContent = getShouldUseCPURendering() ? "Other planes need WebGL" : "Other planes need a series of at least 8 slices";
+      setTimeout(() => (cell.note.textContent = ""), 2500);
+      return;
+    }
+    const data = cell.data;
+    const next =
+      plane === "original" ? this.makeCell(cell.i, "stack", null, "stack", cell.wrap) : this.makeCell(cell.i, "mpr", plane, "stack", cell.wrap);
+    next.invert = cell.invert;
+    this.dropCell(cell);
+    this.cells[cell.i] = next;
+    this.frame();
+    this.refit();
+    if (plane === "original") await this.show(next, data.series.ID);
+    else {
+      Object.assign(next, { seriesId: data.series.ID, data, count: 1 });
+      next.note.textContent = "Loading the volume…";
+      this.emit();
+      try {
+        const volumeId = await this.volumeOf(data);
+        await (next.viewport as Types.IVolumeViewport).setVolumes([{ volumeId }]);
+        next.note.textContent = "";
+        if (next.invert) (next.viewport as any).setProperties({ invert: true });
+        next.viewport.render();
+        this.measureFit(next);
+      } catch {
+        next.note.textContent = "This series can't be shown in that plane";
+      }
+    }
+    this.overlays(next);
+    this.emit();
+  }
+
+  private layoutFor(n: number) {
+    return n <= 1 ? 0 : n === 2 ? 1 : n === 3 ? 4 : n === 4 ? 3 : 5;
+  }
+
+  /** One more viewport: the active series in `plane`, or the study's next series not yet
+   * shown. Without a choice, the next plane of the active series not yet on screen (sagittal,
+   * coronal, axial) if it has the slices for it, else the next series. */
+  async addView(choice: { plane?: Exclude<Plane, "original">; nextSeries?: boolean } = {}) {
+    if (this.mode === "mpr") await this.exitMpr();
+    if (this.cells.length >= 6) return;
+    const active = this.active();
+    const keep = this.cells.map((c) => ({ seriesId: c.seriesId, plane: c.orientation }));
+    let seriesId = active.seriesId;
+    let plane: Exclude<Plane, "original"> | null = choice.plane ?? null;
+    if (!plane && !choice.nextSeries && this.planesPossible(active.data)) {
+      const onScreen = this.cells.filter((c) => c.seriesId === active.seriesId).map((c) => c.orientation);
+      plane = (["sagittal", "coronal", "axial"] as const).find((p) => !onScreen.includes(p)) ?? null;
+    }
+    if (!plane) {
+      const shown = this.cells.map((c) => c.seriesId);
+      const studyId = active.data?.study.ID;
+      const list = studyId ? await this.seriesOfStudy(studyId) : [];
+      const after = list.indexOf(active.seriesId ?? "");
+      seriesId = [...list.slice(after + 1), ...list.slice(0, after + 1)].find((id) => !shown.includes(id)) ?? active.seriesId;
+    }
+    await this.hang(this.layoutFor(keep.length + 1), [...keep.map((k) => k.seriesId), seriesId], this.linked);
+    // the planes the viewports had stay as they were
+    for (const [i, k] of keep.entries()) if (k.plane) await this.setPlane(k.plane, this.cells[i]);
+    const added = this.cells[this.cells.length - 1];
+    if (plane && added) await this.setPlane(plane, added);
+    this.activate(this.cells.length - 1);
+  }
+
+  /** Remove a viewport; the others close up. */
+  async removeView(cell: Cell) {
+    if (this.cells.length <= 1) return;
+    const keep = this.cells.filter((c) => c !== cell).map((c) => ({ seriesId: c.seriesId, plane: c.orientation }));
+    await this.hang(this.layoutFor(keep.length), keep.map((k) => k.seriesId), this.linked);
+    for (const [i, k] of keep.entries()) if (k.plane) await this.setPlane(k.plane, this.cells[i]);
+  }
+
   /** Into MPR; if the volume can't be built, back to the stacks as they were. */
   async enterMpr(): Promise<string | null> {
     try {
@@ -755,9 +876,7 @@ export class Viewer {
     this.current = 0;
     this.frame();
     this.refit();
-    const volumeId = `cornerstoneStreamingImageVolume:${data.series.ID}`;
-    const volume = cache.getVolume(volumeId) ?? (await volumeLoader.createAndCacheVolume(volumeId, { imageIds: data.slots.map((s) => s.imageId) }));
-    (volume as any).load?.();
+    const volumeId = await this.volumeOf(data);
     for (const cell of this.cells) Object.assign(cell, { seriesId: data.series.ID, data, count: 1 });
     await setVolumesForViewports(this.engine, [{ volumeId }], this.cells.map((c) => c.id));
     // the fourth view: the whole volume as a coronal MIP, like a radiograph
