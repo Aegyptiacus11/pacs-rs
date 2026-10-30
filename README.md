@@ -120,8 +120,10 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
   ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
   study or the patient. A double click or Enter opens it; ↑ ↓
-  move through the list. With no study chosen, the pane sums up the archive (patients, studies,
-  series, images, studies by modality, the last received). Checkboxes download or delete several
+  move through the list. With no study chosen, the pane sums up what the list holds, for the
+  date range and filters chosen (patients, studies, series, images, studies by modality, the
+  last received). Pages of 25, 50, 100 or 200 studies (kept in the browser), numbered, with ↑ ↓
+  going on to the next or previous page. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
 - **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
