@@ -14,13 +14,21 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronLeft, ChevronRight, Copy, Download, Ellipsis, Eye, FileStack, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -56,6 +64,19 @@ function inSpan(date: string, { from, to }: Span) {
 function spanLabel({ from, to }: Span) {
   if (from && to) return from === to ? formatDate(key(from)) : `${formatDate(key(from))} – ${formatDate(key(to))}`;
   return from ? `From ${formatDate(key(from))}` : `Until ${formatDate(key(to))}`;
+}
+const RANGE_NAMES: Record<Range, string> = { any: "All time", today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", "1y": "Last 12 months" };
+
+// rows per page, kept in this browser
+const PAGE_SIZES = [25, 50, 100, 200];
+const PAGE_KEY = "pacs-rs-page-size";
+function savedPageSize() {
+  try {
+    const n = Number(localStorage.getItem(PAGE_KEY));
+    return PAGE_SIZES.includes(n) ? n : 50;
+  } catch {
+    return 50;
+  }
 }
 const SEXES: Record<string, string> = { F: "Female", M: "Male", O: "Other" };
 
@@ -256,7 +277,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 100 } },
+    initialState: { pagination: { pageSize: savedPageSize(), pageIndex: 0 } },
     autoResetPageIndex: true,
   });
 
@@ -265,17 +286,30 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const patients = new Set(rows.map((s) => s.patient)).size;
   const { pageIndex, pageSize } = table.getState().pagination;
   const visible = table.getRowModel().rows;
+  // every row in order, all pages
+  const ordered = table.getPrePaginationRowModel().rows;
+  // what the summary covers: the date range, and whether other filters narrow it
+  const scope = (range === "custom" ? spanLabel(span) : RANGE_NAMES[range]) + (query || modalities.length || sexes.length ? ", filtered" : "");
 
-  // ↑ ↓ through the list, Enter opens, space ticks
+  // a study named by a link, on another page: that page
+  useEffect(() => {
+    const at = ordered.findIndex((r) => r.id === open);
+    if (at >= 0 && Math.floor(at / pageSize) !== pageIndex) table.setPageIndex(Math.floor(at / pageSize));
+  }, [open, studies.data]);
+
+  // ↑ ↓ through the list, onto the next or previous page at its ends; Enter opens, space ticks
   function onListKey(e: React.KeyboardEvent) {
     if ((e.target as HTMLElement).closest("button, input, [role=checkbox]")) return;
     const at = visible.findIndex((r) => r.id === current);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const next = visible[Math.max(0, Math.min(visible.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)))];
+      const from = ordered.findIndex((r) => r.id === current);
+      const to = from < 0 ? pageIndex * pageSize : Math.max(0, Math.min(ordered.length - 1, from + (e.key === "ArrowDown" ? 1 : -1)));
+      const next = ordered[to];
       if (next) {
+        if (Math.floor(to / pageSize) !== pageIndex) table.setPageIndex(Math.floor(to / pageSize));
         setCurrent(next.id);
-        list.current?.querySelector(`[data-row="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
+        requestAnimationFrame(() => list.current?.querySelector(`[data-row="${next.id}"]`)?.scrollIntoView({ block: "nearest" }));
       }
     } else if (e.key === "Enter" && current) openStudy(current);
     else if (e.key === " " && at >= 0) {
@@ -457,18 +491,23 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           )}
         </div>
 
-        {rows.length > pageSize && (
-          <div className="flex items-center justify-end gap-3 border-t px-6 py-2 text-sm text-muted-foreground">
-            <span className="tabular">
-              {pageIndex * pageSize + 1}–{Math.min(rows.length, (pageIndex + 1) * pageSize)} of {rows.length.toLocaleString()}
-            </span>
-            <Button variant="outline" size="icon-sm" aria-label="Previous page" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>
-              <ChevronLeft />
-            </Button>
-            <Button variant="outline" size="icon-sm" aria-label="Next page" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>
-              <ChevronRight />
-            </Button>
-          </div>
+        {rows.length > 0 && (
+          <Pager
+            total={rows.length}
+            pageIndex={pageIndex}
+            pageSize={pageSize}
+            onPage={(i) => {
+              table.setPageIndex(i);
+              list.current?.scrollTo({ top: 0 });
+            }}
+            onPageSize={(n) => {
+              try {
+                localStorage.setItem(PAGE_KEY, String(n));
+              } catch {}
+              // the first row shown stays on the page shown
+              table.setPagination({ pageSize: n, pageIndex: Math.floor((pageIndex * pageSize) / n) });
+            }}
+          />
         )}
       </section>
 
@@ -476,7 +515,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         {shown ? (
           <StudyPane key={shown.id} study={shown} all={all} onPick={setCurrent} onDelete={setPending} />
         ) : (
-          <ArchiveSummary studies={all} loading={studies.isPending} />
+          <ArchiveSummary studies={rows} scope={scope} total={all.length} loading={studies.isPending} onPick={setCurrent} />
         )}
       </aside>
 
@@ -831,7 +870,7 @@ function StudyPane({ study: s, all, onPick, onDelete }: { study: Study; all: Stu
 }
 
 // before a study is chosen: what the archive holds
-function ArchiveSummary({ studies, loading }: { studies: Study[]; loading: boolean }) {
+function ArchiveSummary({ studies, scope, total, loading, onPick }: { studies: Study[]; scope: string; total: number; loading: boolean; onPick: (id: string) => void }) {
   const byModality = useMemo(() => {
     const counts = new Map<string, number>();
     for (const s of studies) for (const m of s.modalities) counts.set(m, (counts.get(m) ?? 0) + 1);
@@ -848,9 +887,11 @@ function ArchiveSummary({ studies, loading }: { studies: Study[]; loading: boole
   if (loading) return <div className="space-y-3 p-5">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-10" />)}</div>;
   return (
     <div className="flex min-h-full flex-col">
-      <div className="flex items-center gap-2.5 px-5 pt-5 pb-4 text-sm text-muted-foreground">
-        <MousePointerClick className="size-4" strokeWidth={1.75} />
-        Choose a study to see its series and details.
+      <div className="px-5 pt-5 pb-4">
+        <div className="font-semibold">{scope}</div>
+        <div className="text-xs text-muted-foreground">
+          {studies.length === total ? `Every study in the archive` : `${plural(studies.length, "study", "studies")} of ${total.toLocaleString()} in the archive`}
+        </div>
       </div>
       <section className="grid grid-cols-2 gap-px border-t bg-border">
         {numbers.map(([label, n]) => (
@@ -879,15 +920,87 @@ function ArchiveSummary({ studies, loading }: { studies: Study[]; loading: boole
         <Section title="Last received">
           <div className="-mx-2 flex flex-col">
             {recent.map((s) => (
-              <a key={s.id} href={href.studies(null, s.id)} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+              <button key={s.id} onClick={() => onPick(s.id)} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent">
                 <span className="min-w-0 flex-1 truncate">
                   {personName(s.name)} <span className="text-muted-foreground">· {s.description || "No description"}</span>
                 </span>
                 <Modalities list={s.modalities} className="flex-nowrap" />
-              </a>
+              </button>
             ))}
           </div>
         </Section>
+      )}
+      <div className="mt-auto flex items-center gap-2.5 border-t px-5 py-4 text-xs text-muted-foreground">
+        <MousePointerClick className="size-4" strokeWidth={1.75} />
+        Choose a study to see its series and details.
+      </div>
+    </div>
+  );
+}
+
+// the pages: where we are, rows per page, first, previous, numbered pages around this one, next, last
+function Pager({ total, pageIndex, pageSize, onPage, onPageSize }: { total: number; pageIndex: number; pageSize: number; onPage: (i: number) => void; onPageSize: (n: number) => void }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const near = [...new Set([0, pageIndex - 1, pageIndex, pageIndex + 1, pages - 1])].filter((i) => i >= 0 && i < pages).sort((a, b) => a - b);
+  const items: (number | "gap")[] = [];
+  for (const i of near) {
+    const last = items[items.length - 1];
+    if (typeof last === "number" && i - last > 1) items.push(i - last === 2 ? last + 1 : "gap");
+    items.push(i);
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t bg-background px-6 py-2 text-sm text-muted-foreground">
+      <span className="tabular">
+        {(pageIndex * pageSize + 1).toLocaleString()}–{Math.min(total, (pageIndex + 1) * pageSize).toLocaleString()} of {total.toLocaleString()}
+      </span>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 font-normal text-muted-foreground">
+            <span className="tabular">{pageSize}</span> per page <ChevronDown className="size-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-36">
+          <DropdownMenuRadioGroup value={String(pageSize)} onValueChange={(v) => onPageSize(Number(v))}>
+            {PAGE_SIZES.map((n) => (
+              <DropdownMenuRadioItem key={n} value={String(n)}>
+                {n} per page
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {pages > 1 && (
+        <nav aria-label="Pages" className="ml-auto flex items-center gap-1">
+          <Button variant="ghost" size="icon-sm" aria-label="First page" disabled={pageIndex === 0} onClick={() => onPage(0)}>
+            <ChevronsLeft />
+          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Previous page" disabled={pageIndex === 0} onClick={() => onPage(pageIndex - 1)}>
+            <ChevronLeft />
+          </Button>
+          {items.map((i, k) =>
+            i === "gap" ? (
+              <span key={`gap${k}`} className="w-7 text-center">…</span>
+            ) : (
+              <Button
+                key={i}
+                variant="ghost"
+                size="sm"
+                aria-label={`Page ${i + 1}`}
+                aria-current={i === pageIndex ? "page" : undefined}
+                className={cn("tabular h-8 min-w-8 px-2 font-normal", i === pageIndex && "bg-selection-soft font-medium text-selection hover:bg-selection-soft hover:text-selection")}
+                onClick={() => onPage(i)}
+              >
+                {i + 1}
+              </Button>
+            ),
+          )}
+          <Button variant="ghost" size="icon-sm" aria-label="Next page" disabled={pageIndex >= pages - 1} onClick={() => onPage(pageIndex + 1)}>
+            <ChevronRight />
+          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Last page" disabled={pageIndex >= pages - 1} onClick={() => onPage(pages - 1)}>
+            <ChevronsRight />
+          </Button>
+        </nav>
       )}
     </div>
   );
