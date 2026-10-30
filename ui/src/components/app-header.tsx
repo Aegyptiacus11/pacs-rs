@@ -1,11 +1,12 @@
-// The header: the name, the two lists, search (⌘K), upload and whether the server answers.
+// The rail down the left side: the name, the two lists, search (⌘K) and upload; at the bottom
+// light or dark, and a warning when the server doesn't answer. Icons over their names, like
+// the viewer's toolbar.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileStack, Moon, Search, Sun, Upload, Users, WifiOff } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Kbd } from "@/components/ui/kbd";
 import { CommandMenu } from "@/components/command-menu";
 import { useUpload } from "@/components/upload";
 import { ROOT } from "@/lib/api";
@@ -22,6 +23,49 @@ export function Logo({ className }: { className?: string }) {
   );
 }
 
+const itemClass = (active?: boolean) =>
+  cn(
+    "relative flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+    active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection",
+  );
+
+function RailItem({ label, tip, shortcut, Icon, active, href: to, onClick, className }: {
+  label: string;
+  tip?: string;
+  shortcut?: string;
+  Icon: typeof Users;
+  active?: boolean;
+  href?: string;
+  onClick?: () => void;
+  className?: string;
+}) {
+  const body: ReactNode = (
+    <>
+      <Icon className="size-5" strokeWidth={1.6} />
+      <span className="text-[10.5px] leading-none">{label}</span>
+    </>
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {to ? (
+          <a href={to} aria-current={active ? "page" : undefined} className={cn(itemClass(active), className)}>
+            {body}
+          </a>
+        ) : (
+          <button type="button" onClick={onClick} className={cn(itemClass(active), className)}>
+            {body}
+          </button>
+        )}
+      </TooltipTrigger>
+      <TooltipContent side="right" className="flex items-center gap-2">
+        {tip ?? label}
+        {shortcut && <Kbd>{shortcut}</Kbd>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // nothing while the server answers; a clear warning when it doesn't
 function ServerStatus() {
   const health = useQuery({
@@ -34,12 +78,12 @@ function ServerStatus() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="flex h-8 items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 text-xs font-medium text-destructive">
-          <WifiOff className="size-3.5" />
-          Server unreachable
+        <span role="status" className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-lg bg-destructive/10 text-destructive">
+          <WifiOff className="size-5" strokeWidth={1.6} />
+          <span className="text-[10.5px] leading-none">Offline</span>
         </span>
       </TooltipTrigger>
-      <TooltipContent>pacs-rs does not answer; retrying every 15 seconds</TooltipContent>
+      <TooltipContent side="right">pacs-rs does not answer; retrying every 15 seconds</TooltipContent>
     </Tooltip>
   );
 }
@@ -48,20 +92,10 @@ function ServerStatus() {
 function ThemeToggle() {
   const [theme, setTheme] = useTheme();
   const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-  const label = dark ? "Switch to light" : "Switch to dark";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={label} className="text-muted-foreground hover:text-foreground" onClick={() => setTheme(dark ? "light" : "dark")}>
-          {dark ? <Sun /> : <Moon />}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
+  return <RailItem label={dark ? "Light" : "Dark"} tip={dark ? "Switch to light" : "Switch to dark"} Icon={dark ? Sun : Moon} onClick={() => setTheme(dark ? "light" : "dark")} />;
 }
 
-export function AppHeader({ route }: { route: Route }) {
+export function AppRail({ route }: { route: Route }) {
   const upload = useUpload();
   const [search, setSearch] = useState(false);
   useEffect(() => {
@@ -74,43 +108,20 @@ export function AppHeader({ route }: { route: Route }) {
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   }, []);
-  const tab = (to: string, active: boolean, Icon: typeof Users, label: string) => (
-    <a
-      href={to}
-      className={cn(
-        "flex h-8 items-center gap-2 rounded-md px-3 text-sm transition-colors",
-        active ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon className="size-4" strokeWidth={1.75} />
-      {label}
-    </a>
-  );
   return (
-    <header className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75">
-      <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-6 px-6">
-        <a href={href.studies()} className="flex items-center gap-2 font-semibold tracking-tight">
-          <Logo />
-          pacs-rs
-        </a>
-        <nav className="flex items-center gap-1">
-          {tab(href.studies(), route.page === "studies", FileStack, "Studies")}
-          {tab(href.patients(), route.page === "patients", Users, "Patients")}
-        </nav>
-        <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" className="h-8 w-56 justify-start gap-2 px-3 font-normal text-muted-foreground" onClick={() => setSearch(true)}>
-            <Search className="size-4" />
-            Search
-            <Kbd className="ml-auto">⌘K</Kbd>
-          </Button>
-          <Button size="sm" onClick={upload.open}>
-            <Upload /> Upload
-          </Button>
-          <ThemeToggle />
-          <ServerStatus />
-        </div>
+    <nav aria-label="pacs-rs" className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r bg-card py-3">
+      <a href={href.studies()} aria-label="pacs-rs: the studies" className="mb-3 grid size-10 place-items-center rounded-lg hover:bg-accent">
+        <Logo className="size-6" />
+      </a>
+      <RailItem label="Studies" Icon={FileStack} href={href.studies()} active={route.page === "studies"} />
+      <RailItem label="Patients" Icon={Users} href={href.patients()} active={route.page === "patients"} />
+      <RailItem label="Search" tip="Search patients, studies and actions" shortcut="⌘K" Icon={Search} onClick={() => setSearch(true)} />
+      <RailItem label="Upload" tip="Upload DICOM files or folders" Icon={Upload} onClick={upload.open} />
+      <div className="mt-auto flex flex-col items-center gap-1">
+        <ServerStatus />
+        <ThemeToggle />
       </div>
       <CommandMenu open={search} onOpenChange={setSearch} />
-    </header>
+    </nav>
   );
 }
