@@ -15,6 +15,7 @@ sqlx.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+dicom-core.workspace = true
 pacs-core = { workspace = true, features = ["synthetic"] }
 tempfile.workspace = true
 tokio.workspace = true

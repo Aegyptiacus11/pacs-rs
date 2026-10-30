@@ -20,9 +20,11 @@ mod annotations;
 mod delete;
 mod protocols;
 mod rest;
+mod worklist;
 pub use delete::{Deleted, Level};
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
+pub use worklist::{WorklistFacets, WorklistQuery, WorklistSort, WorklistStudy, WorklistSummary};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
