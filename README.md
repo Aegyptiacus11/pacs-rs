@@ -116,9 +116,11 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 - **Patients**: one row per patient; opening one shows only their studies.
 - **Viewer**: [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0. Frames come over WADO-RS
   in the transfer syntax they are stored in and are decoded in the browser (JPEG-LS, JPEG,
-  JPEG 2000, HTJ2K, JPEG XL); window/level with presets, zoom, pan, invert, length, pixel
-  value, angle and elliptical ROI (area, mean, standard deviation), cine, the DICOM tags, and
-  the study's other series beside it.
+  JPEG 2000, HTJ2K, JPEG XL). One to four viewports (1×1, 1×2, 2×1, 2×2); the study's series
+  beside them load into the active one, and Link scrolls viewports of one frame of reference
+  together by slice position. Window/level with presets, zoom, pan, invert, rotate, flip;
+  length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI (area,
+  mean, standard deviation); orientation markers, cine, full screen, the DICOM tags.
 - **Upload**: drop files or folders anywhere on the page, or pick them from Upload; each file
   is sent to `POST /instances` and counted as new, already stored or skipped.
 
