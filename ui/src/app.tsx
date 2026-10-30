@@ -4,7 +4,6 @@ import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { AppRail } from "@/components/app-header";
 import { useRoute } from "@/lib/route";
-import { PatientsPage } from "@/pages/patients-page";
 import { StudiesPage } from "@/pages/studies-page";
 
 // Cornerstone loads only when a series is opened
@@ -28,7 +27,7 @@ export function App() {
     <div className="flex h-dvh">
       <AppRail route={route} />
       <main className="min-w-0 flex-1 overflow-hidden">
-        {route.page === "patients" ? <PatientsPage /> : <StudiesPage patient={route.patient} open={route.open} />}
+        <StudiesPage patient={route.patient} open={route.open} />
       </main>
     </div>
   );

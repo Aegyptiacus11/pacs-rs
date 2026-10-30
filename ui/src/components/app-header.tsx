@@ -1,10 +1,10 @@
-// The rail down the left side: the name, the two lists, search (⌘K) and upload; at the bottom
+// The rail down the left side: the name, the studies, search (⌘K) and upload; at the bottom
 // light or dark, and a warning when the server doesn't answer. Icons over their names, like
 // the viewer's toolbar.
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Moon, Search, Sun, Upload, Users, WifiOff } from "lucide-react";
+import { FileStack, Moon, Search, Sun, Upload, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
 import { CommandMenu } from "@/components/command-menu";
@@ -33,7 +33,7 @@ function RailItem({ label, tip, shortcut, Icon, active, href: to, onClick, class
   label: string;
   tip?: string;
   shortcut?: string;
-  Icon: typeof Users;
+  Icon: typeof Search;
   active?: boolean;
   href?: string;
   onClick?: () => void;
@@ -114,7 +114,6 @@ export function AppRail({ route }: { route: Route }) {
         <Logo className="size-6" />
       </a>
       <RailItem label="Studies" Icon={FileStack} href={href.studies()} active={route.page === "studies"} />
-      <RailItem label="Patients" Icon={Users} href={href.patients()} active={route.page === "patients"} />
       <RailItem label="Search" tip="Search patients, studies and actions" shortcut="⌘K" Icon={Search} onClick={() => setSearch(true)} />
       <RailItem label="Upload" tip="Upload DICOM files or folders" Icon={Upload} onClick={upload.open} />
       <div className="mt-auto flex flex-col items-center gap-1">

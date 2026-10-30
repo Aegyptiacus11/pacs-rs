@@ -1,6 +1,6 @@
 // ⌘K: find a patient or a study by any of its values, or run an action, from anywhere.
 
-import { FileStack, FileUp, FolderUp, User, Users } from "lucide-react";
+import { FileStack, FileUp, FolderUp, User } from "lucide-react";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from "@/components/ui/command";
 import { useUpload } from "@/components/upload";
 import { formatDate, personName } from "@/lib/api";
@@ -51,9 +51,6 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
           </CommandItem>
           <CommandItem onSelect={run(() => upload.pick("folder"))}>
             <FolderUp /> Upload a folder
-          </CommandItem>
-          <CommandItem onSelect={run(() => go(href.patients()))}>
-            <Users /> Go to patients
           </CommandItem>
         </CommandGroup>
       </CommandList>
