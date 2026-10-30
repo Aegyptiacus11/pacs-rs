@@ -65,38 +65,44 @@ import { tagRows } from "@/lib/dicom-tags";
 import { href } from "@/lib/route";
 import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import { initCornerstone, LAYOUTS, PRESETS, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
+import { initCornerstone, LAYOUTS, PRESETS, renderingMode, setRenderingMode, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
 import { StudyBrowser, type Registry } from "@/viewer/study-browser";
 import { autoApply, fetchUserProtocols, plans, studyContext, type Plan, type Protocol, type StudyContext } from "@/viewer/hanging";
 import { ProtocolMenu } from "@/viewer/protocol-menu";
 
-const MEASURE: { tool: ToolName; label: string; key: string; Icon: typeof Ruler; hint: string }[] = [
-  { tool: "length", label: "Length", key: "L", Icon: Ruler, hint: "Distance in mm" },
-  { tool: "probe", label: "Pixel value", key: "H", Icon: Pipette, hint: "HU at a point" },
-  { tool: "angle", label: "Angle", key: "A", Icon: Angle, hint: "Between two lines" },
-  { tool: "cobb", label: "Cobb angle", key: "C", Icon: Spline, hint: "Between two separate lines" },
-  { tool: "bidirectional", label: "Bidirectional", key: "B", Icon: Diameter, hint: "Long and short axis" },
-  { tool: "ellipse", label: "Elliptical ROI", key: "R", Icon: Circle, hint: "Area, mean, std" },
-  { tool: "rectangle", label: "Rectangle ROI", key: "G", Icon: Square, hint: "Area, mean, std" },
+// the measurements, each its own toolbar button; keys after their names
+const MEASURE: { tool: ToolName; label: string; short: string; key: string; Icon: typeof Ruler; hint: string }[] = [
+  { tool: "length", label: "Length", short: "Length", key: "L", Icon: Ruler, hint: "distance in mm" },
+  { tool: "angle", label: "Angle", short: "Angle", key: "A", Icon: Angle, hint: "between two lines" },
+  { tool: "cobb", label: "Cobb angle", short: "Cobb", key: "C", Icon: Spline, hint: "between two separate lines" },
+  { tool: "bidirectional", label: "Bidirectional", short: "Bidir.", key: "B", Icon: Diameter, hint: "long and short axis" },
+  { tool: "ellipse", label: "Ellipse ROI", short: "Ellipse", key: "E", Icon: Circle, hint: "area, mean, std" },
+  { tool: "rectangle", label: "Rectangle ROI", short: "Rectangle", key: "⇧ E", Icon: Square, hint: "area, mean, std" },
+  { tool: "probe", label: "Pixel value", short: "Value", key: "D", Icon: Pipette, hint: "the HU (density) at a point" },
 ];
 
 const SHORTCUTS: [string, string][] = [
   ["Wheel, ↑ ↓", "Previous or next image"],
   ["Page Up / Down", "Ten images back or forward"],
   ["[ ]", "Previous or next series"],
-  ["W P Z", "Window, pan, zoom"],
-  ["M", "Magnifying glass: hold over a spot, wheel for more or less"],
-  ["N", "Add a viewport"],
-  ["L H A C B R G", "Measurement tools"],
-  ["X", "Crosshairs (MPR)"],
-  ["V", "3 planes with crosshairs, on or off"],
-  ["Shift Delete", "Remove all measurements"],
-  ["1 – 6", "Window presets"],
+  ["W", "Window/level"],
+  ["P", "Pan"],
+  ["Z", "Zoom"],
+  ["M", "Magnifier: hold over a spot, wheel for more or less"],
+  ["L A C B", "Length, angle, Cobb angle, bidirectional"],
+  ["E, ⇧ E", "Ellipse ROI, rectangle ROI"],
+  ["D", "Pixel value (density, HU)"],
+  ["⇧ Delete", "Remove all measurements"],
+  ["R, ⇧ R", "Rotate right, left"],
+  ["H, V", "Flip horizontal, vertical"],
   ["I", "Invert"],
-  ["E", "Rotate 90°"],
+  ["0", "Reset the view"],
+  ["1 – 6", "Window presets"],
+  ["N", "New view"],
+  ["X", "3 planes (axial, sagittal, coronal) on or off"],
+  ["S", "Sync: scroll the viewports together"],
   ["Space", "Play or stop"],
-  ["K", "Scroll the viewports together"],
-  ["O", "Show or hide image text"],
+  ["O", "Show or hide the text on the images"],
   ["T", "DICOM tags"],
   ["F", "Full screen"],
   ["Double click", "Reset the view"],
@@ -227,6 +233,10 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
     };
     const v = new Viewer(grid.current, setState, resolve);
     viewer.current = v;
+    v.onBlank = (message) => {
+      toast(message, { duration: 6000 });
+      setTimeout(() => location.reload(), 1500);
+    };
     // a series asked for opens on its own; a study, as its best hanging protocol lays it out
     Promise.all([studyContext(studyId), fetchUserProtocols().catch(() => [] as Protocol[])]).then(([c, saved]) => {
       if (viewer.current !== v) return;
@@ -282,9 +292,10 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       if (!v || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement;
       if (target.closest("input, textarea, select, [role=dialog], [role=menu]")) return;
+      // shifted letters arrive in capitals: E is the rectangle, R rotates left
       const tool: Record<string, ToolName> = {
-        w: "windowLevel", p: "pan", z: "zoom", m: "magnify", x: "crosshairs",
-        l: "length", h: "probe", a: "angle", c: "cobb", b: "bidirectional", r: "ellipse", g: "rectangle",
+        w: "windowLevel", p: "pan", z: "zoom", m: "magnify",
+        l: "length", a: "angle", c: "cobb", b: "bidirectional", e: "ellipse", E: "rectangle", d: "probe",
       };
       const step: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1, PageDown: 10, PageUp: -10 };
       if (step[e.key]) {
@@ -296,13 +307,17 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       else if (tool[e.key]) v.useTool(tool[e.key]);
       else if (e.key >= "1" && e.key <= String(PRESETS.length)) v.setPreset(Number(e.key) - 1);
       else if (e.key === "i") v.toggleInvert();
-      else if (e.key === "e") v.rotate();
-      else if (e.key === "v") state?.mode === "mpr" ? v.exitMpr() : startMpr();
+      else if (e.key === "r") v.rotate(90);
+      else if (e.key === "R") v.rotate(-90);
+      else if (e.key === "h") v.flip("horizontal");
+      else if (e.key === "v") v.flip("vertical");
+      else if (e.key === "0") v.reset();
+      else if (e.key === "x") state?.mode === "mpr" ? v.exitMpr() : startMpr();
       else if (e.key === "n") v.addView();
       else if (e.key === " ") {
         e.preventDefault();
         v.cine();
-      } else if (e.key === "k") v.setLinked(!state?.linked);
+      } else if (e.key === "s") v.setLinked(!state?.linked);
       else if (e.key === "o") v.setOverlays(!state?.overlays);
       else if (e.key === "t") setTags((x) => !x);
       else if (e.key === "f") toggleFullscreen();
@@ -332,7 +347,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground">
-      <header className="flex h-14 shrink-0 items-center gap-0.5 overflow-x-auto border-b bg-card px-2 [scrollbar-width:none]">
+      <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-0.5 border-b bg-card px-2 py-1">
         <Tip label="Back to the studies" shortcut="Esc">
           <a href={href.studies(null, studyId)} className="mr-1 flex h-12 shrink-0 items-center gap-2 rounded-md px-2 hover:bg-accent" aria-label="Back to the studies">
             <ArrowLeft className="size-4 text-muted-foreground" />
@@ -371,42 +386,27 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               active={s.tool === "magnify"}
               onClick={() => v.useTool("magnify")}
             />
-            <ToolMenu
-              label={measuring?.label ?? "Measure"}
-              menuLabel="Measurement tools"
-              Icon={measuring?.Icon ?? Ruler}
-              active={!!measuring}
-              onClick={() => v.useTool(measuring?.tool ?? "length")}
-              shortcut={measuring?.key ?? "L"}
-            >
-              <DropdownMenuLabel>Measure</DropdownMenuLabel>
-              {MEASURE.map((m) => (
-                <DropdownMenuItem key={m.tool} onSelect={() => v.useTool(m.tool)}>
-                  <m.Icon />
-                  <div className="flex flex-col">
-                    <span>{m.label}</span>
-                    <span className="text-xs text-muted-foreground">{m.hint}</span>
-                  </div>
-                  <DropdownMenuShortcut>{m.key}</DropdownMenuShortcut>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => v.clearMeasurements()}>
-                <Eraser /> Remove all measurements <DropdownMenuShortcut>⇧⌫</DropdownMenuShortcut>
+            <Sep />
+            {MEASURE.map((m) => (
+              <ToolBtn key={m.tool} label={m.short} tip={`${m.label}: ${m.hint}`} Icon={m.Icon} shortcut={m.key} active={s.tool === m.tool} onClick={() => v.useTool(m.tool)} />
+            ))}
+            <ToolBtn label="Clear" tip="Remove all measurements" Icon={Eraser} shortcut="⇧ Del" onClick={() => v.clearMeasurements()} />
+            <Sep />
+            <ToolMenu label="Rotate" menuLabel="Rotate and flip" tip="Rotate right 90°" Icon={RotateCw} shortcut="R" onClick={() => v.rotate(90)}>
+              <DropdownMenuItem onSelect={() => v.rotate(90)}>
+                <RotateCw /> Rotate right 90° <DropdownMenuShortcut>R</DropdownMenuShortcut>
               </DropdownMenuItem>
-            </ToolMenu>
-            <ToolMenu label="Rotate" menuLabel="Rotate and flip" Icon={RotateCw} shortcut="E" onClick={() => v.rotate()}>
-              <DropdownMenuItem onSelect={() => v.rotate()}>
-                <RotateCw /> Rotate 90° <DropdownMenuShortcut>E</DropdownMenuShortcut>
+              <DropdownMenuItem onSelect={() => v.rotate(-90)}>
+                <RotateCcw /> Rotate left 90° <DropdownMenuShortcut>⇧ R</DropdownMenuShortcut>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => v.flip("horizontal")}>
-                <ArrowLeftRight /> Flip left to right
+                <ArrowLeftRight /> Flip horizontal <DropdownMenuShortcut>H</DropdownMenuShortcut>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => v.flip("vertical")}>
-                <ArrowUpDown /> Flip top to bottom
+                <ArrowUpDown /> Flip vertical <DropdownMenuShortcut>V</DropdownMenuShortcut>
               </DropdownMenuItem>
             </ToolMenu>
-            <ToolBtn label="Reset" Icon={RotateCcw} onClick={() => v.reset()} />
+            <ToolBtn label="Reset" tip="Reset the view: fit, no rotation, default window" Icon={RotateCcw} shortcut="0" onClick={() => v.reset()} />
             <Sep />
 
             <ToolMenu
@@ -457,7 +457,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
                   <span>{mpr ? "Leave the 3 planes" : "3 planes with crosshairs"}</span>
                   <span className="text-xs text-muted-foreground">{s.mprBlocked && !mpr ? s.mprBlocked : "Axial, sagittal, coronal and a MIP of this series"}</span>
                 </div>
-                <DropdownMenuShortcut>V</DropdownMenuShortcut>
+                <DropdownMenuShortcut>X</DropdownMenuShortcut>
               </DropdownMenuItem>
               <div className="px-2 pb-1.5 text-xs text-muted-foreground">Any viewport can also show another plane: use the plane menu at its bottom.</div>
               <DropdownMenuSeparator />
@@ -466,21 +466,34 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
                   <span>Scroll the viewports together</span>
                   <span className="text-xs text-muted-foreground">Each one follows to the same slice position</span>
                 </div>
-                <DropdownMenuShortcut>K</DropdownMenuShortcut>
+                <DropdownMenuShortcut>S</DropdownMenuShortcut>
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={renderingMode() === "cpu"}
+                onCheckedChange={(on) => {
+                  setRenderingMode(on ? "cpu" : "gpu");
+                  location.reload();
+                }}
+              >
+                <div className="flex flex-col">
+                  <span>Software rendering</span>
+                  <span className="text-xs text-muted-foreground">Without WebGL, if images stay blank in this browser; no 3 planes then</span>
+                </div>
               </DropdownMenuCheckboxItem>
             </ToolMenu>
             <ToolBtn
               label={s.loadingVolume ? "Loading…" : "3 planes"}
               tip={!mpr && s.mprBlocked ? s.mprBlocked : "Axial, sagittal and coronal of this series, with crosshairs, and a MIP"}
               Icon={Axis3d}
-              shortcut="V"
+              shortcut="X"
               active={mpr}
               disabled={!mpr && (!s.canMpr || s.loadingVolume)}
               onClick={() => (mpr ? v.exitMpr() : startMpr())}
             />
-            {mpr && <ToolBtn label="Crosshairs" Icon={Crosshair} shortcut="X" active={s.tool === "crosshairs"} onClick={() => v.useTool("crosshairs")} />}
+            {mpr && <ToolBtn label="Crosshairs" tip="Crosshairs: drag them to move through the three planes" Icon={Crosshair} active={s.tool === "crosshairs"} onClick={() => v.useTool("crosshairs")} />}
             {!mpr && s.cells.length > 1 && (
-              <ToolBtn label="Sync" tip="Scroll the viewports together, to the same slice position" Icon={Link2} shortcut="K" active={s.linked} onClick={() => v.setLinked(!s.linked)} />
+              <ToolBtn label="Sync" tip="Scroll the viewports together, to the same slice position" Icon={Link2} shortcut="S" active={s.linked} onClick={() => v.setLinked(!s.linked)} />
             )}
             <ToolBtn label={s.playing ? "Stop" : "Cine"} Icon={s.playing ? Pause : Play} shortcut="Space" active={s.playing} onClick={() => v.cine()} />
             <Sep />
