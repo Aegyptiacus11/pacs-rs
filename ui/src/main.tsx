@@ -7,6 +7,10 @@ import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UploadProvider } from "@/components/upload";
 import { App } from "@/app";
+import { applyTheme } from "@/lib/theme";
+
+// before the first paint, so a dark choice never flashes light
+applyTheme();
 
 const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } } });
 

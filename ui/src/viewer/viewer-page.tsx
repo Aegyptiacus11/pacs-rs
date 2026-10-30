@@ -59,6 +59,7 @@ import { api, formatDate, personName } from "@/lib/api";
 import { tagRows } from "@/lib/dicom-tags";
 import { href } from "@/lib/route";
 import { sortSeries } from "@/lib/studies";
+import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
 
@@ -181,7 +182,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
   // dark everywhere while the viewer is open, menus and dialogs included (they render outside)
   useEffect(() => {
     document.documentElement.classList.add("dark");
-    return () => document.documentElement.classList.remove("dark");
+    return () => applyTheme();
   }, []);
 
   useEffect(() => {

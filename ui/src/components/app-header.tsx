@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Search, Upload, Users, WifiOff } from "lucide-react";
+import { FileStack, Moon, Search, Sun, Upload, Users, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -10,6 +10,7 @@ import { CommandMenu } from "@/components/command-menu";
 import { useUpload } from "@/components/upload";
 import { ROOT } from "@/lib/api";
 import { href, type Route } from "@/lib/route";
+import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 export function Logo({ className }: { className?: string }) {
@@ -39,6 +40,23 @@ function ServerStatus() {
         </span>
       </TooltipTrigger>
       <TooltipContent>pacs-rs does not answer; retrying every 15 seconds</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// one click: light to dark and back
+function ThemeToggle() {
+  const [theme, setTheme] = useTheme();
+  const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  const label = dark ? "Switch to light" : "Switch to dark";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label={label} className="text-muted-foreground hover:text-foreground" onClick={() => setTheme(dark ? "light" : "dark")}>
+          {dark ? <Sun /> : <Moon />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -88,6 +106,7 @@ export function AppHeader({ route }: { route: Route }) {
           <Button size="sm" onClick={upload.open}>
             <Upload /> Upload
           </Button>
+          <ThemeToggle />
           <ServerStatus />
         </div>
       </div>
