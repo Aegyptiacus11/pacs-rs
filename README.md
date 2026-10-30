@@ -131,6 +131,13 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   thin slice or a MIP slab of 5, 10 or 20 mm. Frames come over WADO-RS as stored and are
   decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). MPR needs WebGL; the rest
   also renders without it. `?` lists the keys.
+- **Hanging protocols**: a study opens as the best protocol that fits it lays it out: the
+  current study beside its latest prior (the prior's most similar series, scrolling linked),
+  two views for CR, DX, MG and RF, the largest series, every series, or MPR. The toolbar lists
+  the ones that fit, with previous and next (`,` `.`). "Save this layout as a protocol" keeps
+  the arrangement by kind of series (current or prior, modality, description), not by UID, so
+  it serves every matching study; saved protocols come first and are kept in the browser.
+  Opening one series (a thumbnail) shows that series alone.
 
 Like the REST API, it has no login yet: whoever reaches it can delete. `PACS_UI=false` turns it
 off.
