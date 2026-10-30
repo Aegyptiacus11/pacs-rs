@@ -80,13 +80,9 @@ function sinceFor(range: Range) {
   return since;
 }
 
-async function openStudy(id: string, seriesId?: string) {
-  if (seriesId) return go(href.view(id, seriesId));
-  // the series with the most images: the one to read, rather than a localizer
-  const series = sortSeries(await api<any[]>(`studies/${id}/series`));
-  const main = series.reduce((best, s) => (s.Instances.length > (best?.Instances.length ?? -1) ? s : best), null as any);
-  if (main) go(href.view(id, main.ID));
-  else toast("This study has no series");
+// a study opens as its hanging protocol lays it out; a series, on its own
+function openStudy(id: string, seriesId?: string) {
+  go(href.view(id, seriesId));
 }
 
 function copy(text: string, what: string) {
