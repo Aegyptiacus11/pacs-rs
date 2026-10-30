@@ -18,6 +18,7 @@ import {
   Crosshair,
   Diameter,
   Download,
+  Ellipsis,
   Eraser,
   ImageDown,
   Info,
@@ -119,7 +120,7 @@ type Tb = { label: string; tip?: string; Icon: typeof Ruler; shortcut?: string; 
 
 const toolClass = (active?: boolean) =>
   cn(
-    "flex h-12 min-w-12 flex-col items-center justify-center gap-0.5 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35",
+    "flex h-12 min-w-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35",
     active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection",
   );
 
@@ -192,7 +193,7 @@ function ToolMenu({ children, menuLabel, ...tb }: Tb & { children: ReactNode; me
   );
 }
 
-const Sep = () => <Separator orientation="vertical" className="mx-1 !h-9" />;
+const Sep = () => <Separator orientation="vertical" className="mx-0.5 !h-9" />;
 
 export function ViewerPage({ study: studyId, series: seriesId }: { study: string; series: string | null }) {
   const data = useQuery({
@@ -518,20 +519,49 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
             <ToolBtn label={s.playing ? "Stop" : "Cine"} Icon={s.playing ? Pause : Play} shortcut="Space" active={s.playing} onClick={() => v.cine()} />
             <Sep />
 
-            <ToolBtn label="Tags" Icon={Tags} shortcut="T" active={tags} onClick={() => setTags(!tags)} />
-            <ToolBtn label="Info" Icon={Info} shortcut="O" active={s.overlays} onClick={() => v.setOverlays(!s.overlays)} />
-            <ToolMenu label="Export" menuLabel="Export" Icon={ImageDown} onClick={() => v.exportImage()}>
-              <DropdownMenuItem onSelect={() => v.exportImage()}>
-                <ImageDown /> This view as PNG
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild disabled={!s.instanceFile}>
-                <a href={s.instanceFile ?? undefined} download>
-                  <Download /> This image as DICOM
-                </a>
-              </DropdownMenuItem>
-            </ToolMenu>
-            <ToolBtn label={fullscreen ? "Exit full" : "Full screen"} Icon={fullscreen ? Minimize : Maximize} shortcut="F" onClick={toggleFullscreen} />
-            <ToolBtn label="Keys" Icon={Keyboard} shortcut="?" onClick={() => setHelp(true)} />
+            {/* on a narrower screen, the last tools go into one menu, so the toolbar keeps to one row */}
+            <div className="hidden min-[1600px]:contents">
+              <ToolBtn label="Tags" Icon={Tags} shortcut="T" active={tags} onClick={() => setTags(!tags)} />
+              <ToolBtn label="Info" Icon={Info} shortcut="O" active={s.overlays} onClick={() => v.setOverlays(!s.overlays)} />
+              <ToolMenu label="Export" menuLabel="Export" Icon={ImageDown} onClick={() => v.exportImage()}>
+                <DropdownMenuItem onSelect={() => v.exportImage()}>
+                  <ImageDown /> This view as PNG
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild disabled={!s.instanceFile}>
+                  <a href={s.instanceFile ?? undefined} download>
+                    <Download /> This image as DICOM
+                  </a>
+                </DropdownMenuItem>
+              </ToolMenu>
+              <ToolBtn label={fullscreen ? "Exit full" : "Full screen"} Icon={fullscreen ? Minimize : Maximize} shortcut="F" onClick={toggleFullscreen} />
+              <ToolBtn label="Keys" Icon={Keyboard} shortcut="?" onClick={() => setHelp(true)} />
+            </div>
+            <div className="min-[1600px]:hidden">
+              <ToolMenu label="More" menuLabel="More: tags, text, export, full screen, keys" Icon={Ellipsis}>
+                <DropdownMenuCheckboxItem checked={tags} onCheckedChange={setTags}>
+                  <Tags /> DICOM tags <DropdownMenuShortcut>T</DropdownMenuShortcut>
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem checked={s.overlays} onCheckedChange={(on) => v.setOverlays(on)}>
+                  <Info /> Text on the images <DropdownMenuShortcut>O</DropdownMenuShortcut>
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => v.exportImage()}>
+                  <ImageDown /> This view as PNG
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild disabled={!s.instanceFile}>
+                  <a href={s.instanceFile ?? undefined} download>
+                    <Download /> This image as DICOM
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={toggleFullscreen}>
+                  {fullscreen ? <Minimize /> : <Maximize />} {fullscreen ? "Leave full screen" : "Full screen"} <DropdownMenuShortcut>F</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setHelp(true)}>
+                  <Keyboard /> Keyboard and mouse <DropdownMenuShortcut>?</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </ToolMenu>
+            </div>
           </>
         )}
       </header>
