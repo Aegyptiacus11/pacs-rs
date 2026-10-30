@@ -116,6 +116,7 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   at once (one ZIP from `/tools/create-archive`).
 - **Patients**: one row per Patient ID; a row shows that patient's studies.
 - **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
+- **Light or dark**: one button in the header, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
 - **Viewer**: full screen and dark. Frames come over WADO-RS in the transfer syntax they are
