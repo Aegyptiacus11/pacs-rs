@@ -1731,6 +1731,7 @@ dependencies = [
 name = "pacs-index"
 version = "0.2.0"
 dependencies = [
+ "dicom-core",
  "dicom-dictionary-std",
  "pacs-core",
  "serde_json",
@@ -1776,6 +1777,7 @@ dependencies = [
  "pacs-rest",
  "pacs-store",
  "reqwest",
+ "serde",
  "serde_json",
  "sqlx",
  "tempfile",
