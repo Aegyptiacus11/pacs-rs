@@ -19,6 +19,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
+mod annotations;
 mod protocols;
 mod ui;
 
@@ -259,7 +260,8 @@ pub fn without_password(url: &str) -> String {
 
 /// The whole HTTP application: `/healthz`, the REST API at `/`, DICOMweb under
 /// `dicomweb_path` and, unless turned off, the web interface at `/ui/` with its shared
-/// hanging protocols at `/ui/api/protocols`.
+/// hanging protocols at `/ui/api/protocols` and the viewer's measurements at
+/// `/ui/api/annotations`.
 pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
     if path == "/" {
@@ -285,7 +287,10 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
                 "the web interface was not built into this binary; /ui/ says how to build it"
             );
         }
-        app = app.merge(ui::router(&path)).merge(protocols::router(index));
+        app = app
+            .merge(ui::router(&path))
+            .merge(protocols::router(index.clone()))
+            .merge(annotations::router(index));
     }
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
