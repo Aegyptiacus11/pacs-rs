@@ -19,6 +19,8 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
+mod ui;
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "pacs-server", version, about = "pacs-rs: a PACS in Rust")]
 pub struct Settings {
@@ -73,6 +75,11 @@ pub struct Settings {
     /// Origins browsers may call from, comma-separated, or `*`. None by default.
     #[arg(long, env = "PACS_CORS_ORIGINS", value_delimiter = ',')]
     pub cors_origins: Vec<String>,
+
+    /// Serve the web interface at /ui/ (`/` redirects there). It has no login of its own:
+    /// whoever reaches it can delete, as with the REST API.
+    #[arg(long, env = "PACS_UI", default_value_t = true, action = clap::ArgAction::Set)]
+    pub ui: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -249,8 +256,8 @@ pub fn without_password(url: &str) -> String {
     }
 }
 
-/// The whole HTTP application: `/healthz`, the REST API at `/` and DICOMweb under
-/// `dicomweb_path`.
+/// The whole HTTP application: `/healthz`, the REST API at `/`, DICOMweb under
+/// `dicomweb_path` and, unless turned off, the web interface at `/ui/`.
 pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
     if path == "/" {
@@ -269,6 +276,14 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
         .route("/healthz", get(|| async { "ok\n" }))
         .merge(rest)
         .nest(&path, dicomweb);
+    if settings.ui {
+        if !ui::built() {
+            tracing::warn!(
+                "the web interface was not built into this binary; /ui/ says how to build it"
+            );
+        }
+        app = app.merge(ui::router(&path));
+    }
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }

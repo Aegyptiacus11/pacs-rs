@@ -21,6 +21,7 @@ pacs-dicomweb.workspace = true
 pacs-index.workspace = true
 pacs-rest.workspace = true
 pacs-store.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
