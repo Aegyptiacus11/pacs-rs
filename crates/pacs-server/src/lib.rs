@@ -19,6 +19,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
+mod protocols;
 mod ui;
 
 #[derive(Debug, Clone, Parser)]
@@ -257,13 +258,15 @@ pub fn without_password(url: &str) -> String {
 }
 
 /// The whole HTTP application: `/healthz`, the REST API at `/`, DICOMweb under
-/// `dicomweb_path` and, unless turned off, the web interface at `/ui/`.
+/// `dicomweb_path` and, unless turned off, the web interface at `/ui/` with its shared
+/// hanging protocols at `/ui/api/protocols`.
 pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
     if path == "/" {
         bail!("the DICOMweb path cannot be /: the REST API is served there");
     }
     let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes);
+    let index = archive.index().clone();
     let dicomweb = pacs_dicomweb::router(
         archive,
         pacs_dicomweb::Config {
@@ -282,7 +285,7 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
                 "the web interface was not built into this binary; /ui/ says how to build it"
             );
         }
-        app = app.merge(ui::router(&path));
+        app = app.merge(ui::router(&path)).merge(protocols::router(index));
     }
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
