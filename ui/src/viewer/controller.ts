@@ -106,14 +106,44 @@ const STACK_GROUP = "pacs-rs-stack";
 const MPR_GROUP = "pacs-rs-mpr";
 const PLANE_COLOR: Record<string, string> = { axial: "rgb(232, 84, 84)", sagittal: "rgb(92, 196, 120)", coronal: "rgb(96, 150, 255)" };
 
+// How images are drawn: "gpu" (WebGL, needed for MPR) or "cpu" (no WebGL at all). Kept in
+// this browser; the viewer switches to "cpu" by itself when WebGL draws blank.
+const RENDER_KEY = "pacs-rs-rendering";
+export function renderingMode(): "gpu" | "cpu" {
+  try {
+    return localStorage.getItem(RENDER_KEY) === "cpu" ? "cpu" : "gpu";
+  } catch {
+    return "gpu";
+  }
+}
+export function setRenderingMode(mode: "gpu" | "cpu") {
+  try {
+    if (mode === "cpu") localStorage.setItem(RENDER_KEY, "cpu");
+    else localStorage.removeItem(RENDER_KEY);
+  } catch {}
+}
+
+// Cornerstone draws with WebGL off screen, then copies each image into a 2D canvas on the page.
+// On some GPU stacks (Chrome with ANGLE on Vulkan, Mesa RADV) that copy hands a GPU texture to
+// the compositor and fails ("invalid mailbox name", "texture is not a shared image"): the
+// canvas stays blank. A 2D canvas made to be read from keeps its pixels in memory instead, and
+// the copy then goes through a read back, which works everywhere. Only the viewer's canvases.
+const getContext = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, options?: any) {
+  if (type === "2d" && this.closest(".viewer-grid")) options = { ...options, willReadFrequently: true };
+  return (getContext as any).call(this, type, options);
+} as any;
+
 let ready: Promise<void> | null = null;
 export function initCornerstone() {
   ready ??= (async () => {
     await coreInit();
     // the GPU whenever there is WebGL2, even a weak or software one: MPR needs it, and
-    // Cornerstone's own check would fall back to the CPU on such machines
+    // Cornerstone's own check would fall back to the CPU on such machines; the CPU when this
+    // browser was told to (or found WebGL drawing blank)
     try {
-      if (document.createElement("canvas").getContext("webgl2")) setUseCPURendering(false);
+      if (renderingMode() === "cpu") setUseCPURendering(true);
+      else if (document.createElement("canvas").getContext("webgl2")) setUseCPURendering(false);
     } catch {}
     loaderInit({ maxWebWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) });
     volumeLoader.registerUnknownVolumeLoader(cornerstoneStreamingImageVolumeLoader as any);
@@ -470,6 +500,34 @@ export class Viewer {
     return cell;
   }
 
+  /** Called with a message when WebGL drew nothing; the page then reloads drawing on the CPU. */
+  onBlank: ((message: string) => void) | null = null;
+  private checkedDrawing = false;
+
+  // once per page, after the first image: if WebGL left the viewport's canvas empty while the
+  // image has content, this browser can't show WebGL output, so draw on the CPU from now on
+  private checkDrawn(cell: Cell) {
+    if (this.checkedDrawing || getShouldUseCPURendering()) return;
+    this.checkedDrawing = true;
+    setTimeout(() => {
+      const canvas = cell.element.querySelector("canvas");
+      const image = (cell.viewport as any).getImageData?.();
+      if (!canvas || !image) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const { width, height } = canvas;
+      const pixels = ctx.getImageData(0, 0, width, height).data;
+      let lit = 0;
+      for (let i = 0; i < pixels.length; i += 4 * 97) if (pixels[i] | pixels[i + 1] | pixels[i + 2]) lit++;
+      const range = image.scalarData ? image.imageData?.getPointData?.().getScalars?.().getRange?.() : null;
+      const flat = range && range[0] === range[1];
+      if (lit === 0 && !flat) {
+        setRenderingMode("cpu");
+        this.onBlank?.("This browser's WebGL drew a blank image, so the viewer now draws on the CPU. 3 planes and other planes need WebGL and are off.");
+      }
+    }, 600);
+  }
+
   // the magnifying glass: while the left button is held, a round lens over the pointer shows
   // what is under it larger, from the image as drawn (any viewport, any plane); the wheel
   // changes how much, 1.5 to 8 times
@@ -571,6 +629,7 @@ export class Viewer {
     }
     viewport.render();
     this.measureFit(cell);
+    this.checkDrawn(cell);
     toolUtilities.stackPrefetch.enable(cell.element);
     this.overlays(cell);
     this.emit();
@@ -1025,8 +1084,9 @@ export class Viewer {
     cell.viewport.render();
     this.emit();
   }
-  rotate(cell = this.active()) {
-    cell.rotation = (cell.rotation + 90) % 360;
+  /** Turn the image by `degrees`: 90 to the right, -90 to the left. */
+  rotate(degrees = 90, cell = this.active()) {
+    cell.rotation = (((cell.rotation + degrees) % 360) + 360) % 360;
     cell.viewport.setViewPresentation({ rotation: cell.rotation });
     cell.viewport.render();
     this.overlays(cell);
