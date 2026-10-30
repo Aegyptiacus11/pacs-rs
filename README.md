@@ -16,7 +16,9 @@ S3 and a SQLite index.
 | `pacs-archive` | ingest (compress, store, then index, undone if the index refuses) and deletion (index then files) |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
-| `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web` |
+| `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |
+
+`ui/` is the web interface, a Vite project built into the binary (see "Web interface").
 
 ## DICOMweb
 
@@ -100,6 +102,26 @@ Not yet: labels, metadata, modifications, wildcard and range searches in `/tools
 
 DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after.
 
+## Web interface
+
+At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other client:
+
+- **Worklist**: every study, newest first and grouped by month, with search (name, patient ID,
+  accession, description), modality and date filters, and sortable columns. Selecting a study
+  shows its series, sizes and details beside the list, with download (ZIP) and deletion for the
+  study or its patient. Keys: `/` search, `↑` `↓` select, `Enter` open, `Del` delete.
+- **Patients**: one row per patient; opening one shows only their studies.
+- **Viewer**: [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0. Frames come over WADO-RS
+  in the transfer syntax they are stored in and are decoded in the browser (JPEG-LS, JPEG,
+  JPEG 2000, HTJ2K, JPEG XL); window/level with presets, zoom, pan, invert, length, pixel
+  value, angle and elliptical ROI (area, mean, standard deviation), cine, the DICOM tags, and
+  the study's other series beside it.
+- **Upload**: drop files or folders anywhere on the page, or pick them from Upload; each file
+  is sent to `POST /instances` and counted as new, already stored or skipped.
+
+Like the REST API, it has no login yet: whoever reaches it can delete. `PACS_UI=false` turns it
+off.
+
 ## Running
 
 ```bash
@@ -124,6 +146,7 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_COMPRESSION` | `jpeg-ls` | how uncompressed pixel data is stored: `jpeg-ls` (lossless, checked) or `off` |
 | `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
+| `PACS_UI` | `true` | serve the web interface at `/ui/` |
 | `RUST_LOG` | `info` | log filter |
 
 In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
@@ -172,6 +195,19 @@ the `charls` crate and linked statically, so building also needs `cmake` and a C
 ```bash
 cargo test --workspace
 ```
+
+The web interface is built with Node (24 or later) and embedded when `pacs-server` is compiled
+(`crates/pacs-server/build.rs`, from `ui/dist`, or from the directory in `PACS_UI_DIST`).
+Without a build, the server still works and `/ui/` says how to make one. The Docker image
+builds it in a stage of its own.
+
+```bash
+(cd ui && npm ci && npm run build)
+cargo build --release -p pacs-server
+```
+
+For work on the interface, `npm run dev` in `ui/` serves it with hot reload and sends API
+requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`).
 
 The Postgres tests run only when `PACS_TEST_POSTGRES_URL` names a server; each test makes a
 database of its own there. Every index test, the server tests and the reference comparison then
