@@ -85,7 +85,7 @@ const SHORTCUTS: [string, string][] = [
   ["Page Up / Down", "Ten images back or forward"],
   ["[ ]", "Previous or next series"],
   ["W P Z", "Window, pan, zoom"],
-  ["M", "Magnifying glass: hold over a spot"],
+  ["M", "Magnifying glass: hold over a spot, wheel for more or less"],
   ["N", "Add a viewport"],
   ["L H A C B R G", "Measurement tools"],
   ["X", "Crosshairs (MPR)"],
@@ -362,35 +362,15 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               </DropdownMenuItem>
             </ToolMenu>
             <ToolBtn label="Pan" Icon={Move} shortcut="P" active={s.tool === "pan"} onClick={() => v.useTool("pan")} />
-            <ToolMenu
-              label={s.tool === "magnify" ? "Magnifier" : "Zoom"}
-              menuLabel="Zoom options"
-              Icon={s.tool === "magnify" ? ScanSearch : ZoomIn}
-              shortcut={s.tool === "magnify" ? "M" : "Z"}
-              active={s.tool === "zoom" || s.tool === "magnify"}
-              onClick={() => v.useTool(s.tool === "magnify" ? "magnify" : "zoom")}
-            >
-              <DropdownMenuItem onSelect={() => v.useTool("zoom")}>
-                <ZoomIn />
-                <div className="flex flex-col">
-                  <span>Zoom</span>
-                  <span className="text-xs text-muted-foreground">Drag up or down to zoom the whole image</span>
-                </div>
-                <DropdownMenuShortcut>Z</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => v.useTool("magnify")}>
-                <ScanSearch />
-                <div className="flex flex-col">
-                  <span>Magnifying glass</span>
-                  <span className="text-xs text-muted-foreground">Hold the button over a spot to see it larger</span>
-                </div>
-                <DropdownMenuShortcut>M</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => v.reset()}>
-                <Maximize /> Fit to the viewport <DropdownMenuShortcut>dbl-click</DropdownMenuShortcut>
-              </DropdownMenuItem>
-            </ToolMenu>
+            <ToolBtn label="Zoom" tip="Zoom: drag up or down" Icon={ZoomIn} shortcut="Z" active={s.tool === "zoom"} onClick={() => v.useTool("zoom")} />
+            <ToolBtn
+              label="Magnifier"
+              tip="Magnifying glass: hold the button over a spot to see it larger; the wheel changes how much"
+              Icon={ScanSearch}
+              shortcut="M"
+              active={s.tool === "magnify"}
+              onClick={() => v.useTool("magnify")}
+            />
             <ToolMenu
               label={measuring?.label ?? "Measure"}
               menuLabel="Measurement tools"

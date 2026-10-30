@@ -120,7 +120,7 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
 - **Viewer**: full screen and dark, laid out like a reading workstation. A toolbar of labelled
-  tools: window/level with presets and invert, pan, zoom (or a magnifying glass), measurements
+  tools: window/level with presets and invert, pan, zoom, a magnifying glass (held over a spot, 1.5 to 8 times with the wheel), measurements
   (length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate
   and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
   series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), cine, DICOM
