@@ -6,6 +6,8 @@
 // included). MPR: the series as a volume, axial, sagittal and coronal with crosshairs, and a
 // fourth view, a full-thickness coronal MIP.
 //
+// Measurements are kept on the server per study: they come back when a study is opened again.
+//
 // Frames come over WADO-RS in the transfer syntax they are stored in (JPEG-LS by default) and
 // are decoded in web workers by dicom-image-loader's codecs; each series' metadata is fetched
 // once and handed to the loader, so no image needs a request of its own for it.
@@ -49,6 +51,7 @@ import {
 } from "@cornerstonejs/tools";
 import { api, formatDate, formatTime, personName, ROOT, sexAge, WEB } from "@/lib/api";
 import { first, num, tag } from "@/lib/pixels";
+import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
 
 export const TOOLS = {
   windowLevel: WindowLevelTool,
@@ -338,6 +341,22 @@ export class Viewer {
   private stackSeries: string[] = [];
   private loaded = new Map<string, Promise<Loaded>>();
   private resize: ResizeObserver;
+  // measurements: the study each belongs to, the studies whose ones are loaded, saves waiting
+  private studyOfAnnotation = new Map<string, string>();
+  private annotationsOf = new Map<string, Promise<void>>();
+  private annotationsIn = new Set<string>();
+  private closed = false;
+  private saves = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Called once when measurements could not be saved. */
+  onSaveFailed: ((message: string) => void) | null = null;
+  private saveFailed = false;
+  private onAnnotation = (e: any) => {
+    const a = e.detail?.annotation;
+    // statistics worked out again on drawing are no change
+    if (!a?.annotationUID || e.detail.changeType === ToolEnums.ChangeTypes.StatsUpdated) return;
+    const study = this.studyOf(a);
+    if (study) this.saveSoon(study);
+  };
   private onLoadFailed = (e: any) => {
     const id = e.detail?.imageId;
     for (const cell of this.cells)
@@ -382,9 +401,11 @@ export class Viewer {
     });
     this.vrGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }] });
     this.applyTool(null, "windowLevel");
-    // measurements belong to this viewing only
+    // what another viewing left; this one's come from the server, study by study
     annotation.state.removeAllAnnotations();
     eventTarget.addEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
+    for (const event of [ToolEnums.Events.ANNOTATION_COMPLETED, ToolEnums.Events.ANNOTATION_MODIFIED, ToolEnums.Events.ANNOTATION_REMOVED])
+      eventTarget.addEventListener(event, this.onAnnotation);
     this.resize = new ResizeObserver(() => this.refit());
     this.resize.observe(grid);
   }
@@ -399,10 +420,78 @@ export class Viewer {
 
   destroy() {
     eventTarget.removeEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
+    for (const event of [ToolEnums.Events.ANNOTATION_COMPLETED, ToolEnums.Events.ANNOTATION_MODIFIED, ToolEnums.Events.ANNOTATION_REMOVED])
+      eventTarget.removeEventListener(event, this.onAnnotation);
+    // what is waiting goes now
+    for (const [study, timer] of this.saves) {
+      clearTimeout(timer);
+      this.save(study);
+    }
+    this.closed = true;
     this.resize.disconnect();
     for (const cell of this.cells) this.dropCell(cell, false);
     for (const g of [STACK_GROUP, MPR_GROUP, VR_GROUP]) ToolGroupManager.destroyToolGroup(g);
     this.engine.destroy();
+  }
+
+  // ---- measurements on the server ----
+
+  /** The study a measurement belongs to: known for those loaded or drawn here, else read from
+   * the image or volume it was drawn on, else the active viewport's. */
+  private studyOf(a: any): string | null {
+    const known = this.studyOfAnnotation.get(a.annotationUID);
+    if (known) return known;
+    const m = a.metadata ?? {};
+    let study: string | null = (m.referencedImageId ?? "").match(/\/studies\/([0-9.]+)\/series\//)?.[1] ?? null;
+    if (!study && typeof m.volumeId === "string")
+      study = this.cells.find((c) => m.volumeId.endsWith(`:${c.data?.series.ID}`))?.data?.study.MainDicomTags.StudyInstanceUID ?? null;
+    study ??= this.active()?.data?.study.MainDicomTags.StudyInstanceUID ?? null;
+    if (study) this.studyOfAnnotation.set(a.annotationUID, study);
+    return study;
+  }
+
+  private loadAnnotations(study: string) {
+    if (!study || this.annotationsOf.has(study)) return;
+    this.annotationsOf.set(
+      study,
+      fetchAnnotations(study)
+        .then((list) => {
+          for (const a of list) {
+            if (annotation.state.getAnnotation(a.annotationUID)) continue;
+            this.studyOfAnnotation.set(a.annotationUID, study);
+            a.invalidated = true;
+            annotation.state.addAnnotation(a, undefined as any);
+          }
+          this.annotationsIn.add(study);
+          if (list.length) this.engine.render();
+        })
+        .catch(() => {}),
+    );
+  }
+
+  private saveSoon(study: string) {
+    clearTimeout(this.saves.get(study));
+    this.saves.set(
+      study,
+      setTimeout(() => this.save(study), 700),
+    );
+  }
+
+  private async save(study: string) {
+    this.saves.delete(study);
+    // never over what the server has before it has been read
+    if (!this.annotationsIn.has(study)) {
+      await this.annotationsOf.get(study);
+      if (this.closed || !this.annotationsIn.has(study)) return;
+    }
+    // read now, not after a wait: once the viewer is closed the next one clears them
+    const list = annotation.state.getAllAnnotations().filter((a: any) => this.studyOf(a) === study);
+    try {
+      await saveAnnotations(study, list);
+    } catch (e: any) {
+      if (!this.saveFailed) this.onSaveFailed?.(e?.message || "The server did not answer");
+      this.saveFailed = true;
+    }
   }
 
   // ---- state for the toolbar ----
@@ -444,6 +533,7 @@ export class Viewer {
         id,
         (async () => {
           const { study, series } = await this.resolve(id);
+          this.loadAnnotations(study.MainDicomTags.StudyInstanceUID);
           const base = new URL(`studies/${study.MainDicomTags.StudyInstanceUID}/series/${series.MainDicomTags.SeriesInstanceUID}/`, WEB);
           const [instances, metadata] = await Promise.all([api<any[]>(`series/${id}/instances`), api<any[]>("metadata", {}, base)]);
           const byUid = new Map(metadata.map((m) => [first(m, "00080018"), m]));
@@ -1229,8 +1319,25 @@ export class Viewer {
     this.grid.classList.toggle("no-overlays", !on);
     this.emit();
   }
+  /** Remove every measurement (saved as removed); what was removed, for an undo. */
   clearMeasurements() {
+    const removed = [...annotation.state.getAllAnnotations()];
+    for (const a of removed) this.studyOf(a);
     annotation.state.removeAllAnnotations();
+    this.cells.forEach((c) => c.viewport.render());
+    return removed;
+  }
+  /** Put measurements back, as `clearMeasurements` returned them. */
+  restoreMeasurements(list: any[]) {
+    const studies = new Set<string>();
+    for (const a of list) {
+      if (annotation.state.getAnnotation(a.annotationUID)) continue;
+      a.invalidated = true;
+      annotation.state.addAnnotation(a, undefined as any);
+      const study = this.studyOf(a);
+      if (study) studies.add(study);
+    }
+    for (const study of studies) this.saveSoon(study);
     this.cells.forEach((c) => c.viewport.render());
   }
   cine(on?: boolean, cell = this.active()) {

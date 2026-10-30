@@ -235,6 +235,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
     };
     const v = new Viewer(grid.current, setState, resolve);
     viewer.current = v;
+    v.onSaveFailed = (message) => toast.error("Measurements are not being saved", { description: message });
     v.onBlank = (message) => {
       toast(message, { duration: 6000 });
       setTimeout(() => location.reload(), 1500);
@@ -305,7 +306,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
         v.step(step[e.key]);
       } else if (e.key === "Home") v.first();
       else if (e.key === "End") v.last();
-      else if (e.key === "Delete" && e.shiftKey) v.clearMeasurements();
+      else if (e.key === "Delete" && e.shiftKey) clearMeasurements();
       else if (tool[e.key]) v.useTool(tool[e.key]);
       else if (e.key >= "1" && e.key <= String(PRESETS.length)) v.setPreset(Number(e.key) - 1);
       else if (e.key === "i") v.toggleInvert();
@@ -338,6 +339,16 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
 
   const v = viewer.current;
   const s = state;
+  function clearMeasurements() {
+    const v = viewer.current;
+    if (!v) return;
+    const removed = v.clearMeasurements();
+    if (removed.length)
+      toast(`${removed.length} measurement${removed.length === 1 ? "" : "s"} removed`, {
+        action: { label: "Undo", onClick: () => viewer.current?.restoreMeasurements(removed) },
+        duration: 8000,
+      });
+  }
   function startMpr() {
     viewer.current?.enterMpr().then((error) => error && toast.error("Couldn't open MPR", { description: error }));
   }
@@ -392,7 +403,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
             {MEASURE.map((m) => (
               <ToolBtn key={m.tool} label={m.short} tip={`${m.label}: ${m.hint}`} Icon={m.Icon} shortcut={m.key} active={s.tool === m.tool} onClick={() => v.useTool(m.tool)} />
             ))}
-            <ToolBtn label="Clear" tip="Remove all measurements" Icon={Eraser} shortcut="⇧ Del" onClick={() => v.clearMeasurements()} />
+            <ToolBtn label="Clear" tip="Remove all measurements (they are saved with the study)" Icon={Eraser} shortcut="⇧ Del" onClick={clearMeasurements} />
             <Sep />
             <ToolMenu label="Rotate" menuLabel="Rotate and flip" tip="Rotate right 90°" Icon={RotateCw} shortcut="R" onClick={() => v.rotate(90)}>
               <DropdownMenuItem onSelect={() => v.rotate(90)}>
