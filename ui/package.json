@@ -1,0 +1,19 @@
+{
+  "name": "pacs-rs-ui",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@cornerstonejs/core": "5.14.0",
+    "@cornerstonejs/dicom-image-loader": "5.14.0",
+    "@cornerstonejs/tools": "5.14.0",
+    "events": "3.3.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.5"
+  }
+}
