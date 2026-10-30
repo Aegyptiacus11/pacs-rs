@@ -147,14 +147,22 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   it serves every matching study. Saved protocols are kept by the server, in the index, so
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
+- **Measurements are kept**: each one is saved with its study as soon as it is drawn, changed
+  or removed, and is there again when the study is opened, in any browser. Clear removes them
+  all, with an undo.
 
 The shared protocols are at `/ui/api/protocols`: `GET` lists them (most recently saved first),
 `PUT /ui/api/protocols/{id}` keeps one (a JSON object whose `id` is the path's, at most 64 KiB;
 at most 1000 protocols), `DELETE` removes one. They are the interface's own documents, stored as
 received in the index's `ui_protocols` table.
 
+The measurements are at `/ui/api/annotations/{StudyInstanceUID}`: `GET` returns the study's list
+(a JSON array, empty when it has none), `PUT` replaces it (an array of objects, at most 1 MiB; an
+empty one removes it), for a study the server has. They are Cornerstone3D annotations, stored as
+received in the `ui_annotations` table; deleting the study deletes them.
+
 Like the REST API, it has no login yet: whoever reaches it can delete, and change the shared
-protocols. `PACS_UI=false` turns it off, protocols included.
+protocols and the measurements. `PACS_UI=false` turns it off, protocols and measurements included.
 
 ## Running
 
