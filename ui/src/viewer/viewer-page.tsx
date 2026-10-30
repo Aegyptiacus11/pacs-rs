@@ -1,6 +1,6 @@
-// The viewer screen: full screen and dark. A toolbar on top (tools, then menus that group the
-// rest), the study's series on the left, the viewports, and the active viewport's position
-// at the bottom. Every action has a tooltip naming its key.
+// The viewer screen, laid out like a reading workstation: one toolbar of labelled tools (a
+// caret where a tool has variants), the patient's studies and series on the left, the
+// viewports filling the rest. Every action has a tooltip naming its key.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -9,63 +9,58 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   ArrowUpDown,
+  Axis3d,
   Check,
   ChevronDown,
+  Circle,
   Contrast,
   Crosshair,
   Diameter,
   Download,
-  Ellipsis,
   Eraser,
-  Eye,
-  EyeOff,
+  ImageDown,
+  Info,
   Keyboard,
   LayoutGrid,
   Link2,
   Maximize,
+  Minimize,
   Move,
+  PanelLeft,
   Pause,
+  Pipette,
   Play,
+  RotateCcw,
   RotateCw,
   Ruler,
+  ScanSearch,
   Spline,
   Square,
-  Circle,
-  SunMedium,
+  SunMoon,
   Tags,
-  Undo2,
   ZoomIn,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { SeriesThumb } from "@/components/series-thumb";
-import { api, formatDate, personName } from "@/lib/api";
+import { toast } from "sonner";
+import { Logo } from "@/components/app-header";
+import { api } from "@/lib/api";
 import { tagRows } from "@/lib/dicom-tags";
 import { href } from "@/lib/route";
-import { sortSeries } from "@/lib/studies";
 import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
+import { StudyBrowser, type Registry } from "@/viewer/study-browser";
 
 const MEASURE: { tool: ToolName; label: string; key: string; Icon: typeof Ruler; hint: string }[] = [
   { tool: "length", label: "Length", key: "L", Icon: Ruler, hint: "Distance in mm" },
-  { tool: "probe", label: "Pixel value", key: "H", Icon: Crosshair, hint: "HU at a point" },
+  { tool: "probe", label: "Pixel value", key: "H", Icon: Pipette, hint: "HU at a point" },
   { tool: "angle", label: "Angle", key: "A", Icon: Angle, hint: "Between two lines" },
   { tool: "cobb", label: "Cobb angle", key: "C", Icon: Spline, hint: "Between two separate lines" },
   { tool: "bidirectional", label: "Bidirectional", key: "B", Icon: Diameter, hint: "Long and short axis" },
@@ -77,9 +72,10 @@ const SHORTCUTS: [string, string][] = [
   ["Wheel, ↑ ↓", "Previous or next image"],
   ["Page Up / Down", "Ten images back or forward"],
   ["[ ]", "Previous or next series"],
-  ["W", "Window/level tool"],
-  ["P / Z", "Pan / zoom tool"],
+  ["W P Z M", "Window, pan, zoom, magnify"],
   ["L H A C B R G", "Measurement tools"],
+  ["X", "Crosshairs (MPR)"],
+  ["V", "MPR on or off"],
   ["Shift Delete", "Remove all measurements"],
   ["1 – 6", "Window presets"],
   ["I", "Invert"],
@@ -90,26 +86,24 @@ const SHORTCUTS: [string, string][] = [
   ["T", "DICOM tags"],
   ["F", "Full screen"],
   ["Double click", "Reset the view"],
+  ["Drag a series", "Show it in that viewport"],
   ["Middle drag, Shift drag", "Pan, whatever tool is chosen"],
   ["Right drag", "Zoom, whatever tool is chosen"],
   ["Esc", "Back to the studies"],
 ];
 
-function ToolButton({ label, shortcut, active, onClick, children, className }: { label: string; shortcut?: string; active?: boolean; onClick?: () => void; children: ReactNode; className?: string }) {
+type Tb = { label: string; tip?: string; Icon: typeof Ruler; shortcut?: string; active?: boolean; disabled?: boolean; onClick?: () => void };
+
+const toolClass = (active?: boolean) =>
+  cn(
+    "flex h-12 min-w-12 flex-col items-center justify-center gap-0.5 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35",
+    active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection",
+  );
+
+function Tip({ label, shortcut, children }: { label: string; shortcut?: string; children: ReactNode }) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={label}
-          aria-pressed={active}
-          onClick={onClick}
-          className={cn("text-muted-foreground hover:text-foreground", active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection", className)}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="bottom" className="flex items-center gap-2">
         {label}
         {shortcut && <Kbd>{shortcut}</Kbd>}
@@ -118,72 +112,116 @@ function ToolButton({ label, shortcut, active, onClick, children, className }: {
   );
 }
 
-function MenuButton({ label, children, active, Icon, text }: { label: string; children: ReactNode; active?: boolean; Icon: typeof Ruler; text?: string }) {
+// a tool of the toolbar: the icon over its name
+function ToolBtn({ label, tip, Icon, shortcut, active, disabled, onClick, className }: Tb & { className?: string }) {
   return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label={label}
-              className={cn("gap-1 px-2 text-muted-foreground hover:text-foreground", active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection")}
-            >
-              <Icon />
-              {text && <span className="hidden xl:inline">{text}</span>}
-              <ChevronDown className="size-3 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{label}</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="start" className="w-60">
-        {children}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Tip label={tip ?? label} shortcut={shortcut}>
+      {/* a span keeps the tooltip on a disabled button, so it can say why */}
+      <span className="inline-flex">
+      <button type="button" aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick} className={cn(toolClass(active), className)}>
+        <Icon className="size-5" strokeWidth={1.6} />
+        <span className="max-w-16 truncate text-[10.5px] leading-none">{label}</span>
+      </button>
+      </span>
+    </Tip>
   );
 }
+
+// a tool with variants: the tool itself, and a caret for the variants; without a tool of its
+// own (Layout), the whole button opens them
+function ToolMenu({ children, menuLabel, ...tb }: Tb & { children: ReactNode; menuLabel: string }) {
+  const menu = <DropdownMenuContent align="start" className="w-60">{children}</DropdownMenuContent>;
+  if (!tb.onClick)
+    return (
+      <DropdownMenu>
+        <Tip label={menuLabel} shortcut={tb.shortcut}>
+          <DropdownMenuTrigger asChild>
+            <button type="button" aria-label={menuLabel} disabled={tb.disabled} className={toolClass(tb.active)}>
+              <tb.Icon className="size-5" strokeWidth={1.6} />
+              <span className="flex items-center gap-0.5 text-[10.5px] leading-none">
+                {tb.label} <ChevronDown className="size-2.5" />
+              </span>
+            </button>
+          </DropdownMenuTrigger>
+        </Tip>
+        {menu}
+      </DropdownMenu>
+    );
+  return (
+    <div className={cn("flex items-stretch rounded-md", tb.active && "bg-selection-soft")}>
+      <ToolBtn {...tb} className="rounded-r-none pr-0.5" />
+      <DropdownMenu>
+        <Tip label={menuLabel}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={menuLabel}
+              disabled={tb.disabled}
+              className={cn("flex w-4 items-center justify-center rounded-r-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35", tb.active && "text-selection hover:bg-selection-soft")}
+            >
+              <ChevronDown className="size-3" />
+            </button>
+          </DropdownMenuTrigger>
+        </Tip>
+        {menu}
+      </DropdownMenu>
+    </div>
+  );
+}
+
+const Sep = () => <Separator orientation="vertical" className="mx-1 !h-9" />;
 
 export function ViewerPage({ study: studyId, series: seriesId }: { study: string; series: string }) {
   const data = useQuery({
     queryKey: ["viewer", studyId],
     queryFn: async () => {
-      const [study, series] = await Promise.all([api(`studies/${studyId}`), api<any[]>(`studies/${studyId}/series`), initCornerstone()]);
-      return { study, series: sortSeries(series) };
+      const [study] = await Promise.all([api(`studies/${studyId}`), initCornerstone()]);
+      return { study };
     },
   });
+  const registry = useRef<Registry>(new Map()).current;
   const grid = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const [state, setState] = useState<ViewerState | null>(null);
+  const [browser, setBrowser] = useState(true);
   const [tags, setTags] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
   const [help, setHelp] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-
-  // the engine lives as long as the study is open; the series in the URL is the first shown
-  useEffect(() => {
-    if (!data.data || !grid.current) return;
-    const v = new Viewer(grid.current, data.data.study, data.data.series, setState);
-    viewer.current = v;
-    v.start(data.data.series.some((s) => s.ID === seriesId) ? seriesId : data.data.series[0]?.ID);
-    return () => {
-      v.destroy();
-      viewer.current = null;
-    };
-  }, [data.data]);
-
-  // the URL follows the active viewport's series, without a page change
-  useEffect(() => {
-    const id = state?.shown[state.active];
-    if (id && !location.hash.endsWith(id)) history.replaceState(null, "", href.view(studyId, id));
-  }, [state?.shown, state?.active]);
 
   // dark everywhere while the viewer is open, menus and dialogs included (they render outside)
   useEffect(() => {
     document.documentElement.classList.add("dark");
     return () => applyTheme();
   }, []);
+
+  // the engine lives as long as the study is open; the series in the URL is the first shown
+  useEffect(() => {
+    if (!data.data || !grid.current) return;
+    const resolve = async (id: string) => {
+      const known = registry.get(id);
+      if (known) return known;
+      const [series, study] = await Promise.all([api(`series/${id}`), api(`series/${id}/study`)]);
+      registry.set(id, { study, series });
+      return { study, series };
+    };
+    const v = new Viewer(grid.current, setState, resolve);
+    viewer.current = v;
+    v.start(seriesId);
+    return () => {
+      v.destroy();
+      viewer.current = null;
+    };
+  }, [data.data]);
+
+  // the URL follows the active viewport's study and series, without a page change
+  const activeCell = state?.cells[state.active];
+  useEffect(() => {
+    if (activeCell?.seriesId && activeCell.studyId) {
+      const to = href.view(activeCell.studyId, activeCell.seriesId);
+      if (location.hash !== to) history.replaceState(null, "", to);
+    }
+  }, [activeCell?.seriesId, activeCell?.studyId]);
 
   useEffect(() => {
     const change = () => setFullscreen(!!document.fullscreenElement);
@@ -197,8 +235,11 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       const v = viewer.current;
       if (!v || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement;
-      if (target.closest("input, textarea, [role=dialog], [role=menu]")) return;
-      const tool: Record<string, ToolName> = { w: "windowLevel", p: "pan", z: "zoom", l: "length", h: "probe", a: "angle", c: "cobb", b: "bidirectional", r: "ellipse", g: "rectangle" };
+      if (target.closest("input, textarea, select, [role=dialog], [role=menu]")) return;
+      const tool: Record<string, ToolName> = {
+        w: "windowLevel", p: "pan", z: "zoom", m: "magnify", x: "crosshairs",
+        l: "length", h: "probe", a: "angle", c: "cobb", b: "bidirectional", r: "ellipse", g: "rectangle",
+      };
       const step: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1, PageDown: 10, PageUp: -10 };
       if (step[e.key]) {
         e.preventDefault();
@@ -210,6 +251,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       else if (e.key >= "1" && e.key <= String(PRESETS.length)) v.setPreset(Number(e.key) - 1);
       else if (e.key === "i") v.toggleInvert();
       else if (e.key === "e") v.rotate();
+      else if (e.key === "v") state?.mode === "mpr" ? v.exitMpr() : startMpr();
       else if (e.key === " ") {
         e.preventDefault();
         v.cine();
@@ -224,75 +266,60 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
     };
     addEventListener("keydown", keys);
     return () => removeEventListener("keydown", keys);
-  }, [state?.linked, state?.overlays, studyId]);
+  }, [state?.linked, state?.overlays, state?.mode, studyId]);
 
   const v = viewer.current;
   const s = state;
+  function startMpr() {
+    viewer.current?.enterMpr().then((error) => error && toast.error("Couldn't open MPR", { description: error }));
+  }
   const study = data.data?.study;
-  const allSeries = data.data?.series ?? [];
-  const active = s?.shown[s.active];
+  const mpr = s?.mode === "mpr";
   const measuring = MEASURE.find((m) => m.tool === s?.tool);
+  const shown = useMemo(() => new Set((s?.cells ?? []).map((c) => c.seriesId).filter(Boolean) as string[]), [s?.cells]);
   const rows = useMemo(() => (s?.meta ? tagRows(s.meta, tagQuery.toLowerCase()) : []), [s?.meta, tagQuery]);
 
   return (
-    <div className="dark fixed inset-0 z-50 flex flex-col bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center gap-1 border-b bg-card px-2">
-        <Button variant="ghost" size="sm" asChild className="text-muted-foreground hover:text-foreground">
-          <a href={href.studies(null, studyId)}>
-            <ArrowLeft /> Studies
+    <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground">
+      <header className="flex h-14 shrink-0 items-center gap-0.5 overflow-x-auto border-b bg-card px-2 [scrollbar-width:none]">
+        <Tip label="Back to the studies" shortcut="Esc">
+          <a href={href.studies(null, studyId)} className="mr-1 flex h-12 shrink-0 items-center gap-2 rounded-md px-2 hover:bg-accent" aria-label="Back to the studies">
+            <ArrowLeft className="size-4 text-muted-foreground" />
+            <Logo className="size-5" />
           </a>
-        </Button>
-        <Separator orientation="vertical" className="mx-1 h-5" />
-        <div className="mr-auto min-w-0 px-2">
-          {study ? (
-            <div className="flex items-baseline gap-2 truncate text-sm">
-              <span className="font-medium">{personName(study.PatientMainDicomTags.PatientName)}</span>
-              <span className="truncate text-muted-foreground">
-                {study.MainDicomTags.StudyDescription} · {formatDate(study.MainDicomTags.StudyDate)}
-              </span>
-            </div>
-          ) : (
-            <Skeleton className="h-4 w-56" />
-          )}
-        </div>
+        </Tip>
+        <ToolBtn label="Series" Icon={PanelLeft} active={browser} onClick={() => setBrowser(!browser)} />
+        <Sep />
 
         {s && v && (
           <>
-            <div className="flex items-center rounded-md">
-              <ToolButton label="Window/level: drag to change brightness and contrast" shortcut="W" active={s.tool === "windowLevel"} onClick={() => v.useTool("windowLevel")}>
-                <Contrast />
-              </ToolButton>
-              <DropdownMenu>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-sm" aria-label="Window presets" className="-ml-1 w-5 text-muted-foreground hover:text-foreground">
-                        <ChevronDown className="size-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Window presets</TooltipContent>
-                </Tooltip>
-                <DropdownMenuContent align="start" className="w-56">
-                  <DropdownMenuLabel>Window</DropdownMenuLabel>
-                  {PRESETS.map((p, i) => (
-                    <DropdownMenuItem key={p.name} onSelect={() => v.setPreset(i)}>
-                      <Check className={cn(s.preset !== i && "opacity-0")} />
-                      {p.name}
-                      {p.window && <span className="ml-auto text-xs text-muted-foreground tabular">{p.window.width}/{p.window.center}</span>}
-                      <DropdownMenuShortcut className="ml-2">{i + 1}</DropdownMenuShortcut>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <ToolButton label="Pan" shortcut="P" active={s.tool === "pan"} onClick={() => v.useTool("pan")}>
-              <Move />
-            </ToolButton>
-            <ToolButton label="Zoom" shortcut="Z" active={s.tool === "zoom"} onClick={() => v.useTool("zoom")}>
-              <ZoomIn />
-            </ToolButton>
-            <MenuButton label="Measure" Icon={measuring?.Icon ?? Ruler} text={measuring?.label ?? "Measure"} active={!!measuring}>
+            <ToolMenu label="Window" menuLabel="Window presets" Icon={Contrast} shortcut="W" active={s.tool === "windowLevel"} onClick={() => v.useTool("windowLevel")}>
+              <DropdownMenuLabel>Window presets</DropdownMenuLabel>
+              {PRESETS.map((p, i) => (
+                <DropdownMenuItem key={p.name} onSelect={() => v.setPreset(i)}>
+                  <Check className={cn(s.preset !== i && "opacity-0")} />
+                  {p.name}
+                  {p.window && <span className="ml-auto text-xs text-muted-foreground tabular">{p.window.width}/{p.window.center}</span>}
+                  <DropdownMenuShortcut className="ml-2">{i + 1}</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => v.toggleInvert()}>
+                <SunMoon /> Invert <Check className={cn("ml-auto", !s.invert && "opacity-0")} />
+                <DropdownMenuShortcut>I</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            </ToolMenu>
+            <ToolBtn label="Pan" Icon={Move} shortcut="P" active={s.tool === "pan"} onClick={() => v.useTool("pan")} />
+            <ToolBtn label="Zoom" Icon={ZoomIn} shortcut="Z" active={s.tool === "zoom"} onClick={() => v.useTool("zoom")} />
+            <ToolBtn label="Magnify" Icon={ScanSearch} shortcut="M" active={s.tool === "magnify"} onClick={() => v.useTool("magnify")} />
+            <ToolMenu
+              label={measuring?.label ?? "Measure"}
+              menuLabel="Measurement tools"
+              Icon={measuring?.Icon ?? Ruler}
+              active={!!measuring}
+              onClick={() => v.useTool(measuring?.tool ?? "length")}
+              shortcut={measuring?.key ?? "L"}
+            >
               <DropdownMenuLabel>Measure</DropdownMenuLabel>
               {MEASURE.map((m) => (
                 <DropdownMenuItem key={m.tool} onSelect={() => v.useTool(m.tool)}>
@@ -308,40 +335,8 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               <DropdownMenuItem onSelect={() => v.clearMeasurements()}>
                 <Eraser /> Remove all measurements <DropdownMenuShortcut>⇧⌫</DropdownMenuShortcut>
               </DropdownMenuItem>
-            </MenuButton>
-
-            <Separator orientation="vertical" className="mx-1 h-5" />
-
-            <MenuButton label="Layout" Icon={LayoutGrid} text={LAYOUTS[s.layout].name} active={s.layout > 0}>
-              <DropdownMenuLabel>Viewports</DropdownMenuLabel>
-              <div className="grid grid-cols-4 gap-1 p-1">
-                {LAYOUTS.map((l, i) => (
-                  <button
-                    key={l.name}
-                    aria-label={`Layout ${l.name}`}
-                    onClick={() => v.setLayout(i)}
-                    className={cn("flex flex-col items-center gap-1 rounded-md p-2 text-[11px] text-muted-foreground hover:bg-accent", s.layout === i && "bg-selection-soft text-selection")}
-                  >
-                    <span className="grid size-8 gap-0.5" style={{ gridTemplateColumns: `repeat(${l.cols}, 1fr)`, gridTemplateRows: `repeat(${l.rows}, 1fr)` }}>
-                      {Array.from({ length: l.cols * l.rows }, (_, j) => (
-                        <span key={j} className="rounded-[2px] border border-current" />
-                      ))}
-                    </span>
-                    {l.name}
-                  </button>
-                ))}
-              </div>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={(e) => (e.preventDefault(), v.setLinked(!s.linked))} disabled={s.shown.length < 2}>
-                <Link2 />
-                <div className="flex flex-col">
-                  <span>Link scrolling</span>
-                  <span className="text-xs text-muted-foreground">Same slice position in every viewport</span>
-                </div>
-                <Check className={cn("ml-auto", !s.linked && "opacity-0")} />
-              </DropdownMenuItem>
-            </MenuButton>
-            <MenuButton label="Orientation" Icon={RotateCw}>
+            </ToolMenu>
+            <ToolMenu label="Rotate" menuLabel="Rotate and flip" Icon={RotateCw} shortcut="E" onClick={() => v.rotate()}>
               <DropdownMenuItem onSelect={() => v.rotate()}>
                 <RotateCw /> Rotate 90° <DropdownMenuShortcut>E</DropdownMenuShortcut>
               </DropdownMenuItem>
@@ -351,113 +346,65 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               <DropdownMenuItem onSelect={() => v.flip("vertical")}>
                 <ArrowUpDown /> Flip top to bottom
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => v.toggleInvert()}>
-                <SunMedium /> Invert <Check className={cn("ml-auto", !s.invert && "opacity-0")} />
-                <DropdownMenuShortcut>I</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => v.reset()}>
-                <Undo2 /> Reset view <DropdownMenuShortcut>dbl-click</DropdownMenuShortcut>
-              </DropdownMenuItem>
-            </MenuButton>
-            <ToolButton label={s.playing ? "Stop" : "Play through the series"} shortcut="Space" active={s.playing} onClick={() => v.cine()}>
-              {s.playing ? <Pause /> : <Play />}
-            </ToolButton>
-            {s.shown.length > 1 && (
-              <ToolButton label="Link scrolling" shortcut="K" active={s.linked} onClick={() => v.setLinked(!s.linked)}>
-                <Link2 />
-              </ToolButton>
-            )}
+            </ToolMenu>
+            <ToolBtn label="Reset" Icon={RotateCcw} onClick={() => v.reset()} />
+            <Sep />
 
-            <Separator orientation="vertical" className="mx-1 h-5" />
+            <ToolMenu label="Layout" menuLabel="Layouts" Icon={LayoutGrid}>
+              <DropdownMenuLabel>Viewports</DropdownMenuLabel>
+              <div className="grid grid-cols-3 gap-1 p-1">
+                {LAYOUTS.map((l, i) => (
+                  <DropdownMenuItem
+                    key={l.name}
+                    aria-label={`Layout ${l.name}`}
+                    onSelect={() => v.setLayout(i)}
+                    className={cn("flex flex-col items-center gap-1 rounded-md p-2 text-[11px] text-muted-foreground", !mpr && s.layout === i && "bg-selection-soft text-selection")}
+                  >
+                    <span className="grid h-7 w-9 gap-0.5" style={{ gridTemplateColumns: `repeat(${l.cols}, 1fr)`, gridTemplateRows: `repeat(${l.rows}, 1fr)` }}>
+                      {Array.from({ length: l.cols * l.rows }, (_, j) => (
+                        <span key={j} className="rounded-[2px] border border-current" />
+                      ))}
+                    </span>
+                    {l.name}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            </ToolMenu>
+            <ToolBtn
+              label={s.loadingVolume ? "Loading…" : "MPR"}
+              tip={!mpr && s.mprBlocked ? s.mprBlocked : "Axial, sagittal and coronal, with crosshairs and MIP"}
+              Icon={Axis3d}
+              shortcut="V"
+              active={mpr}
+              disabled={!mpr && (!s.canMpr || s.loadingVolume)}
+              onClick={() => (mpr ? v.exitMpr() : startMpr())}
+            />
+            {mpr && <ToolBtn label="Crosshairs" Icon={Crosshair} shortcut="X" active={s.tool === "crosshairs"} onClick={() => v.useTool("crosshairs")} />}
+            {!mpr && <ToolBtn label="Link" Icon={Link2} shortcut="K" active={s.linked} disabled={s.cells.length < 2} onClick={() => v.setLinked(!s.linked)} />}
+            <ToolBtn label={s.playing ? "Stop" : "Cine"} Icon={s.playing ? Pause : Play} shortcut="Space" active={s.playing} onClick={() => v.cine()} />
+            <Sep />
 
-            <ToolButton label="DICOM tags" shortcut="T" active={tags} onClick={() => setTags(!tags)}>
-              <Tags />
-            </ToolButton>
-            <DropdownMenu>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" aria-label="More" className="text-muted-foreground hover:text-foreground">
-                      <Ellipsis />
-                    </Button>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">More</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent align="end" className="w-60">
-                <DropdownMenuItem asChild disabled={!s.instanceFile}>
-                  <a href={s.instanceFile ?? undefined} download>
-                    <Download /> Download this image (.dcm)
-                  </a>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => v.setOverlays(!s.overlays)}>
-                  {s.overlays ? <EyeOff /> : <Eye />} {s.overlays ? "Hide" : "Show"} image text <DropdownMenuShortcut>O</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={toggleFullscreen}>
-                  <Maximize /> {fullscreen ? "Leave full screen" : "Full screen"} <DropdownMenuShortcut>F</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setHelp(true)}>
-                  <Keyboard /> Keyboard shortcuts <DropdownMenuShortcut>?</DropdownMenuShortcut>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <ToolBtn label="Tags" Icon={Tags} shortcut="T" active={tags} onClick={() => setTags(!tags)} />
+            <ToolBtn label="Info" Icon={Info} shortcut="O" active={s.overlays} onClick={() => v.setOverlays(!s.overlays)} />
+            <ToolMenu label="Export" menuLabel="Export" Icon={ImageDown} onClick={() => v.exportImage()}>
+              <DropdownMenuItem onSelect={() => v.exportImage()}>
+                <ImageDown /> This view as PNG
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild disabled={!s.instanceFile}>
+                <a href={s.instanceFile ?? undefined} download>
+                  <Download /> This image as DICOM
+                </a>
+              </DropdownMenuItem>
+            </ToolMenu>
+            <ToolBtn label={fullscreen ? "Exit full" : "Full screen"} Icon={fullscreen ? Minimize : Maximize} shortcut="F" onClick={toggleFullscreen} />
+            <ToolBtn label="Keys" Icon={Keyboard} shortcut="?" onClick={() => setHelp(true)} />
           </>
         )}
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-48 shrink-0 flex-col border-r bg-card md:flex">
-          <div className="flex h-10 items-center justify-between px-3 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Series</span>
-            <span className="tabular">{allSeries.length || ""}</span>
-          </div>
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-2 px-3 pb-3">
-              {data.isPending && Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="aspect-square w-full rounded-md" />)}
-              {allSeries.map((x) => {
-                const isActive = x.ID === active;
-                const shown = s?.shown.includes(x.ID);
-                return (
-                  <button
-                    key={x.ID}
-                    onClick={() => v?.showSeries(x.ID)}
-                    className={cn("group block w-full rounded-lg p-1.5 text-left transition-colors hover:bg-accent", isActive && "bg-selection-soft hover:bg-selection-soft")}
-                  >
-                    <SeriesThumb series={x} studyUid={study.MainDicomTags.StudyInstanceUID} className={cn("ring-2 ring-transparent", isActive && "ring-selection", !isActive && shown && "ring-selection/30")} />
-                    <div className="mt-1.5 truncate px-0.5 text-xs font-medium">{x.MainDicomTags.SeriesDescription || "No description"}</div>
-                    <div className="flex justify-between px-0.5 text-[11px] text-muted-foreground">
-                      <span>
-                        {x.MainDicomTags.Modality} {x.MainDicomTags.SeriesNumber ? `#${x.MainDicomTags.SeriesNumber}` : ""}
-                      </span>
-                      <span className="tabular">{x.Instances.length}</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </ScrollArea>
-        </aside>
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div ref={grid} className="viewer-grid min-h-0 flex-1" data-tool={s?.tool} />
-          <div className="flex h-9 shrink-0 items-center gap-3 border-t bg-card px-4">
-            <input
-              type="range"
-              aria-label="Image"
-              min={0}
-              max={Math.max((s?.count ?? 1) - 1, 0)}
-              value={s?.index ?? 0}
-              onChange={(e) => v?.go(Number(e.target.value))}
-              className="h-1 flex-1 cursor-pointer accent-[var(--selection)]"
-            />
-            <span className="tabular w-16 text-right text-xs text-muted-foreground">{s?.count ? `${s.index + 1} / ${s.count}` : ""}</span>
-            <Button variant="ghost" size="icon-xs" aria-label="Keyboard shortcuts" className="text-muted-foreground" onClick={() => setHelp(true)}>
-              <Keyboard />
-            </Button>
-          </div>
-        </main>
+        {browser && study && <StudyBrowser study={study} registry={registry} shown={shown} active={activeCell?.seriesId ?? null} onPick={(id) => v?.showSeries(id)} />}
+        <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
       </div>
 
       <Sheet open={tags} onOpenChange={setTags} modal={false}>
@@ -472,7 +419,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={i} className="border-b align-top">
-                    <td className="py-1.5 pr-2 pl-4 font-mono whitespace-nowrap text-muted-foreground" style={{ paddingLeft: 16 + r.depth * 14 }}>
+                    <td className="py-1.5 pr-2 font-mono whitespace-nowrap text-muted-foreground" style={{ paddingLeft: 16 + r.depth * 14 }}>
                       {r.tag}
                     </td>
                     <td className="w-1/3 py-1.5 pr-2 text-muted-foreground">{r.name}</td>
@@ -489,7 +436,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Keyboard and mouse</DialogTitle>
-            <DialogDescription>The same keys work in every viewport; they act on the active one.</DialogDescription>
+            <DialogDescription>The keys act on the active viewport, the one framed in blue.</DialogDescription>
           </DialogHeader>
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
             {SHORTCUTS.map(([k, what]) => (
