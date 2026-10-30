@@ -1,0 +1,32 @@
+// The imaging modalities of DICOM PS3.3 (Modality, 0008,0060, defined terms), most common
+// first, with the name a person reads.
+
+export const IMAGING_MODALITIES: [code: string, name: string][] = [
+  ["CT", "Computed tomography"],
+  ["MR", "Magnetic resonance"],
+  ["US", "Ultrasound"],
+  ["CR", "Computed radiography"],
+  ["DX", "Digital radiography"],
+  ["MG", "Mammography"],
+  ["PT", "Positron emission tomography"],
+  ["NM", "Nuclear medicine"],
+  ["XA", "X-ray angiography"],
+  ["RF", "Radiofluoroscopy"],
+  ["BMD", "Bone densitometry"],
+  ["IO", "Intra-oral radiography"],
+  ["PX", "Panoramic X-ray"],
+  ["RG", "Radiographic imaging"],
+  ["IVUS", "Intravascular ultrasound"],
+  ["IVOCT", "Intravascular OCT"],
+  ["OCT", "Optical coherence tomography"],
+  ["OP", "Ophthalmic photography"],
+  ["OPT", "Ophthalmic tomography"],
+  ["ES", "Endoscopy"],
+  ["XC", "External-camera photography"],
+  ["DMS", "Dermoscopy"],
+  ["GM", "General microscopy"],
+  ["SM", "Slide microscopy"],
+  ["TG", "Thermography"],
+  ["LS", "Laser surface scan"],
+  ["OSS", "Optical surface scan"],
+];
