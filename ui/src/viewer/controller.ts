@@ -1,12 +1,29 @@
-// The viewer's engine: one to four Cornerstone3D stack viewports in a grid element, with no UI
-// of its own beyond the text over each image. The React toolbar drives it and redraws from the
-// state it reports.
+// The viewer's engine: a grid of Cornerstone3D viewports with no UI of its own beyond what sits
+// on each image (text, orientation letters, the position bar, the preset and slab menus, the
+// scale). The React toolbar drives it and redraws from the state it reports.
+//
+// Two modes. Stack: one to four viewports, each showing any series of the patient (priors
+// included). MPR: the series as a volume, axial, sagittal and coronal with crosshairs, and a
+// fourth view, a full-thickness coronal MIP.
 //
 // Frames come over WADO-RS in the transfer syntax they are stored in (JPEG-LS by default) and
 // are decoded in web workers by dicom-image-loader's codecs; each series' metadata is fetched
 // once and handed to the loader, so no image needs a request of its own for it.
 
-import { init as coreInit, RenderingEngine, Enums, eventTarget, utilities, type Types } from "@cornerstonejs/core";
+import {
+  init as coreInit,
+  getShouldUseCPURendering,
+  setUseCPURendering,
+  RenderingEngine,
+  Enums,
+  eventTarget,
+  utilities,
+  volumeLoader,
+  cornerstoneStreamingImageVolumeLoader,
+  setVolumesForViewports,
+  cache,
+  type Types,
+} from "@cornerstonejs/core";
 import { init as loaderInit, wadors } from "@cornerstonejs/dicom-image-loader";
 import {
   init as toolsInit,
@@ -16,6 +33,8 @@ import {
   PanTool,
   ZoomTool,
   StackScrollTool,
+  MagnifyTool,
+  CrosshairsTool,
   LengthTool,
   ProbeTool,
   AngleTool,
@@ -34,6 +53,8 @@ export const TOOLS = {
   windowLevel: WindowLevelTool,
   pan: PanTool,
   zoom: ZoomTool,
+  magnify: MagnifyTool,
+  crosshairs: CrosshairsTool,
   length: LengthTool,
   probe: ProbeTool,
   angle: AngleTool,
@@ -53,38 +74,58 @@ export const PRESETS = [
   { name: "Brain", window: { center: 40, width: 80 } },
 ] as const;
 
+/** Slabs of an MPR view: thin, or a maximum intensity projection this thick (mm). */
+export const SLABS = [
+  { name: "Thin", mm: 0 },
+  { name: "MIP 5 mm", mm: 5 },
+  { name: "MIP 10 mm", mm: 10 },
+  { name: "MIP 20 mm", mm: 20 },
+  { name: "MIP full", mm: 10_000 },
+] as const;
+
 export const LAYOUTS = [
   { name: "1 × 1", cols: 1, rows: 1 },
   { name: "1 × 2", cols: 2, rows: 1 },
   { name: "2 × 1", cols: 1, rows: 2 },
   { name: "2 × 2", cols: 2, rows: 2 },
+  { name: "1 × 3", cols: 3, rows: 1 },
+  { name: "2 × 3", cols: 3, rows: 2 },
 ] as const;
 
 const ENGINE = "pacs-rs";
-const GROUP = "pacs-rs-tools";
+const STACK_GROUP = "pacs-rs-stack";
+const MPR_GROUP = "pacs-rs-mpr";
+const PLANE_COLOR: Record<string, string> = { axial: "rgb(232, 84, 84)", sagittal: "rgb(92, 196, 120)", coronal: "rgb(96, 150, 255)" };
 
 let ready: Promise<void> | null = null;
 export function initCornerstone() {
   ready ??= (async () => {
     await coreInit();
+    // the GPU whenever there is WebGL2, even a weak or software one: MPR needs it, and
+    // Cornerstone's own check would fall back to the CPU on such machines
+    try {
+      if (document.createElement("canvas").getContext("webgl2")) setUseCPURendering(false);
+    } catch {}
     loaderInit({ maxWebWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) });
+    volumeLoader.registerUnknownVolumeLoader(cornerstoneStreamingImageVolumeLoader as any);
+    volumeLoader.registerVolumeLoader("cornerstoneStreamingImageVolume", cornerstoneStreamingImageVolumeLoader as any);
     toolsInit();
-    // measurements in the selection blue, and white while being moved
-    const blue = "rgb(125, 168, 255)", white = "rgb(244, 245, 247)";
+    // measurements in amber, white while being moved: readable on any image
+    const amber = "rgb(255, 196, 70)", white = "rgb(244, 245, 247)";
     const defaults = annotation.config.style.getDefaultToolStyles();
     annotation.config.style.setDefaultToolStyles({
       ...defaults,
       global: {
         ...defaults.global,
-        color: blue,
+        color: amber,
         colorHighlighted: white,
         colorSelected: white,
-        textBoxColor: blue,
+        textBoxColor: amber,
         textBoxColorHighlighted: white,
         textBoxColorSelected: white,
         textBoxFontFamily: '"Inter Variable", system-ui, sans-serif',
         textBoxFontSize: "12px",
-        textBoxBackground: "rgba(10, 12, 16, 0.72)",
+        textBoxBackground: "rgba(0, 0, 0, 0.65)",
       },
     });
     for (const tool of [StackScrollTool, ...Object.values(TOOLS)]) addTool(tool);
@@ -99,7 +140,7 @@ const AXES: [Types.Point3, string, string][] = [
   [[0, 1, 0], "P", "A"],
   [[0, 0, 1], "H", "F"],
 ];
-function markers(viewport: Types.IStackViewport) {
+function markers(viewport: Types.IViewport) {
   const f = viewport.getCamera().focalPoint!;
   const c = viewport.worldToCanvas(f);
   const deltas = AXES.map(([axis]) => {
@@ -122,19 +163,29 @@ const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b
 const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 type Slot = { imageId: string; instance: any; meta: any; frame: number; frames: number };
+type Loaded = { study: any; series: any; slots: Slot[] };
+type Orientation = "axial" | "sagittal" | "coronal";
 type Cell = {
   i: number;
   id: string;
+  kind: "stack" | "mpr";
+  orientation: Orientation | null;
   element: HTMLDivElement;
   wrap: HTMLDivElement;
   ov: Record<"tl" | "tr" | "bl" | "br" | "ol" | "or" | "ot" | "ob", HTMLDivElement>;
   note: HTMLDivElement;
-  viewport: Types.IStackViewport;
+  bar: HTMLDivElement;
+  dot: HTMLDivElement;
+  scale: HTMLDivElement;
+  presetSelect: HTMLSelectElement;
+  slabSelect: HTMLSelectElement;
+  viewport: Types.IViewport;
   seriesId: string | null;
-  series: any;
-  slots: Slot[];
+  data: Loaded | null;
   index: number;
+  count: number;
   preset: number;
+  slab: number;
   invert: boolean;
   rotation: number;
   fitZoom: number | null;
@@ -142,10 +193,12 @@ type Cell = {
   playing: boolean;
 };
 
+export type CellState = { seriesId: string | null; studyId: string | null; kind: Cell["kind"]; orientation: Orientation | null };
 export type ViewerState = {
+  mode: "stack" | "mpr";
   layout: number;
   active: number;
-  shown: (string | null)[];
+  cells: CellState[];
   tool: ToolName;
   linked: boolean;
   overlays: boolean;
@@ -156,24 +209,33 @@ export type ViewerState = {
   count: number;
   instanceFile: string | null;
   meta: any;
+  canMpr: boolean;
+  /** why MPR can't run here, when it can't */
+  mprBlocked: string | null;
+  loadingVolume: boolean;
 };
 
 export class Viewer {
   private engine: RenderingEngine;
-  private group: ReturnType<typeof ToolGroupManager.createToolGroup> & {};
+  private stackGroup: NonNullable<ReturnType<typeof ToolGroupManager.createToolGroup>>;
+  private mprGroup: NonNullable<ReturnType<typeof ToolGroupManager.createToolGroup>>;
   private cells: Cell[] = [];
   private current = 0;
   private layout = 0;
+  private mode: "stack" | "mpr" = "stack";
   private linked = false;
   private syncing = false;
   private overlaysOn = true;
   private tool: ToolName = "windowLevel";
-  private loaded = new Map<string, Promise<{ series: any; slots: Slot[] }>>();
+  private loadingVolume = false;
+  private stackLayout = 0;
+  private stackSeries: string[] = [];
+  private loaded = new Map<string, Promise<Loaded>>();
   private resize: ResizeObserver;
   private onLoadFailed = (e: any) => {
     const id = e.detail?.imageId;
     for (const cell of this.cells)
-      if (cell.slots.some((s) => s.imageId === id)) {
+      if (cell.data?.slots.some((s) => s.imageId === id)) {
         cell.failed.add(id);
         this.overlays(cell);
       }
@@ -181,15 +243,28 @@ export class Viewer {
 
   constructor(
     private grid: HTMLDivElement,
-    private study: any,
-    private allSeries: any[],
     private onChange: (state: ViewerState) => void,
+    /** where a series of the patient comes from: its study and REST series object */
+    private resolve: (seriesId: string) => Promise<{ study: any; series: any }>,
   ) {
-    ToolGroupManager.destroyToolGroup(GROUP);
+    for (const g of [STACK_GROUP, MPR_GROUP]) ToolGroupManager.destroyToolGroup(g);
     this.engine = new RenderingEngine(ENGINE);
-    this.group = ToolGroupManager.createToolGroup(GROUP)!;
-    for (const tool of [StackScrollTool, ...Object.values(TOOLS)]) this.group.addTool(tool.toolName);
-    this.group.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: ToolEnums.MouseBindings.Wheel }] });
+    this.stackGroup = ToolGroupManager.createToolGroup(STACK_GROUP)!;
+    this.mprGroup = ToolGroupManager.createToolGroup(MPR_GROUP)!;
+    for (const group of [this.stackGroup, this.mprGroup]) {
+      for (const tool of [StackScrollTool, ...Object.values(TOOLS)]) {
+        if (tool === CrosshairsTool && group === this.stackGroup) continue;
+        if (tool === CrosshairsTool)
+          group.addTool(tool.toolName, {
+            getReferenceLineColor: (viewportId: string) => PLANE_COLOR[this.cells.find((c) => c.id === viewportId)?.orientation ?? "axial"],
+            getReferenceLineControllable: () => true,
+            getReferenceLineDraggableRotatable: () => true,
+            getReferenceLineSlabThicknessControlsOn: () => false,
+          });
+        else group.addTool(tool.toolName);
+      }
+      group.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: ToolEnums.MouseBindings.Wheel }] });
+    }
     this.applyTool(null, "windowLevel");
     // measurements belong to this viewing only
     annotation.state.removeAllAnnotations();
@@ -200,7 +275,7 @@ export class Viewer {
 
   async start(seriesId: string) {
     this.setGrid(1, 1);
-    this.cells.push(this.makeCell(0));
+    this.cells.push(this.makeCell(0, "stack", null));
     this.refit();
     await this.show(this.cells[0], seriesId);
     this.cells[0].wrap.focus();
@@ -209,13 +284,8 @@ export class Viewer {
   destroy() {
     eventTarget.removeEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
     this.resize.disconnect();
-    for (const cell of this.cells) {
-      if (cell.playing) this.cine(false, cell);
-      try {
-        toolUtilities.stackPrefetch.disable(cell.element);
-      } catch {}
-    }
-    ToolGroupManager.destroyToolGroup(GROUP);
+    for (const cell of this.cells) this.dropCell(cell, false);
+    for (const g of [STACK_GROUP, MPR_GROUP]) ToolGroupManager.destroyToolGroup(g);
     this.engine.destroy();
   }
 
@@ -223,11 +293,12 @@ export class Viewer {
 
   private emit() {
     const cell = this.cells[this.current];
-    const slot = cell?.slots[cell.index];
+    const slot = cell?.kind === "stack" ? cell.data?.slots[cell.index] : cell?.data?.slots[Math.floor((cell?.data?.slots.length ?? 1) / 2)];
     this.onChange({
+      mode: this.mode,
       layout: this.layout,
       active: this.current,
-      shown: this.cells.map((c) => c.seriesId),
+      cells: this.cells.map((c) => ({ seriesId: c.seriesId, studyId: c.data?.study.ID ?? null, kind: c.kind, orientation: c.orientation })),
       tool: this.tool,
       linked: this.linked,
       overlays: this.overlaysOn,
@@ -235,9 +306,16 @@ export class Viewer {
       invert: cell?.invert ?? false,
       playing: cell?.playing ?? false,
       index: cell?.index ?? 0,
-      count: cell?.slots.length ?? 0,
+      count: cell?.count ?? 0,
       instanceFile: slot ? new URL(`instances/${slot.instance.ID}/file`, ROOT).href : null,
       meta: slot?.meta ?? null,
+      canMpr: !getShouldUseCPURendering() && !!cell?.data && cell.data.slots.length >= 8 && cell.data.slots.every((s) => s.frames === 1),
+      mprBlocked: getShouldUseCPURendering()
+        ? "MPR needs WebGL, which this browser doesn't offer"
+        : cell?.data && cell.data.slots.length < 8
+          ? "MPR needs a series of at least 8 slices"
+          : null,
+      loadingVolume: this.loadingVolume,
     });
   }
 
@@ -248,8 +326,8 @@ export class Viewer {
       this.loaded.set(
         id,
         (async () => {
-          const series = this.allSeries.find((s) => s.ID === id);
-          const base = new URL(`studies/${this.study.MainDicomTags.StudyInstanceUID}/series/${series.MainDicomTags.SeriesInstanceUID}/`, WEB);
+          const { study, series } = await this.resolve(id);
+          const base = new URL(`studies/${study.MainDicomTags.StudyInstanceUID}/series/${series.MainDicomTags.SeriesInstanceUID}/`, WEB);
           const [instances, metadata] = await Promise.all([api<any[]>(`series/${id}/instances`), api<any[]>("metadata", {}, base)]);
           const byUid = new Map(metadata.map((m) => [first(m, "00080018"), m]));
           const slots: Slot[] = [];
@@ -264,46 +342,98 @@ export class Viewer {
               slots.push({ imageId, instance, meta, frame: f, frames });
             }
           }
-          return { series, slots };
-        })(),
+          return { study, series, slots };
+        })().catch((e) => {
+          this.loaded.delete(id);
+          throw e;
+        }),
       );
     }
     return this.loaded.get(id)!;
   }
 
-  private makeCell(i: number): Cell {
+  private makeCell(i: number, kind: Cell["kind"], orientation: Orientation | null): Cell {
     const div = (cls: string) => Object.assign(document.createElement("div"), { className: cls });
     const element = div("cs absolute inset-0") as HTMLDivElement;
     const ov = Object.fromEntries((["tl", "tr", "bl", "br", "ol", "or", "ot", "ob"] as const).map((k) => [k, div(`ov ov-${k}`)])) as Cell["ov"];
     const note = div("ov-note");
+    const scale = div("ov ov-scale");
+    // the position in the series, a line along the top
+    const bar = div("cell-bar");
+    const dotEl = div("cell-bar-dot");
+    bar.append(dotEl);
+    // a small bar of menus at the bottom: window preset, and the slab of an MPR view
+    const menus = div("cell-menus");
+    const select = (options: string[], label: string) => {
+      const s = document.createElement("select");
+      s.setAttribute("aria-label", label);
+      s.append(...options.map((o, j) => Object.assign(document.createElement("option"), { value: String(j), textContent: o })));
+      return s;
+    };
+    const presetSelect = select(PRESETS.map((p) => p.name), "Window preset");
+    const slabSelect = select(SLABS.map((s) => s.name), "Slab");
+    menus.append(presetSelect);
+    if (kind === "mpr") menus.append(slabSelect);
     const wrap = div("cell") as HTMLDivElement;
     wrap.tabIndex = 0;
-    wrap.append(element, ...Object.values(ov), note);
+    if (orientation) wrap.dataset.plane = orientation;
+    wrap.append(element, bar, ...Object.values(ov), scale, note, menus);
     this.grid.append(wrap);
-    const id = `vp${i}`;
-    this.engine.enableElement({ viewportId: id, type: Enums.ViewportType.STACK, element, defaultOptions: { background: [0, 0, 0] } });
-    this.group.addViewport(id, ENGINE);
+    const id = `vp${i}-${kind}${orientation ? `-${orientation}` : ""}`;
+    this.engine.enableElement({
+      viewportId: id,
+      type: kind === "stack" ? Enums.ViewportType.STACK : Enums.ViewportType.ORTHOGRAPHIC,
+      element,
+      defaultOptions: { background: [0, 0, 0], ...(orientation ? { orientation: orientation as Enums.OrientationAxis } : {}) },
+    });
+    (kind === "stack" ? this.stackGroup : this.mprGroup).addViewport(id, ENGINE);
     const cell: Cell = {
-      i, id, element, wrap, ov, note,
-      viewport: this.engine.getViewport(id) as Types.IStackViewport,
-      seriesId: null, series: null, slots: [], index: 0, preset: 0, invert: false, rotation: 0, fitZoom: null, failed: new Set(), playing: false,
+      i, id, kind, orientation, element, wrap, ov, note, bar, dot: dotEl, scale, presetSelect, slabSelect,
+      viewport: this.engine.getViewport(id),
+      seriesId: null, data: null, index: 0, count: 0, preset: 0, slab: 0, invert: false, rotation: 0, fitZoom: null, failed: new Set(), playing: false,
     };
+    presetSelect.addEventListener("change", () => this.setPreset(Number(presetSelect.value), cell));
+    slabSelect.addEventListener("change", () => this.setSlab(Number(slabSelect.value), cell));
+    for (const s of [presetSelect, slabSelect]) s.addEventListener("pointerdown", (e) => e.stopPropagation());
     wrap.addEventListener("pointerdown", () => this.activate(cell.i), true);
     wrap.addEventListener("contextmenu", (e) => e.preventDefault());
-    wrap.addEventListener("dblclick", () => this.reset(cell));
+    wrap.addEventListener("dblclick", (e) => !(e.target as HTMLElement).closest("select") && this.reset(cell));
+    // a series dropped from the study browser
+    wrap.addEventListener("dragover", (e) => {
+      if (e.dataTransfer?.types.includes("application/x-pacs-series")) {
+        e.preventDefault();
+        wrap.classList.add("drop");
+      }
+    });
+    wrap.addEventListener("dragleave", () => wrap.classList.remove("drop"));
+    wrap.addEventListener("drop", (e) => {
+      const id = e.dataTransfer?.getData("application/x-pacs-series");
+      wrap.classList.remove("drop");
+      if (!id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.activate(cell.i);
+      if (this.mode === "mpr") this.exitMpr().then(() => this.showSeries(id));
+      else this.show(cell, id);
+    });
     element.addEventListener(Enums.Events.STACK_NEW_IMAGE, ((e: any) => {
       cell.index = e.detail.imageIdIndex;
       this.overlays(cell);
       if (this.linked && !this.syncing && cell === this.active()) this.syncFrom(cell);
       if (cell === this.active()) this.emit();
     }) as EventListener);
+    element.addEventListener(Enums.Events.VOLUME_NEW_IMAGE, (() => {
+      this.overlays(cell);
+      if (cell === this.active()) this.emit();
+    }) as EventListener);
     element.addEventListener(Enums.Events.VOI_MODIFIED, () => {
       const w = PRESETS[cell.preset]?.window;
       if (w) {
-        const voi = cell.viewport.getProperties()?.voiRange;
+        const voi = (cell.viewport as any).getProperties()?.voiRange;
         const want = utilities.windowLevel.toLowHighRange(w.width, w.center);
         if (voi && (Math.abs(voi.lower - want.lower) > 0.5 || Math.abs(voi.upper - want.upper) > 0.5)) {
           cell.preset = -1;
+          cell.presetSelect.value = "";
           if (cell === this.active()) this.emit();
         }
       }
@@ -313,63 +443,130 @@ export class Viewer {
     return cell;
   }
 
+  private dropCell(cell: Cell, remove = true) {
+    if (cell.playing) this.cine(false, cell);
+    try {
+      toolUtilities.stackPrefetch.disable(cell.element);
+    } catch {}
+    (cell.kind === "stack" ? this.stackGroup : this.mprGroup).removeViewports(ENGINE, cell.id);
+    if (remove) {
+      this.engine.disableElement(cell.id);
+      cell.wrap.remove();
+    }
+  }
+
   private async show(cell: Cell, id: string, at: number | null = null) {
     if (cell.playing) this.cine(false, cell);
     cell.seriesId = id;
     cell.note.textContent = "Loading…";
     this.emit();
-    const { series, slots } = await this.loadSeries(id);
+    let data: Loaded;
+    try {
+      data = await this.loadSeries(id);
+    } catch {
+      cell.note.textContent = "This series could not be loaded";
+      return;
+    }
     if (cell.seriesId !== id) return;
-    Object.assign(cell, { series, slots, failed: new Set(), preset: 0, rotation: 0 });
-    if (!slots.length) {
+    Object.assign(cell, { data, failed: new Set(), preset: 0, rotation: 0, count: data.slots.length });
+    cell.presetSelect.value = "0";
+    if (!data.slots.length) {
       cell.note.textContent = "This series has no images";
       return this.emit();
     }
-    cell.index = at ?? Math.floor(slots.length / 2);
+    cell.index = at ?? Math.floor(data.slots.length / 2);
+    const viewport = cell.viewport as Types.IStackViewport;
     try {
-      await cell.viewport.setStack(
-        slots.map((s) => s.imageId),
+      await viewport.setStack(
+        data.slots.map((s) => s.imageId),
         cell.index,
       );
-      if (cell.invert) cell.viewport.setProperties({ invert: true });
+      if (cell.invert) viewport.setProperties({ invert: true });
     } catch {
-      cell.failed.add(slots[cell.index].imageId);
+      cell.failed.add(data.slots[cell.index].imageId);
     }
-    cell.viewport.render();
-    try {
-      cell.fitZoom = cell.viewport.getZoom();
-    } catch {}
+    viewport.render();
+    this.measureFit(cell);
     toolUtilities.stackPrefetch.enable(cell.element);
     this.overlays(cell);
     this.emit();
   }
 
+  // the cm scale on the image: the tool can only start once an image is drawn
+  private measureFit(cell: Cell) {
+    try {
+      cell.fitZoom = (cell.viewport as any).getZoom();
+    } catch {}
+  }
+
   private overlays(cell: Cell) {
-    const { ov, slots, series } = cell;
-    if (!slots.length || !series) return;
-    const p = this.study.PatientMainDicomTags, t = this.study.MainDicomTags, st = series.MainDicomTags;
-    const slot = slots[cell.index];
-    const pos = tag(slot.meta, "00200032");
+    const { ov, data } = cell;
+    if (!data?.slots.length) return;
+    const p = data.study.PatientMainDicomTags, t = data.study.MainDicomTags, st = data.series.MainDicomTags;
+    let slot: Slot, index: number, count: number;
+    if (cell.kind === "stack") {
+      slot = data.slots[cell.index];
+      index = cell.index;
+      count = data.slots.length;
+    } else {
+      const vp = cell.viewport as Types.IVolumeViewport;
+      index = vp.getSliceIndex?.() ?? 0;
+      count = vp.getNumberOfSlices?.() ?? 1;
+      slot = data.slots[Math.floor(data.slots.length / 2)];
+    }
+    cell.index = index;
+    cell.count = count;
+    const pos = cell.kind === "stack" ? tag(slot.meta, "00200032") : null;
     const thickness = num(slot.meta, "00180050", NaN);
     const columns = num(slot.meta, "00280011", 0), rows = num(slot.meta, "00280010", 0);
-    ov.tl.textContent = `${personName(p.PatientName)}\n${[p.PatientID, sexAge(p.PatientSex, p.PatientBirthDate, t.StudyDate)].filter(Boolean).join("  ·  ")}\n${formatDate(t.StudyDate)} ${formatTime(t.StudyTime)}`;
-    ov.tr.textContent = `${t.StudyDescription || ""}\n${st.Modality || ""} ${st.SeriesNumber ?? ""}  ${st.SeriesDescription || ""}`;
-    ov.br.textContent = [pos ? `Z ${Number(pos[2]).toFixed(1)} mm` : null, isFinite(thickness) ? `Thickness ${thickness} mm` : null, rows ? `${columns} × ${rows}` : null].filter(Boolean).join("\n");
-    const voi = cell.viewport.getProperties()?.voiRange;
+    const voi = (cell.viewport as any).getProperties?.()?.voiRange;
     let zoom = 1;
     try {
-      if (cell.fitZoom) zoom = cell.viewport.getZoom() / cell.fitZoom;
+      if (cell.fitZoom) zoom = (cell.viewport as any).getZoom() / cell.fitZoom;
     } catch {}
     const wl = voi ? utilities.windowLevel.toWindowLevel(voi.lower, voi.upper) : null;
-    ov.bl.textContent = [
-      `Image ${cell.index + 1} / ${slots.length}${slot.frames > 1 ? `  ·  frame ${slot.frame}` : ""}`,
-      wl ? `W ${Math.round(wl.windowWidth)}  L ${Math.round(wl.windowCenter)}` : "",
-      Math.abs(zoom - 1) > 0.01 ? `Zoom ${Math.round(zoom * 100)}%` : "",
+    ov.tl.textContent = [
+      `${st.Modality || ""} ${st.SeriesNumber ?? ""}  ${st.SeriesDescription || ""}`.trim(),
+      cell.orientation ? `${cell.orientation[0].toUpperCase()}${cell.orientation.slice(1)}${SLABS[cell.slab].mm ? `  ·  ${SLABS[cell.slab].name}` : ""}` : rows ? `${columns} × ${rows}` : "",
     ].filter(Boolean).join("\n");
+    ov.tr.textContent = `${personName(p.PatientName)}\n${[p.PatientID, sexAge(p.PatientSex, p.PatientBirthDate, t.StudyDate)].filter(Boolean).join("  ·  ")}\n${t.StudyDescription || ""}\n${formatDate(t.StudyDate)} ${formatTime(t.StudyTime)}`;
+    ov.bl.textContent = [
+      `Image ${index + 1} / ${count}${slot.frames > 1 ? `  ·  frame ${slot.frame}` : ""}`,
+      wl ? `W ${Math.round(wl.windowWidth)}  L ${Math.round(wl.windowCenter)}` : "",
+      `Zoom ${Math.round(zoom * 100)}%`,
+    ].filter(Boolean).join("\n");
+    ov.br.textContent = [pos ? `Z ${Number(pos[2]).toFixed(1)} mm` : null, isFinite(thickness) && cell.kind === "stack" ? `Thickness ${thickness} mm` : null].filter(Boolean).join("\n");
     try {
       for (const [k, v] of Object.entries(markers(cell.viewport))) ov[k as keyof Cell["ov"]].textContent = v;
     } catch {}
-    cell.note.textContent = cell.failed.has(slot.imageId) ? "This image could not be decoded" : "";
+    cell.dot.style.left = count > 1 ? `${(100 * index) / (count - 1)}%` : "50%";
+    this.drawScale(cell);
+    cell.note.textContent = cell.kind === "stack" && cell.failed.has(slot.imageId) ? "This image could not be decoded" : "";
+  }
+
+  // a ruler along the right edge, as on film: the longest round length that fits in 40% of
+  // the viewport's height, a tick per centimetre
+  private drawScale(cell: Cell) {
+    try {
+      const vp = cell.viewport;
+      const { focalPoint, viewUp } = vp.getCamera();
+      const a = vp.worldToCanvas(focalPoint!);
+      const b = vp.worldToCanvas(focalPoint!.map((x, i) => x + viewUp![i] * 10) as Types.Point3);
+      const perCm = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const room = cell.wrap.clientHeight * 0.4;
+      const cm = [50, 20, 10, 5, 2, 1].find((n) => n * perCm <= room);
+      if (!cm || !isFinite(perCm) || perCm <= 0) return void (cell.scale.innerHTML = "");
+      const h = Math.round(cm * perCm);
+      const every = perCm >= 6 ? 1 : 5;
+      const ticks = Array.from({ length: Math.floor(cm / every) + 1 }, (_, i) => {
+        const y = Math.round(i * every * perCm) + 0.5;
+        const long = i === 0 || i * every === cm || (i * every) % 5 === 0;
+        return `<line x1="${long ? 0 : 4}" x2="10" y1="${y}" y2="${y}"/>`;
+      }).join("");
+      cell.scale.innerHTML = `<svg width="11" height="${h + 1}" viewBox="0 0 11 ${h + 1}"><line x1="10" x2="10" y1="0" y2="${h + 1}"/>${ticks}</svg><span>${cm} cm</span>`;
+    } catch {
+      cell.scale.innerHTML = "";
+    }
   }
 
   private active() {
@@ -396,35 +593,33 @@ export class Viewer {
   private refit() {
     this.engine.resize(true, false);
     for (const cell of this.cells) {
-      try {
-        cell.fitZoom = cell.viewport.getZoom();
-      } catch {}
+      this.measureFit(cell);
       this.overlays(cell);
     }
   }
 
   // linked scrolling: the slice of each other viewport nearest to this one's, along its normal
   private syncFrom(source: Cell) {
-    if (!source.slots.length) return;
-    const slot = source.slots[source.index];
+    if (source.kind !== "stack" || !source.data?.slots.length) return;
+    const slot = source.data.slots[source.index];
     const frameOfReference = first(slot.meta, "00200052", null);
     const pos = tag(slot.meta, "00200032");
     if (!pos) return;
     this.syncing = true;
     for (const cell of this.cells) {
-      if (cell === source || !cell.slots.length) continue;
-      if (frameOfReference && first(cell.slots[0].meta, "00200052", null) !== frameOfReference) continue;
-      const iop = (tag(cell.slots[0].meta, "00200037") || [1, 0, 0, 0, 1, 0]).map(Number);
+      if (cell === source || cell.kind !== "stack" || !cell.data?.slots.length) continue;
+      if (frameOfReference && first(cell.data.slots[0].meta, "00200052", null) !== frameOfReference) continue;
+      const iop = (tag(cell.data.slots[0].meta, "00200037") || [1, 0, 0, 0, 1, 0]).map(Number);
       const normal = cross(iop.slice(0, 3), iop.slice(3, 6));
       const target = dot(pos.map(Number), normal);
       let best = cell.index, bestDistance = Infinity;
-      cell.slots.forEach((s, j) => {
+      cell.data.slots.forEach((s, j) => {
         const q = tag(s.meta, "00200032");
         if (!q) return;
         const d = Math.abs(dot(q.map(Number), normal) - target);
         if (d < bestDistance) [best, bestDistance] = [j, d];
       });
-      if (best !== cell.index) cell.viewport.setImageIdIndex(best);
+      if (best !== cell.index) (cell.viewport as Types.IStackViewport).setImageIdIndex(best);
     }
     this.syncing = false;
   }
@@ -440,11 +635,16 @@ export class Viewer {
     return b;
   }
   private applyTool(from: ToolName | null, to: ToolName) {
-    for (const name of Object.keys(TOOLS) as ToolName[]) {
-      if (from && name !== from && name !== to && name !== "pan" && name !== "zoom") continue;
-      const b = this.bindings(name, name === to);
-      if (b.length) this.group.setToolActive(TOOLS[name].toolName, { bindings: b });
-      else this.group.setToolPassive(TOOLS[name].toolName);
+    for (const group of [this.stackGroup, this.mprGroup]) {
+      for (const name of Object.keys(TOOLS) as ToolName[]) {
+        // crosshairs need the three MPR views in place: enterMpr turns them on
+        if (name === "crosshairs" && (group === this.stackGroup || this.mode !== "mpr")) continue;
+        if (from && name !== from && name !== to && name !== "pan" && name !== "zoom") continue;
+        const b = this.bindings(name, name === to);
+        if (b.length) group.setToolActive(TOOLS[name].toolName, { bindings: b });
+        else if (name === "crosshairs") group.setToolEnabled(TOOLS[name].toolName);
+        else group.setToolPassive(TOOLS[name].toolName);
+      }
     }
   }
 
@@ -452,6 +652,7 @@ export class Viewer {
 
   useTool(name: ToolName) {
     if (name === this.tool) return;
+    if (name === "crosshairs" && this.mode !== "mpr") return;
     this.applyTool(this.tool, name);
     this.tool = name;
     this.grid.dataset.tool = name;
@@ -459,77 +660,173 @@ export class Viewer {
   }
 
   async setLayout(i: number) {
+    if (this.mode === "mpr") await this.exitMpr();
     const { cols, rows } = LAYOUTS[i];
     this.layout = i;
     this.setGrid(cols, rows);
     const n = cols * rows;
-    while (this.cells.length > n) {
-      const cell = this.cells.pop()!;
-      if (cell.playing) this.cine(false, cell);
-      try {
-        toolUtilities.stackPrefetch.disable(cell.element);
-      } catch {}
-      this.group.removeViewports(ENGINE, cell.id);
-      this.engine.disableElement(cell.id);
-      cell.wrap.remove();
-    }
+    while (this.cells.length > n) this.dropCell(this.cells.pop()!);
     const fresh: Cell[] = [];
     while (this.cells.length < n) {
-      const cell = this.makeCell(this.cells.length);
+      const cell = this.makeCell(this.cells.length, "stack", null);
       this.cells.push(cell);
       fresh.push(cell);
     }
     this.refit();
     if (this.current >= this.cells.length) this.current = 0;
     this.frame();
-    // new viewports show the series after those already shown
-    const start = Math.max(0, this.allSeries.findIndex((s) => s.ID === this.cells[0].seriesId));
-    await Promise.all(fresh.map((cell) => this.show(cell, this.allSeries[(start + cell.i) % this.allSeries.length].ID)));
+    // new viewports show the series after the first one's, in its study
+    const firstData = this.cells[0].data;
+    const siblings: string[] = firstData ? (await this.seriesOfStudy(firstData.study.ID)) : [];
+    const start = Math.max(0, siblings.indexOf(this.cells[0].seriesId ?? ""));
+    await Promise.all(fresh.map((cell) => (siblings.length ? this.show(cell, siblings[(start + cell.i) % siblings.length]) : null)));
     if (this.linked) this.syncFrom(this.active());
     this.emit();
   }
 
-  showSeries(id: string) {
+  private seriesOfStudyCache = new Map<string, Promise<string[]>>();
+  private seriesOfStudy(studyId: string) {
+    if (!this.seriesOfStudyCache.has(studyId))
+      this.seriesOfStudyCache.set(
+        studyId,
+        api<any[]>(`studies/${studyId}/series`).then((list) =>
+          list.sort((a, b) => Number(a.MainDicomTags.SeriesNumber ?? 1e9) - Number(b.MainDicomTags.SeriesNumber ?? 1e9)).map((s) => s.ID),
+        ),
+      );
+    return this.seriesOfStudyCache.get(studyId)!;
+  }
+
+  async showSeries(id: string) {
+    if (this.mode === "mpr") await this.exitMpr();
     return this.show(this.active(), id);
   }
-  nextSeries(step: number) {
-    const at = this.allSeries.findIndex((s) => s.ID === this.active().seriesId);
-    const next = this.allSeries[at + step];
-    if (next) return this.showSeries(next.ID);
+  async nextSeries(step: number) {
+    const cell = this.active();
+    if (!cell.data || this.mode === "mpr") return;
+    const list = await this.seriesOfStudy(cell.data.study.ID);
+    const next = list[list.indexOf(cell.seriesId!) + step];
+    if (next) return this.show(cell, next);
   }
-  activeSeries() {
-    return this.active()?.seriesId ?? null;
+
+  // ---- MPR ----
+
+  /** Into MPR; if the volume can't be built, back to the stacks as they were. */
+  async enterMpr(): Promise<string | null> {
+    try {
+      await this.buildMpr();
+      return null;
+    } catch (e: any) {
+      this.loadingVolume = false;
+      await this.exitMpr();
+      return e?.message || "MPR failed";
+    }
   }
+
+  private async buildMpr() {
+    const source = this.active();
+    if (this.mode === "mpr" || !source.data || source.data.slots.length < 8 || getShouldUseCPURendering()) return;
+    const data = source.data;
+    this.stackLayout = this.layout;
+    this.stackSeries = this.cells.map((c) => c.seriesId ?? "");
+    this.loadingVolume = true;
+    this.emit();
+    for (const cell of this.cells) this.dropCell(cell);
+    this.cells = [];
+    this.mode = "mpr";
+    this.setGrid(2, 2);
+    const planes: Orientation[] = ["axial", "sagittal", "coronal", "coronal"];
+    this.cells = planes.map((o, i) => this.makeCell(i, "mpr", o));
+    this.current = 0;
+    this.frame();
+    this.refit();
+    const volumeId = `cornerstoneStreamingImageVolume:${data.series.ID}`;
+    const volume = cache.getVolume(volumeId) ?? (await volumeLoader.createAndCacheVolume(volumeId, { imageIds: data.slots.map((s) => s.imageId) }));
+    (volume as any).load?.();
+    for (const cell of this.cells) Object.assign(cell, { seriesId: data.series.ID, data, count: 1 });
+    await setVolumesForViewports(this.engine, [{ volumeId }], this.cells.map((c) => c.id));
+    // the fourth view: the whole volume as a coronal MIP, like a radiograph
+    this.setSlab(SLABS.length - 1, this.cells[3]);
+    // crosshairs first, on the left button: moving them is what MPR is for
+    this.applyTool(this.tool, "crosshairs");
+    this.tool = "crosshairs";
+    this.grid.dataset.tool = "crosshairs";
+    this.loadingVolume = false;
+    this.engine.render();
+    this.refit();
+    this.emit();
+  }
+
+  async exitMpr() {
+    if (this.mode !== "mpr") return;
+    this.mprGroup.setToolDisabled(CrosshairsTool.toolName);
+    for (const cell of this.cells) this.dropCell(cell);
+    this.cells = [];
+    this.mode = "stack";
+    if (this.tool === "crosshairs") {
+      this.tool = "windowLevel";
+      this.applyTool(null, "windowLevel");
+    }
+    const { cols, rows } = LAYOUTS[this.stackLayout];
+    this.layout = this.stackLayout;
+    this.setGrid(cols, rows);
+    this.cells = Array.from({ length: cols * rows }, (_, i) => this.makeCell(i, "stack", null));
+    this.current = 0;
+    this.frame();
+    this.refit();
+    await Promise.all(this.cells.map((cell, i) => (this.stackSeries[i] ? this.show(cell, this.stackSeries[i]) : null)));
+    this.emit();
+  }
+
+  setSlab(i: number, cell = this.active()) {
+    if (cell.kind !== "mpr") return;
+    const vp = cell.viewport as Types.IVolumeViewport;
+    cell.slab = i;
+    cell.slabSelect.value = String(i);
+    const mm = SLABS[i].mm;
+    vp.setBlendMode(mm ? Enums.BlendModes.MAXIMUM_INTENSITY_BLEND : Enums.BlendModes.COMPOSITE);
+    if (mm) vp.setSlabThickness(mm);
+    else vp.resetSlabThickness();
+    vp.render();
+    this.overlays(cell);
+  }
+
+  // ---- image ----
 
   go(i: number) {
     const cell = this.active();
-    const n = Math.max(0, Math.min(cell.slots.length - 1, i));
-    if (cell.slots.length && n !== cell.viewport.getCurrentImageIdIndex()) cell.viewport.setImageIdIndex(n);
+    if (cell.kind !== "stack" || !cell.data) return;
+    const n = Math.max(0, Math.min(cell.data.slots.length - 1, i));
+    const vp = cell.viewport as Types.IStackViewport;
+    if (n !== vp.getCurrentImageIdIndex()) vp.setImageIdIndex(n);
   }
   step(n: number) {
-    this.go(this.active().index + n);
+    const cell = this.active();
+    if (cell.kind === "stack") this.go(cell.index + n);
+    else utilities.scroll(cell.viewport as any, { delta: n });
   }
   first() {
     this.go(0);
   }
   last() {
-    this.go(this.active().slots.length - 1);
+    this.go(this.active().count - 1);
   }
 
   setPreset(i: number, cell = this.active()) {
     cell.preset = i;
+    cell.presetSelect.value = String(i);
     const w = PRESETS[i].window;
-    if (w) cell.viewport.setProperties({ voiRange: utilities.windowLevel.toLowHighRange(w.width, w.center) });
+    const vp = cell.viewport as any;
+    if (w) vp.setProperties({ voiRange: utilities.windowLevel.toLowHighRange(w.width, w.center) });
     else {
-      cell.viewport.resetProperties();
-      cell.viewport.setProperties({ invert: cell.invert });
+      vp.resetProperties();
+      vp.setProperties({ invert: cell.invert });
     }
-    cell.viewport.render();
+    vp.render();
     this.emit();
   }
   toggleInvert(cell = this.active()) {
     cell.invert = !cell.invert;
-    cell.viewport.setProperties({ invert: cell.invert });
+    (cell.viewport as any).setProperties({ invert: cell.invert });
     cell.viewport.render();
     this.emit();
   }
@@ -550,9 +847,7 @@ export class Viewer {
   reset(cell = this.active()) {
     cell.viewport.resetCamera();
     cell.rotation = 0;
-    try {
-      cell.fitZoom = cell.viewport.getZoom();
-    } catch {}
+    this.measureFit(cell);
     this.setPreset(0, cell);
   }
   setLinked(on: boolean) {
@@ -571,10 +866,38 @@ export class Viewer {
   }
   cine(on?: boolean, cell = this.active()) {
     on ??= !cell.playing;
-    if (cell.slots.length < 2) return;
+    if (cell.count < 2) return;
     cell.playing = on;
     if (on) toolUtilities.cine.playClip(cell.element, { framesPerSecond: 15, loop: true });
     else toolUtilities.cine.stopClip(cell.element);
     this.emit();
+  }
+  /** The active viewport as drawn (image, measurements and text), as a PNG. */
+  exportImage() {
+    const cell = this.active();
+    const canvas = cell.element.querySelector("canvas");
+    if (!canvas) return;
+    const out = document.createElement("canvas");
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const ctx = out.getContext("2d")!;
+    ctx.drawImage(canvas, 0, 0);
+    // the measurements are an SVG layer over the canvas
+    const svg = cell.element.querySelector("svg");
+    const finish = () => {
+      const a = document.createElement("a");
+      const st = cell.data?.series.MainDicomTags ?? {};
+      a.download = `${st.Modality || "image"}-${st.SeriesNumber ?? ""}-${cell.index + 1}.png`;
+      a.href = out.toDataURL("image/png");
+      a.click();
+    };
+    if (!svg) return finish();
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, out.width, out.height);
+      finish();
+    };
+    img.onerror = finish;
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
   }
 }
