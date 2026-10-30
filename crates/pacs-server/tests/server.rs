@@ -164,6 +164,50 @@ async fn health_and_dicomweb_under_its_path_and_data_survives_a_restart() {
 }
 
 #[tokio::test]
+async fn web_interface_at_ui_unless_turned_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let get = |uri: &str| Request::get(uri).body(Body::empty()).unwrap();
+    let settings = settings_in(dir.path(), &["--dicomweb-path", "/web"]);
+    let with_ui = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+
+    // relative redirects, so a proxy's path prefix is kept
+    let (status, headers, _) = call(&with_ui, get("/")).await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(headers.get("location").unwrap(), "ui/");
+    let (status, headers, _) = call(&with_ui, get("/ui")).await;
+    assert_eq!(status, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(headers.get("location").unwrap(), "ui/");
+
+    // the built page, or the one saying how to build it
+    let (status, headers, body) = call(&with_ui, get("/ui/")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let csp = headers["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    assert!(String::from_utf8_lossy(&body).contains("<title>pacs-rs</title>"));
+
+    let (status, _, body) = call(&with_ui, get("/ui/config.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    let config: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(config["dicomweb"], "/web");
+    assert_eq!(config["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        call(&with_ui, get("/ui/no-such-file.js")).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let settings = settings_in(dir.path(), &["--ui", "false"]);
+    let without = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    assert_eq!(call(&without, get("/ui/")).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&without, get("/")).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn cors_only_when_asked_for() {
     let dir = tempfile::tempdir().unwrap();
     let preflight = || {
