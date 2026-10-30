@@ -57,6 +57,8 @@ import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
 import { StudyBrowser, type Registry } from "@/viewer/study-browser";
+import { autoApply, plans, studyContext, type Plan, type StudyContext } from "@/viewer/hanging";
+import { ProtocolMenu } from "@/viewer/protocol-menu";
 
 const MEASURE: { tool: ToolName; label: string; key: string; Icon: typeof Ruler; hint: string }[] = [
   { tool: "length", label: "Length", key: "L", Icon: Ruler, hint: "Distance in mm" },
@@ -89,6 +91,7 @@ const SHORTCUTS: [string, string][] = [
   ["Drag a series", "Show it in that viewport"],
   ["Middle drag, Shift drag", "Pan, whatever tool is chosen"],
   ["Right drag", "Zoom, whatever tool is chosen"],
+  [", .", "Previous or next hanging protocol"],
   ["Esc", "Back to the studies"],
 ];
 
@@ -171,7 +174,7 @@ function ToolMenu({ children, menuLabel, ...tb }: Tb & { children: ReactNode; me
 
 const Sep = () => <Separator orientation="vertical" className="mx-1 !h-9" />;
 
-export function ViewerPage({ study: studyId, series: seriesId }: { study: string; series: string }) {
+export function ViewerPage({ study: studyId, series: seriesId }: { study: string; series: string | null }) {
   const data = useQuery({
     queryKey: ["viewer", studyId],
     queryFn: async () => {
@@ -188,6 +191,10 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
   const [tagQuery, setTagQuery] = useState("");
   const [help, setHelp] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [ctx, setCtx] = useState<StudyContext | null>(null);
+  const [protocols, setProtocols] = useState<Plan[]>([]);
+  const [protocol, setProtocol] = useState<string | null>(null);
+  const [protocolsVersion, setProtocolsVersion] = useState(0);
 
   // dark everywhere while the viewer is open, menus and dialogs included (they render outside)
   useEffect(() => {
@@ -207,21 +214,46 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
     };
     const v = new Viewer(grid.current, setState, resolve);
     viewer.current = v;
-    v.start(seriesId);
+    // a series asked for opens on its own; a study, as its best hanging protocol lays it out
+    studyContext(studyId).then((c) => {
+      if (viewer.current !== v) return;
+      setCtx(c);
+      const fits = plans(c);
+      setProtocols(fits);
+      const first = autoApply() ? fits[0] : fits.find((p) => p.protocol.id === "builtin:single");
+      if (seriesId || !first) {
+        v.start(seriesId ?? first?.series.find(Boolean) ?? c.series[0]?.ID);
+      } else {
+        setProtocol(first.protocol.id);
+        v.hang(first.layout, first.series, first.linked, first.mpr);
+      }
+    });
     return () => {
       v.destroy();
       viewer.current = null;
     };
   }, [data.data]);
 
+  // saving or deleting a protocol changes what fits
+  useEffect(() => {
+    if (ctx) setProtocols(plans(ctx));
+  }, [ctx, protocolsVersion]);
+
+  function applyPlan(p: Plan | undefined) {
+    if (!p || !viewer.current) return;
+    setProtocol(p.protocol.id);
+    viewer.current.hang(p.layout, p.series, p.linked, p.mpr);
+  }
+
   // the URL follows the active viewport's study and series, without a page change
   const activeCell = state?.cells[state.active];
+  // (while a protocol lays the study out, the URL names the study alone, so a reload hangs it again)
   useEffect(() => {
     if (activeCell?.seriesId && activeCell.studyId) {
-      const to = href.view(activeCell.studyId, activeCell.seriesId);
+      const to = protocol ? href.view(studyId) : href.view(activeCell.studyId, activeCell.seriesId);
       if (location.hash !== to) history.replaceState(null, "", to);
     }
-  }, [activeCell?.seriesId, activeCell?.studyId]);
+  }, [activeCell?.seriesId, activeCell?.studyId, protocol]);
 
   useEffect(() => {
     const change = () => setFullscreen(!!document.fullscreenElement);
@@ -262,11 +294,15 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       else if (e.key === "[") v.nextSeries(-1);
       else if (e.key === "]") v.nextSeries(1);
       else if (e.key === "?") setHelp(true);
+      else if (e.key === "," || e.key === ".") {
+        const at = protocols.findIndex((p) => p.protocol.id === protocol);
+        applyPlan(protocols[at < 0 ? 0 : at + (e.key === "," ? -1 : 1)]);
+      }
       else if (e.key === "Escape" && !document.fullscreenElement) location.hash = href.studies(null, studyId);
     };
     addEventListener("keydown", keys);
     return () => removeEventListener("keydown", keys);
-  }, [state?.linked, state?.overlays, state?.mode, studyId]);
+  }, [state?.linked, state?.overlays, state?.mode, studyId, protocols, protocol]);
 
   const v = viewer.current;
   const s = state;
@@ -289,6 +325,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
           </a>
         </Tip>
         <ToolBtn label="Series" Icon={PanelLeft} active={browser} onClick={() => setBrowser(!browser)} />
+        {s && <ProtocolMenu plans={protocols} active={protocol} onApply={applyPlan} state={s} ctx={ctx} onSaved={() => setProtocolsVersion((n) => n + 1)} />}
         <Sep />
 
         {s && v && (
@@ -403,7 +440,18 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {browser && study && <StudyBrowser study={study} registry={registry} shown={shown} active={activeCell?.seriesId ?? null} onPick={(id) => v?.showSeries(id)} />}
+        {browser && study && (
+          <StudyBrowser
+            study={study}
+            registry={registry}
+            shown={shown}
+            active={activeCell?.seriesId ?? null}
+            onPick={(id) => {
+              setProtocol(null);
+              v?.showSeries(id);
+            }}
+          />
+        )}
         <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
       </div>
 
