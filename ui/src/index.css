@@ -1,0 +1,162 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* pacs-rs: warm-neutral paper, near-black ink, one blue for selection and focus. The viewer
+   uses the same tokens in .dark. No gradients; shadows only on floating menus and dialogs. */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.985 0.002 75);
+  --foreground: oklch(0.2 0.005 60);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.22 0.006 60);
+  --primary-foreground: oklch(0.985 0.002 75);
+  --secondary: oklch(0.955 0.003 75);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.955 0.003 75);
+  --muted-foreground: oklch(0.5 0.008 60);
+  --accent: oklch(0.95 0.004 75);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.55 0.19 27);
+  --border: oklch(0.91 0.004 75);
+  --input: oklch(0.88 0.005 75);
+  --ring: oklch(0.55 0.17 258);
+  --selection: oklch(0.55 0.17 258);
+  --selection-soft: oklch(0.96 0.025 258);
+}
+
+.dark {
+  --background: oklch(0.16 0.004 260);
+  --foreground: oklch(0.93 0.003 260);
+  --card: oklch(0.19 0.004 260);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.21 0.005 260);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.93 0.003 260);
+  --primary-foreground: oklch(0.17 0.004 260);
+  --secondary: oklch(0.24 0.005 260);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.23 0.005 260);
+  --muted-foreground: oklch(0.66 0.006 260);
+  --accent: oklch(0.26 0.006 260);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.65 0.19 25);
+  --border: oklch(0.27 0.006 260);
+  --input: oklch(0.3 0.006 260);
+  --ring: oklch(0.68 0.14 258);
+  --selection: oklch(0.68 0.14 258);
+  --selection-soft: oklch(0.27 0.04 258);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-selection: var(--selection);
+  --color-selection-soft: var(--selection-soft);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 14px;
+    font-feature-settings: "cv11", "ss01";
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* the viewer's viewports: drawn by the controller, outside React */
+.viewer-grid {
+  display: grid;
+  gap: 2px;
+  background: var(--border);
+}
+.viewer-grid .cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
+  outline: none;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+}
+.viewer-grid[data-tool="pan"] .cell { cursor: grab; }
+.viewer-grid[data-tool="zoom"] .cell { cursor: zoom-in; }
+.viewer-grid .cell.active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--selection);
+}
+.viewer-grid .ov {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  white-space: pre;
+  font-size: 12px;
+  line-height: 1.5;
+  color: oklch(0.9 0.005 260);
+  text-shadow: 0 0 2px #000, 0 0 4px #000;
+  font-variant-numeric: tabular-nums;
+}
+.viewer-grid .ov-tl { top: 10px; left: 12px; }
+.viewer-grid .ov-tl::first-line { font-weight: 600; }
+.viewer-grid .ov-tr { top: 10px; right: 12px; text-align: right; }
+.viewer-grid .ov-bl { bottom: 10px; left: 12px; }
+.viewer-grid .ov-br { bottom: 10px; right: 12px; text-align: right; }
+.viewer-grid .ov-ol, .viewer-grid .ov-or, .viewer-grid .ov-ot, .viewer-grid .ov-ob { font-size: 13px; font-weight: 600; color: oklch(0.8 0.1 258); }
+.viewer-grid .ov-ol { left: 10px; top: 50%; transform: translateY(-50%); }
+.viewer-grid .ov-or { right: 10px; top: 50%; transform: translateY(-50%); }
+.viewer-grid .ov-ot { top: 8px; left: 50%; transform: translateX(-50%); }
+.viewer-grid .ov-ob { bottom: 8px; left: 50%; transform: translateX(-50%); }
+.viewer-grid.no-overlays .ov { display: none; }
+.viewer-grid .ov-note {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  font-size: 13px;
+  color: oklch(0.6 0.006 260);
+}
