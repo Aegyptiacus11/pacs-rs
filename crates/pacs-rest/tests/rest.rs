@@ -468,3 +468,87 @@ async fn deleting_answers_with_the_remaining_ancestor() {
         json!([study_c])
     );
 }
+
+fn zip_names(zip: &Bytes) -> Vec<String> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(zip.to_vec())).unwrap();
+    (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn create_archive_takes_resources_at_any_level_each_file_once() {
+    let app = app().await;
+    let a = SyntheticSeries::new(96, 3);
+    let b = SyntheticSeries::new(97, 2);
+    upload_all(&app, &a).await;
+    upload_all(&app, &b).await;
+    let (pa, pb) = (a.patient_id(), b.patient_id());
+    let study_a = public_ids::study(&pa, &a.study_uid());
+    let study_b = public_ids::study(&pb, &b.study_uid());
+    let series_a = public_ids::series(&pa, &a.study_uid(), &a.series_uid());
+    let second = public_ids::instance(&pa, &a.study_uid(), &a.series_uid(), &a.instance_uid(1));
+
+    let archive = |method: &str, uri: String, body: &str| {
+        let app = app.clone();
+        let (method, body) = (method.to_owned(), Bytes::from(body.to_owned()));
+        async move { call(&app, &method, &uri, body).await }
+    };
+
+    // both studies, by link
+    let (status, content_type, zip) = archive(
+        "GET",
+        format!("/tools/create-archive?resources={study_a},{study_b}"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "application/zip");
+    let names = zip_names(&zip);
+    assert_eq!(names.len(), 5);
+    assert!(names[0].starts_with(&format!("{pa} - ")), "{names:?}");
+    assert!(names[4].starts_with(&format!("{pb} - ")), "{names:?}");
+
+    // a patient and its own study: its files once
+    let body = json!({ "Resources": [public_ids::patient(&pa), study_a] }).to_string();
+    let (_, _, zip) = archive("POST", "/tools/create-archive".into(), &body).await;
+    assert_eq!(zip_names(&zip).len(), 3);
+
+    // a series, and one instance that keeps its number in the series
+    let (_, _, zip) = archive(
+        "GET",
+        format!("/tools/create-archive?resources={series_a}"),
+        "",
+    )
+    .await;
+    assert_eq!(zip_names(&zip).len(), 3);
+    let (_, _, zip) = archive(
+        "GET",
+        format!("/tools/create-archive?resources={second}"),
+        "",
+    )
+    .await;
+    let names = zip_names(&zip);
+    assert_eq!(names.len(), 1);
+    assert!(names[0].ends_with("000002.dcm"), "{names:?}");
+
+    // nothing at all is an empty ZIP; one unknown ID fails the request
+    let (status, _, zip) = archive(
+        "POST",
+        "/tools/create-archive".into(),
+        r#"{"Resources": []}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(zip_names(&zip).is_empty());
+    let (status, _, _) = archive(
+        "GET",
+        format!("/tools/create-archive?resources={study_a},nope"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let body = r#"{"Resources": [], "Synchronous": false}"#;
+    let (status, _, _) = archive("POST", "/tools/create-archive".into(), body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
