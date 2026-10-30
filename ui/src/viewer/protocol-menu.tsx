@@ -1,5 +1,6 @@
 // The toolbar's hanging protocols: the ones that fit this study, the previous and next one,
-// whether one applies by itself when a study opens, and the user's own (save, delete).
+// whether one applies by itself when a study opens (a choice of this browser), and the users'
+// own, shared through the server (save, delete).
 
 import { useState } from "react";
 import { BookmarkPlus, Check, ChevronDown, ChevronLeft, ChevronRight, LayoutTemplate, Settings2, Trash2 } from "lucide-react";
@@ -21,7 +22,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { LAYOUTS, type ViewerState } from "@/viewer/controller";
-import { autoApply, fromCurrent, saveUserProtocols, setAutoApply, userProtocols, type Plan, type StudyContext } from "@/viewer/hanging";
+import { autoApply, deleteProtocol, fromCurrent, saveProtocol, setAutoApply, type Plan, type Protocol, type StudyContext } from "@/viewer/hanging";
 
 function describe(p: Plan) {
   const what = p.mpr ? "MPR" : LAYOUTS[p.layout].name;
@@ -34,6 +35,7 @@ export function ProtocolMenu({
   onApply,
   state,
   ctx,
+  mine,
   onSaved,
 }: {
   plans: Plan[];
@@ -41,6 +43,8 @@ export function ProtocolMenu({
   onApply: (plan: Plan) => void;
   state: ViewerState;
   ctx: StudyContext | null;
+  /** the users' own, from the server */
+  mine: Protocol[];
   onSaved: () => void;
 }) {
   const [auto, setAuto] = useState(autoApply);
@@ -48,7 +52,6 @@ export function ProtocolMenu({
   const [managing, setManaging] = useState(false);
   const [name, setName] = useState("");
   const [modalities, setModalities] = useState<string[]>([]);
-  const [mine, setMine] = useState(userProtocols);
   const current = plans.find((p) => p.protocol.id === active);
   const at = plans.findIndex((p) => p.protocol.id === active);
 
@@ -57,22 +60,26 @@ export function ProtocolMenu({
     setModalities(ctx?.modalities ?? []);
     setSaving(true);
   };
-  const save = () => {
+  const save = async () => {
     if (!ctx || !name.trim()) return;
     const shown = state.mode === "mpr" ? [state.cells[0]] : state.cells;
     const protocol = fromCurrent(name.trim(), state.mode === "mpr" ? 0 : state.layout, shown, ctx, state.linked, modalities);
     if (state.mode === "mpr") protocol.mpr = true;
-    const list = [protocol, ...userProtocols()];
-    saveUserProtocols(list);
-    setMine(list);
+    try {
+      await saveProtocol(protocol);
+    } catch (e: any) {
+      return toast.error("Couldn't save the protocol", { description: e.message });
+    }
     setSaving(false);
-    toast.success("Protocol saved", { description: `${protocol.name} will open ${modalities.length ? modalities.join(", ") : "every"} study this way.` });
+    toast.success("Protocol saved", { description: `${protocol.name} will open ${modalities.length ? modalities.join(", ") : "every"} study this way, in every browser on this server.` });
     onSaved();
   };
-  const remove = (id: string) => {
-    const list = userProtocols().filter((p) => p.id !== id);
-    saveUserProtocols(list);
-    setMine(list);
+  const remove = async (id: string) => {
+    try {
+      await deleteProtocol(id);
+    } catch (e: any) {
+      return toast.error("Couldn't delete the protocol", { description: e.message });
+    }
     onSaved();
   };
 
@@ -196,7 +203,7 @@ export function ProtocolMenu({
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Your protocols</DialogTitle>
-            <DialogDescription>Kept in this browser. They come before the built-in ones when they fit a study.</DialogDescription>
+            <DialogDescription>Kept on this server, for every browser and everyone using it. They come before the built-in ones when they fit a study.</DialogDescription>
           </DialogHeader>
           <ul className="divide-y rounded-md border">
             {mine.map((p) => (

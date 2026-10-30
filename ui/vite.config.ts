@@ -19,6 +19,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/config.json": { target: server, rewrite: () => "/ui/config.json" },
+      "/api/protocols": { target: server, rewrite: (path) => `/ui${path}` },
       "^/(studies|series|instances|patients|tools|healthz|dicom-web)": server,
     },
   },

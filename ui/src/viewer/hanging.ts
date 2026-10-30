@@ -1,8 +1,8 @@
 // Hanging protocols: which layout a study opens in, and which series goes in each viewport.
 // A protocol describes series by kind (the current study or the latest prior, a modality, words
 // of the description, the largest or the n-th), not by UID, so one protocol serves every study
-// it matches. Built-in ones come first; the user's own are kept in this browser and win when
-// they match.
+// it matches. The built-in ones are here; the users' own are kept on the server
+// (/ui/api/protocols), shared by every browser, and come first when they match.
 
 import { api } from "@/lib/api";
 import { sortSeries } from "@/lib/studies";
@@ -77,23 +77,44 @@ export const BUILTIN: Protocol[] = [
   { id: "builtin:mpr", name: "MPR of the largest series", builtin: true, modalities: ["CT", "MR", "PT", "NM"], layout: 0, viewports: [{ from: "current", pick: "largest" }], mpr: true, priority: 0 },
 ];
 
-// ---- the user's own, in this browser ----
+// ---- the users' own, on the server ----
 
-const KEY = "pacs-rs-protocols";
+/** The page is /ui/; the protocols are /ui/api/protocols. */
+const PROTOCOLS = new URL("api/protocols", location.href);
+/** Where this browser kept its own before the server did; moved up once. */
+const OLD_KEY = "pacs-rs-protocols";
 const AUTO_KEY = "pacs-rs-protocols-auto";
 
-export function userProtocols(): Protocol[] {
-  try {
-    const list = JSON.parse(localStorage.getItem(KEY) || "[]");
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
+async function send(method: string, id: string, body?: Protocol) {
+  const response = await fetch(new URL(`api/protocols/${encodeURIComponent(id)}`, location.href), {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok && response.status !== 404) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      message = (await response.json()).Message || message;
+    } catch {}
+    throw new Error(message);
   }
 }
-export function saveUserProtocols(list: Protocol[]) {
+export const saveProtocol = (p: Protocol) => send("PUT", p.id, p);
+export const deleteProtocol = (id: string) => send("DELETE", id);
+
+/** The users' protocols, most recently saved first; any this browser still keeps is moved up. */
+export async function fetchUserProtocols(): Promise<Protocol[]> {
   try {
-    localStorage.setItem(KEY, JSON.stringify(list));
+    const old = JSON.parse(localStorage.getItem(OLD_KEY) || "[]");
+    if (Array.isArray(old) && old.length) {
+      for (const p of old) await saveProtocol(p);
+      localStorage.removeItem(OLD_KEY);
+    }
   } catch {}
+  const response = await fetch(PROTOCOLS, { cache: "no-store" });
+  if (!response.ok) return [];
+  const list = await response.json();
+  return Array.isArray(list) ? list.filter((p) => p && typeof p.id === "string" && Array.isArray(p.viewports)) : [];
 }
 export function autoApply() {
   try {
@@ -108,9 +129,7 @@ export function setAutoApply(on: boolean) {
   } catch {}
 }
 
-export function allProtocols() {
-  return [...userProtocols(), ...BUILTIN];
-}
+
 
 // ---- what a study offers ----
 
@@ -192,9 +211,9 @@ export function plan(protocol: Protocol, ctx: StudyContext): Plan | null {
   return { protocol, layout, series, linked: !!protocol.linked, mpr: !!protocol.mpr };
 }
 
-/** The protocols that fit the study, best first. */
-export function plans(ctx: StudyContext) {
-  return allProtocols()
+/** The protocols that fit the study, best first: the users' own, then the built-in ones. */
+export function plans(ctx: StudyContext, mine: Protocol[]) {
+  return [...mine, ...BUILTIN]
     .map((p) => plan(p, ctx))
     .filter((p): p is Plan => !!p)
     .sort((a, b) => (b.protocol.builtin ? 0 : 1) - (a.protocol.builtin ? 0 : 1) || b.protocol.priority - a.protocol.priority);

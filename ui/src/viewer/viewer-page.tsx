@@ -57,7 +57,7 @@ import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
 import { StudyBrowser, type Registry } from "@/viewer/study-browser";
-import { autoApply, plans, studyContext, type Plan, type StudyContext } from "@/viewer/hanging";
+import { autoApply, fetchUserProtocols, plans, studyContext, type Plan, type Protocol, type StudyContext } from "@/viewer/hanging";
 import { ProtocolMenu } from "@/viewer/protocol-menu";
 
 const MEASURE: { tool: ToolName; label: string; key: string; Icon: typeof Ruler; hint: string }[] = [
@@ -194,7 +194,8 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
   const [ctx, setCtx] = useState<StudyContext | null>(null);
   const [protocols, setProtocols] = useState<Plan[]>([]);
   const [protocol, setProtocol] = useState<string | null>(null);
-  const [protocolsVersion, setProtocolsVersion] = useState(0);
+  const [mine, setMine] = useState<Protocol[]>([]);
+  const refreshMine = () => fetchUserProtocols().then(setMine, () => setMine([]));
 
   // dark everywhere while the viewer is open, menus and dialogs included (they render outside)
   useEffect(() => {
@@ -215,10 +216,11 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
     const v = new Viewer(grid.current, setState, resolve);
     viewer.current = v;
     // a series asked for opens on its own; a study, as its best hanging protocol lays it out
-    studyContext(studyId).then((c) => {
+    Promise.all([studyContext(studyId), fetchUserProtocols().catch(() => [] as Protocol[])]).then(([c, saved]) => {
       if (viewer.current !== v) return;
       setCtx(c);
-      const fits = plans(c);
+      setMine(saved);
+      const fits = plans(c, saved);
       setProtocols(fits);
       const first = autoApply() ? fits[0] : fits.find((p) => p.protocol.id === "builtin:single");
       if (seriesId || !first) {
@@ -236,8 +238,8 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
 
   // saving or deleting a protocol changes what fits
   useEffect(() => {
-    if (ctx) setProtocols(plans(ctx));
-  }, [ctx, protocolsVersion]);
+    if (ctx) setProtocols(plans(ctx, mine));
+  }, [ctx, mine]);
 
   function applyPlan(p: Plan | undefined) {
     if (!p || !viewer.current) return;
@@ -325,7 +327,7 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
           </a>
         </Tip>
         <ToolBtn label="Series" Icon={PanelLeft} active={browser} onClick={() => setBrowser(!browser)} />
-        {s && <ProtocolMenu plans={protocols} active={protocol} onApply={applyPlan} state={s} ctx={ctx} onSaved={() => setProtocolsVersion((n) => n + 1)} />}
+        {s && <ProtocolMenu plans={protocols} active={protocol} onApply={applyPlan} state={s} ctx={ctx} mine={mine} onSaved={refreshMine} />}
         <Sep />
 
         {s && v && (
