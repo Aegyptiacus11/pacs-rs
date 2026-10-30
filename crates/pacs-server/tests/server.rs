@@ -208,6 +208,88 @@ async fn web_interface_at_ui_unless_turned_off() {
 }
 
 #[tokio::test]
+async fn hanging_protocols_are_shared_through_the_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let req = |method: &str, uri: &str, body: &str| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_owned()))
+            .unwrap()
+    };
+    let settings = settings_in(dir.path(), &[]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+
+    let (status, _, body) = call(&app, req("GET", "/ui/api/protocols", "")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_ref(), b"[]");
+
+    let mine = r#"{"id":"user:a1","name":"Chest PA and lateral","layout":1}"#;
+    let (status, _, _) = call(&app, req("PUT", "/ui/api/protocols/user:a1", mine)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let renamed = r#"{"id":"user:a1","name":"Chest","layout":1}"#;
+    assert_eq!(
+        call(&app, req("PUT", "/ui/api/protocols/user:a1", renamed))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+
+    // refused: an id that is not the path's, not an object, a bad id, too big
+    for (uri, body) in [
+        ("/ui/api/protocols/user:a1", r#"{"id":"user:b2"}"#),
+        ("/ui/api/protocols/user:a1", "[1, 2]"),
+        ("/ui/api/protocols/a%20b", r#"{"id":"a b"}"#),
+    ] {
+        assert_eq!(
+            call(&app, req("PUT", uri, body)).await.0,
+            StatusCode::BAD_REQUEST,
+            "{uri} {body}"
+        );
+    }
+    let huge = format!(r#"{{"id":"user:big","pad":"{}"}}"#, "x".repeat(70_000));
+    assert_eq!(
+        call(&app, req("PUT", "/ui/api/protocols/user:big", &huge))
+            .await
+            .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    // another browser, after a restart, sees it
+    drop(app);
+    let app = app_again(&settings).await;
+    let (_, _, body) = call(&app, req("GET", "/ui/api/protocols", "")).await;
+    let list: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["name"], "Chest");
+
+    assert_eq!(
+        call(&app, req("DELETE", "/ui/api/protocols/user:a1", ""))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        call(&app, req("DELETE", "/ui/api/protocols/user:a1", ""))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let settings = settings_in(dir.path(), &["--ui", "false"]);
+    let without = app_again(&settings).await;
+    assert_eq!(
+        call(&without, req("GET", "/ui/api/protocols", "")).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+async fn app_again(settings: &Settings) -> Router {
+    app(open_archive(settings).await.unwrap(), settings).unwrap()
+}
+
+#[tokio::test]
 async fn cors_only_when_asked_for() {
     let dir = tempfile::tempdir().unwrap();
     let preflight = || {
