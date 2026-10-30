@@ -120,10 +120,12 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
 - **Viewer**: full screen and dark, laid out like a reading workstation. A toolbar of labelled
-  tools: window/level with presets and invert, pan, zoom, magnify, measurements (length, pixel
-  value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate and flip,
-  layouts up to 2 × 3 with linked scrolling, MPR, cine, DICOM tags, export (PNG of the view, or
-  the DICOM file), full screen. On the left, the patient's studies (current, priors and later
+  tools: window/level with presets and invert, pan, zoom (or a magnifying glass), measurements
+  (length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate
+  and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
+  series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), cine, DICOM
+  tags, export (PNG of the view, or the DICOM file), full screen. Each viewport has a plane menu
+  (as acquired, axial, sagittal, coronal) and can be removed. On the left, the patient's studies (current, priors and later
   ones) and their series: a click shows one in the active viewport, a drag shows it in any.
   Each viewport has its own text, orientation letters, a centimetre scale, its position in
   the series along the top, and a preset menu. MPR shows the series as a volume, axial,
