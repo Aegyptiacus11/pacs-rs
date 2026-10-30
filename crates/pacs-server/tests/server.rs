@@ -285,6 +285,92 @@ async fn hanging_protocols_are_shared_through_the_index() {
     );
 }
 
+#[tokio::test]
+async fn measurements_are_kept_per_study() {
+    let dir = tempfile::tempdir().unwrap();
+    let req = |method: &str, uri: &str, body: &str| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_owned()))
+            .unwrap()
+    };
+    let settings = settings_in(dir.path(), &[]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let series = SyntheticSeries::new(82, 1);
+    let (status, _, body) = call(
+        &app,
+        Request::post("/instances")
+            .body(Body::from(series.slice_bytes(0)))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let study_id = serde_json::from_slice::<Value>(&body).unwrap()["ParentStudy"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let uri = format!("/ui/api/annotations/{}", series.study_uid());
+
+    let (status, _, body) = call(&app, req("GET", &uri, "")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_ref(), b"[]");
+    let two = r#"[{"annotationUID":"a","metadata":{"toolName":"Length"}},{"annotationUID":"b"}]"#;
+    assert_eq!(
+        call(&app, req("PUT", &uri, two)).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    // refused: not an array, not objects, not a UID, a study that isn't here, too big
+    for (uri, body, status) in [
+        (uri.as_str(), r#"{"a":1}"#, StatusCode::BAD_REQUEST),
+        (uri.as_str(), "[1]", StatusCode::BAD_REQUEST),
+        ("/ui/api/annotations/abc", "[]", StatusCode::BAD_REQUEST),
+        ("/ui/api/annotations/1.2.3.4", "[]", StatusCode::NOT_FOUND),
+    ] {
+        assert_eq!(
+            call(&app, req("PUT", uri, body)).await.0,
+            status,
+            "{uri} {body}"
+        );
+    }
+    let huge = format!(r#"[{{"pad":"{}"}}]"#, "x".repeat(1_100_000));
+    assert_eq!(
+        call(&app, req("PUT", &uri, &huge)).await.0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    // another browser, after a restart, gets them
+    drop(app);
+    let app = app_again(&settings).await;
+    let (_, _, body) = call(&app, req("GET", &uri, "")).await;
+    let list: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert_eq!(list[0]["metadata"]["toolName"], "Length");
+
+    // an empty list removes them; deleting the study too
+    assert_eq!(
+        call(&app, req("PUT", &uri, "[]")).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(call(&app, req("GET", &uri, "")).await.2.as_ref(), b"[]");
+    assert_eq!(
+        call(&app, req("PUT", &uri, two)).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let (status, _, _) = call(&app, req("DELETE", &format!("/studies/{study_id}"), "")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(call(&app, req("GET", &uri, "")).await.2.as_ref(), b"[]");
+
+    let settings = settings_in(dir.path(), &["--ui", "false"]);
+    let without = app_again(&settings).await;
+    assert_eq!(
+        call(&without, req("GET", &uri, "")).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
 async fn app_again(settings: &Settings) -> Router {
     app(open_archive(settings).await.unwrap(), settings).unwrap()
 }
