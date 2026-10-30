@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_dicomweb::multipart;
 use pacs_server::{Settings, StorageLocation, app, open_archive, secret, serve};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
@@ -367,6 +367,67 @@ async fn measurements_are_kept_per_study() {
     let without = app_again(&settings).await;
     assert_eq!(
         call(&without, req("GET", &uri, "")).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn the_study_list_comes_a_page_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(dir.path(), &[]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    for seed in [83, 84, 85] {
+        let bytes = SyntheticSeries::new(seed, 1).slice_bytes(0);
+        let request = Request::post("/instances").body(Body::from(bytes)).unwrap();
+        assert_eq!(call(&app, request).await.0, StatusCode::OK);
+    }
+    let get = |uri: &str| Request::get(uri).body(Body::empty()).unwrap();
+    let json = |body: Bytes| serde_json::from_slice::<Value>(&body).unwrap();
+
+    let (status, _, body) = call(&app, get("/ui/api/studies?limit=2&sort=patient&order=asc")).await;
+    assert_eq!(status, StatusCode::OK);
+    let page = json(body);
+    assert_eq!(page["Total"], 3);
+    assert_eq!(page["Studies"].as_array().unwrap().len(), 2);
+    assert_eq!(page["Studies"][0]["Modalities"][0], "CT");
+    assert_eq!(page["Studies"][0]["Instances"], 1);
+    assert!(page.get("Summary").is_none());
+    let (_, _, body) = call(
+        &app,
+        get("/ui/api/studies?limit=2&offset=2&sort=patient&order=asc"),
+    )
+    .await;
+    assert_eq!(json(body)["Studies"].as_array().unwrap().len(), 1);
+
+    // a word, and the summary of what it finds
+    let (_, _, body) = call(&app, get("/ui/api/studies?q=syn84&summary=true")).await;
+    let found = json(body);
+    assert_eq!(found["Total"], 1);
+    assert_eq!(found["Summary"]["Studies"], 1);
+    assert_eq!(found["Summary"]["Modalities"][0], json!(["CT", 1]));
+    assert_eq!(found["Summary"]["Recent"].as_array().unwrap().len(), 1);
+    let (_, _, body) = call(&app, get("/ui/api/studies?modality=MR")).await;
+    assert_eq!(json(body)["Total"], 0);
+
+    let (_, _, body) = call(&app, get("/ui/api/studies/facets")).await;
+    assert_eq!(json(body)["Modalities"]["CT"], 3);
+
+    for bad in [
+        "sort=size",
+        "order=up",
+        "limit=0",
+        "limit=1001",
+        "offset=-1",
+        "from=2026-01-01",
+    ] {
+        let (status, _, _) = call(&app, get(&format!("/ui/api/studies?{bad}"))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    let settings = settings_in(dir.path(), &["--ui", "false"]);
+    let without = app_again(&settings).await;
+    assert_eq!(
+        call(&without, get("/ui/api/studies")).await.0,
         StatusCode::NOT_FOUND
     );
 }
