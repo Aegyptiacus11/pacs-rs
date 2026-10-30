@@ -14,7 +14,7 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Download, Ellipsis, Eye, FileStack, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronLeft, ChevronRight, Copy, Download, Ellipsis, Eye, FileStack, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -43,6 +45,18 @@ const RANGES = [
   ["1y", "12 months", 365],
 ] as const;
 type Range = (typeof RANGES)[number][0];
+/** A custom range: ISO dates (yyyy-mm-dd) from the date fields, either end open. */
+type Span = { from: string; to: string };
+const key = (iso: string) => iso.replaceAll("-", "");
+function inSpan(date: string, { from, to }: Span) {
+  if (from && !(date && date >= key(from))) return false;
+  if (to && !(date && date <= key(to))) return false;
+  return true;
+}
+function spanLabel({ from, to }: Span) {
+  if (from && to) return from === to ? formatDate(key(from)) : `${formatDate(key(from))} – ${formatDate(key(to))}`;
+  return from ? `From ${formatDate(key(from))}` : `Until ${formatDate(key(to))}`;
+}
 const SEXES: Record<string, string> = { F: "Female", M: "Male", O: "Other" };
 
 function sinceFor(range: Range) {
@@ -95,7 +109,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const upload = useUpload();
   const [query, setQuery] = useState("");
   const [modalities, setModalities] = useState<string[]>([]);
-  const [range, setRange] = useState<Range>("any");
+  const [range, setRange] = useState<Range | "custom">("any");
+  const [span, setSpan] = useState<Span>({ from: "", to: "" });
   const [sexes, setSexes] = useState<string[]>([]);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
@@ -115,8 +130,9 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
   const rows = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const since = sinceFor(range);
+    const since = range === "custom" ? null : sinceFor(range);
     return all.filter((s) => {
+      if (range === "custom" && !inSpan(s.date, span)) return false;
       if (patient && s.patient !== patient) return false;
       if (modalities.length && !s.modalities.some((m) => modalities.includes(m))) return false;
       if (sexes.length && !sexes.includes(s.sex || "O")) return false;
@@ -125,7 +141,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
       const text = `${s.name} ${personName(s.name)} ${s.patientId} ${s.accession} ${s.description} ${s.referring} ${s.modalities.join(" ")} ${s.date}`.toLowerCase();
       return words.every((w) => text.includes(w));
     });
-  }, [all, query, modalities, sexes, range, patient]);
+  }, [all, query, modalities, sexes, range, span, patient]);
 
   // what each filter can pick, with how many studies have it
   const facets = useMemo(() => {
@@ -297,7 +313,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             type="single"
             variant="outline"
             size="sm"
-            value={range}
+            value={range === "custom" ? "" : range}
             onValueChange={(v) => v && setRange(v as Range)}
             aria-label="Study date"
             className="bg-card"
@@ -309,6 +325,16 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
+          <CustomRange
+            active={range === "custom"}
+            span={span}
+            dates={all.filter((x) => !patient || x.patient === patient).map((x) => x.date)}
+            count={(s) => all.filter((x) => (!patient || x.patient === patient) && inSpan(x.date, s)).length}
+            onApply={(s) => {
+              setSpan(s);
+              setRange(s.from || s.to ? "custom" : "any");
+            }}
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
@@ -401,7 +427,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                     </TableRow>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-56">
-                    <StudyMenu study={row.original} kind="context" onDelete={setPending} />
+                    <StudyMenu study={row.original} all={all} kind="context" onDelete={setPending} />
                   </ContextMenuContent>
                 </ContextMenu>
               ))}
@@ -490,6 +516,144 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   );
 }
 
+// a date range of one's own: shortcuts, two months to click the first and last day on (days
+// with studies dotted), and both ends typed; how many studies it takes, as it is picked
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const fromIso = (s: string) => (s ? new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10))) : undefined);
+function shortcuts(): [string, Span][] {
+  const t = new Date();
+  const day = (y: number, m: number, d: number) => iso(new Date(y, m, d));
+  const [y, m, d] = [t.getFullYear(), t.getMonth(), t.getDate()];
+  const monday = d - ((t.getDay() + 6) % 7);
+  return [
+    ["Yesterday", { from: day(y, m, d - 1), to: day(y, m, d - 1) }],
+    ["This week", { from: day(y, m, monday), to: iso(t) }],
+    ["Last week", { from: day(y, m, monday - 7), to: day(y, m, monday - 1) }],
+    ["This month", { from: day(y, m, 1), to: iso(t) }],
+    ["Last month", { from: day(y, m - 1, 1), to: day(y, m, 0) }],
+    ["Last 3 months", { from: day(y, m - 3, d), to: iso(t) }],
+    ["This year", { from: day(y, 0, 1), to: iso(t) }],
+    ["Last year", { from: day(y - 1, 0, 1), to: day(y - 1, 11, 31) }],
+  ];
+}
+
+function CustomRange({ active, span, dates, count, onApply }: { active: boolean; span: Span; dates: string[]; count: (s: Span) => number; onApply: (s: Span) => void }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(span);
+  const today = new Date();
+  // the ends in order, whichever was typed first
+  const ordered = draft.from && draft.to && draft.from > draft.to ? { from: draft.to, to: draft.from } : draft;
+  const studyDays = useMemo(() => dates.map((d) => parseDate(d)).filter((d): d is Date => !!d), [dates]);
+  const first = studyDays.reduce<Date | null>((a, d) => (!a || d < a ? d : a), null);
+  const apply = (s: Span) => {
+    onApply(s);
+    setOpen(false);
+  };
+  const picked = shortcuts().find(([, s]) => s.from === ordered.from && s.to === ordered.to)?.[0];
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) setDraft(span);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Custom date range"
+          className={cn("h-8 gap-1.5 bg-card px-3 text-xs font-medium", active && "border-selection/40 bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection")}
+        >
+          <CalendarRange className="size-3.5" />
+          {active ? spanLabel(span) : "Custom…"}
+          {active && (
+            <span
+              role="button"
+              aria-label="Clear the date range"
+              className="-mr-1.5 ml-0.5 grid size-5 place-items-center rounded hover:bg-selection/15"
+              onClick={(e) => {
+                e.stopPropagation();
+                onApply({ from: "", to: "" });
+              }}
+            >
+              <X className="size-3" />
+            </span>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto p-0">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            apply(ordered);
+          }}
+        >
+          <div className="flex">
+            <div className="flex w-36 flex-col gap-0.5 border-r p-2">
+              {shortcuts().map(([label, s]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => apply(s)}
+                  className={cn("rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent", picked === label && "bg-selection-soft text-selection")}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Calendar
+              mode="range"
+              numberOfMonths={2}
+              captionLayout="dropdown"
+              showOutsideDays={false}
+              defaultMonth={fromIso(ordered.from) ?? new Date(today.getFullYear(), today.getMonth() - 1, 1)}
+              startMonth={new Date(Math.min(first?.getFullYear() ?? today.getFullYear(), today.getFullYear() - 10), 0, 1)}
+              endMonth={today}
+              disabled={{ after: today }}
+              selected={{ from: fromIso(ordered.from), to: fromIso(ordered.to) }}
+              onSelect={(r) => setDraft({ from: r?.from ? iso(r.from) : "", to: r?.to ? iso(r.to) : "" })}
+              modifiers={{ studies: studyDays }}
+              modifiersClassNames={{ studies: "has-studies" }}
+              className="p-3"
+            />
+          </div>
+          <div className="flex items-end gap-3 border-t p-3">
+            {(["from", "to"] as const).map((end) => (
+              <label key={end} className="grid gap-1 text-xs text-muted-foreground">
+                {end === "from" ? "From" : "To"}
+                <Input
+                  type="date"
+                  max={iso(today)}
+                  value={draft[end]}
+                  onChange={(e) => setDraft((d) => ({ ...d, [end]: e.target.value }))}
+                  className="h-8 w-36 text-sm text-foreground"
+                />
+              </label>
+            ))}
+            <div className="mb-2 ml-1 min-w-0 flex-1 text-xs text-muted-foreground">
+              {ordered.from || ordered.to ? (
+                <>
+                  <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span>
+                  {ordered.from && ordered.to ? "" : ordered.from ? " since then" : " until then"}
+                </>
+              ) : (
+                "Click the first day, then the last."
+              )}
+            </div>
+            <Button type="button" variant="ghost" size="sm" onClick={() => apply({ from: "", to: "" })}>
+              Clear
+            </Button>
+            <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
+              Apply
+            </Button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function deleteOne(s: Study): PendingDelete {
   return {
     ids: [s.id],
@@ -499,7 +663,8 @@ function deleteOne(s: Study): PendingDelete {
 }
 
 // the actions beyond Open and Download: in the pane's ⋯ menu and on a right click
-function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown" | "context"; onDelete: (p: PendingDelete) => void }) {
+function StudyMenu({ study: s, all, kind, onDelete }: { study: Study; all: Study[]; kind: "dropdown" | "context"; onDelete: (p: PendingDelete) => void }) {
+  const theirs = all.filter((x) => x.patient === s.patient);
   const [Item, Separator] = kind === "dropdown" ? [DropdownMenuItem, DropdownMenuSeparator] : [ContextMenuItem, ContextMenuSeparator];
   return (
     <>
@@ -518,12 +683,31 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
       <Item onSelect={() => copy(s.uid, "Study Instance UID")}>
         <Copy /> Copy Study UID
       </Item>
+      <Separator />
       <Item onSelect={() => go(href.studies(s.patient))}>
         <User /> All studies of this patient
+      </Item>
+      <Item asChild>
+        <a href={url(`patients/${s.patient}/archive`)} download>
+          <Download /> Download all of this patient
+        </a>
       </Item>
       <Separator />
       <Item variant="destructive" onSelect={() => onDelete(deleteOne(s))}>
         <Trash2 /> Delete study…
+      </Item>
+      <Item
+        variant="destructive"
+        onSelect={() =>
+          // a patient is their studies: deleting them all removes the patient
+          onDelete({
+            ids: theirs.map((x) => x.id),
+            title: "Delete this patient?",
+            description: `${personName(s.name)} (${s.patientId || "no ID"}) and all ${plural(theirs.length, "study", "studies")}, ${plural(theirs.reduce((n, x) => n + x.instances, 0), "image")}, will be removed from storage. This can't be undone.`,
+          })
+        }
+      >
+        <Trash2 /> Delete patient…
       </Item>
     </>
   );
@@ -589,7 +773,7 @@ function StudyPane({ study: s, all, onPick, onDelete }: { study: Study; all: Stu
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <StudyMenu study={s} kind="dropdown" onDelete={onDelete} />
+              <StudyMenu study={s} all={all} kind="dropdown" onDelete={onDelete} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

@@ -261,3 +261,20 @@
   cursor: none;
 }
 .viewer-grid[data-tool="magnify"] .cell { cursor: zoom-in; }
+
+/* the custom date range: a dot under each day that has studies */
+.has-studies button { position: relative; }
+.has-studies button::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 9999px;
+  background: var(--selection);
+}
+.has-studies button[data-selected-single="true"]::after,
+.has-studies button[data-range-start="true"]::after,
+.has-studies button[data-range-end="true"]::after { background: var(--primary-foreground); }
