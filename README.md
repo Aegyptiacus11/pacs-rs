@@ -123,7 +123,8 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   move through the list. With no study chosen, the pane sums up what the list holds, for the
   date range and filters chosen (patients, studies, series, images, studies by modality, the
   last received). Pages of 25, 50, 100 or 200 studies (kept in the browser), numbered, with ↑ ↓
-  going on to the next or previous page. Checkboxes download or delete several
+  going on to the next or previous page. The server filters, sorts, counts and pages the list
+  (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
 - **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
@@ -165,6 +166,14 @@ The shared protocols are at `/ui/api/protocols`: `GET` lists them (most recently
 `PUT /ui/api/protocols/{id}` keeps one (a JSON object whose `id` is the path's, at most 64 KiB;
 at most 1000 protocols), `DELETE` removes one. They are the interface's own documents, stored as
 received in the index's `ui_protocols` table.
+
+The study list is at `/ui/api/studies`: `q` (words, each found in the patient's name or ID,
+the accession number, the description, the referring physician or the date), `from` and `to`
+(`YYYYMMDD`, included), `modality` and `sex` (comma-separated; `O` for other), `patient` (a
+public ID), `sort` (`patient`, `description`, `modality`, `date`, `series`, `images`,
+`received`), `order` (`asc`, `desc`), `offset`, `limit` (at most 1000) and `summary=true` (the
+whole list's totals and its last received studies). It answers `{"Total", "Studies",
+"Summary"?}`; `/ui/api/studies/facets[?patient=]` gives the filters' choices with their counts.
 
 The measurements are at `/ui/api/annotations/{StudyInstanceUID}`: `GET` returns the study's list
 (a JSON array, empty when it has none), `PUT` replaces it (an array of objects, at most 1 MiB; an
