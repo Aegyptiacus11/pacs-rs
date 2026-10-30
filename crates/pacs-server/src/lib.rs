@@ -22,6 +22,7 @@ use tracing::Level;
 mod annotations;
 mod protocols;
 mod ui;
+mod worklist;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "pacs-server", version, about = "pacs-rs: a PACS in Rust")]
@@ -260,8 +261,8 @@ pub fn without_password(url: &str) -> String {
 
 /// The whole HTTP application: `/healthz`, the REST API at `/`, DICOMweb under
 /// `dicomweb_path` and, unless turned off, the web interface at `/ui/` with its shared
-/// hanging protocols at `/ui/api/protocols` and the viewer's measurements at
-/// `/ui/api/annotations`.
+/// hanging protocols at `/ui/api/protocols`, the viewer's measurements at
+/// `/ui/api/annotations` and the paged study list at `/ui/api/studies`.
 pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
     if path == "/" {
@@ -290,7 +291,8 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
         app = app
             .merge(ui::router(&path))
             .merge(protocols::router(index.clone()))
-            .merge(annotations::router(index));
+            .merge(annotations::router(index.clone()))
+            .merge(worklist::router(index));
     }
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
