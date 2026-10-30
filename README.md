@@ -132,7 +132,11 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   sagittal and coronal with crosshairs, and a full-thickness coronal MIP; each view takes a
   thin slice or a MIP slab of 5, 10 or 20 mm. Frames come over WADO-RS as stored and are
   decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). MPR needs WebGL; the rest
-  also renders without it. `?` lists the keys.
+  also renders without it ("Software rendering" under Views, turned on by itself when a
+  browser's WebGL draws blank). Keys follow the names: W window, P pan, Z zoom, M magnifier,
+  L length, A angle, C Cobb, B bidirectional, E ellipse, ⇧E rectangle, D pixel value (density),
+  R rotate (⇧R left), H and V flip, I invert, 0 reset, N new view, X 3 planes, S sync; `?`
+  lists them all.
 - **Hanging protocols**: a study opens as the best protocol that fits it lays it out: the
   current study beside its latest prior (the prior's most similar series, scrolling linked),
   two views for CR, DX, MG and RF, the largest series, every series, or MPR. The toolbar lists
