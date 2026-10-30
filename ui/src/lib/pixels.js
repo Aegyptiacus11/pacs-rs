@@ -1,6 +1,6 @@
 // Pixels for thumbnails: one frame fetched as Explicit VR Little Endian and windowed onto a canvas.
 
-import { HttpError, WEB } from "./util.js";
+import { HttpError, WEB } from "@/lib/api";
 
 export const tag = (meta, t) => meta[t]?.Value;
 export const first = (meta, t, fallback) => {

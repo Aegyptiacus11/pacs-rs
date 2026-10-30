@@ -1,8 +1,7 @@
-// The DICOM tags table of the viewer: names for the common tags, sequences indented.
+// DICOM tags for the viewer's tag list: names for the common ones, sequences flattened with
+// their depth.
 
-import { h } from "./util.js";
-
-export const TAG_NAMES = {
+export const TAG_NAMES: Record<string, string> = {
   "00020010": "Transfer Syntax UID", "00080005": "Specific Character Set", "00080008": "Image Type",
   "00080016": "SOP Class UID", "00080018": "SOP Instance UID", "00080020": "Study Date", "00080021": "Series Date",
   "00080022": "Acquisition Date", "00080023": "Content Date", "00080030": "Study Time", "00080031": "Series Time",
@@ -27,34 +26,24 @@ export const TAG_NAMES = {
   "00281053": "Rescale Slope", "00281054": "Rescale Type", "7FE00010": "Pixel Data",
 };
 
-export function tagValue(element) {
+export function tagValue(element: any): string {
   if (element.Value == null) return element.BulkDataURI ? "(bulk data)" : element.InlineBinary ? "(binary)" : "";
   if (element.vr === "SQ") return `${element.Value.length} item${element.Value.length === 1 ? "" : "s"}`;
-  return element.Value.map((v) => (v && typeof v === "object" ? v.Alphabetic ?? JSON.stringify(v) : String(v))).join(" \\ ");
+  return element.Value.map((v: any) => (v && typeof v === "object" ? v.Alphabetic ?? JSON.stringify(v) : String(v))).join(" \\ ");
 }
 
-export function tagRows(meta, query, depth = 0) {
-  const rows = [];
+export type TagRow = { tag: string; name: string; vr: string; value: string; depth: number };
+
+/** Every element of `meta`, sequence items after their sequence, filtered by `query`. */
+export function tagRows(meta: Record<string, any>, query = "", depth = 0): TagRow[] {
+  const rows: TagRow[] = [];
   for (const [t, element] of Object.entries(meta).sort()) {
+    const shown = `(${t.slice(0, 4)},${t.slice(4)})`;
     const name = TAG_NAMES[t] || "";
     const value = tagValue(element);
-    const shown = `(${t.slice(0, 4)},${t.slice(4)})`;
     const matches = !query || `${shown} ${t} ${name} ${value}`.toLowerCase().includes(query);
-    const children = element.vr === "SQ" ? element.Value?.flatMap((item) => tagRows(item, query, depth + 1)) ?? [] : [];
-    if (matches || children.length) {
-      rows.push(
-        h(
-          "tr",
-          {},
-          h("td", { class: "t", style: depth ? `padding-left: ${8 + depth * 14}px` : null }, shown),
-          h("td", { class: "k" }, name),
-          h("td", { class: "vr" }, element.vr || ""),
-          h("td", { class: "v" }, value),
-        ),
-      );
-      rows.push(...children);
-    }
+    const children = element.vr === "SQ" ? (element.Value ?? []).flatMap((item: any) => tagRows(item, query, depth + 1)) : [];
+    if (matches || children.length) rows.push({ tag: shown, name, vr: element.vr || "", value, depth }, ...children);
   }
   return rows;
 }
-
