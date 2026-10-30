@@ -83,6 +83,7 @@ DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gi
 | `GET /patients/{id}/archive`, `/studies/{id}/archive` | the files in a ZIP, by patient, study and series |
 | `GET /instances/{id}/file` | the DICOM file as stored |
 | `DELETE /patients/{id}`, `/studies/{id}`, `/series/{id}`, `/instances/{id}` | the resource, everything under it and every ancestor left empty; `RemainingAncestor` names the closest one still there, or is `null` |
+| `GET /tools/create-archive?resources=a,b`, `POST /tools/create-archive` (`{"Resources": [...]}`) | patients, studies, series and instances in one ZIP, laid out as above, each file once; a series or instance keeps its number in the series |
 | `POST /tools/find` | `Level` Patient, Study, Series or Instance, exact matching on the UIDs, PatientID, AccessionNumber, StudyDate |
 
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
@@ -109,7 +110,9 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 - **Worklist**: every study, newest first and grouped by month, with search (name, patient ID,
   accession, description), modality and date filters, and sortable columns. Selecting a study
   shows its series, sizes and details beside the list, with download (ZIP) and deletion for the
-  study or its patient. Keys: `/` search, `↑` `↓` select, `Enter` open, `Del` delete.
+  study or its patient. Checkboxes (shift-click for a range, `x` for the selected row) download
+  or delete several studies at once. Keys: `/` search, `↑` `↓` select, `Enter` open, `Del`
+  delete.
 - **Patients**: one row per patient; opening one shows only their studies.
 - **Viewer**: [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0. Frames come over WADO-RS
   in the transfer syntax they are stored in and are decoded in the browser (JPEG-LS, JPEG,
