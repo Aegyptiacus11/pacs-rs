@@ -109,19 +109,20 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a rail down the left side (Studies, Patients, Search, Upload; light or dark at the
+- **Layout**: a rail down the left side (Studies, Search, Upload; light or dark at the
   bottom, and a warning when the server doesn't answer), the page beside it.
 - **Studies**: a worklist and, beside it, the chosen study. Date presets with counts (today, 7
-  days, 30 days, 12 months), search, modality (every DICOM imaging modality) and sex filters,
+  days, 30 days, 12 months) and a range of one's own (shortcuts such as last week or last year, two
+  months to click the first and last day on, with the days that have studies dotted, or both
+  ends typed), search, modality (every DICOM imaging modality) and sex filters,
   sortable columns (patient, study, modality, date, series, images). A click on a row shows the
   study in the pane: the patient, its series as thumbnails (a click opens one), the patient's
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
-  ⋯ copy the Study UID, the patient's studies, delete. A double click or Enter opens it; ↑ ↓
+  ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
+  study or the patient. A double click or Enter opens it; ↑ ↓
   move through the list. With no study chosen, the pane sums up the archive (patients, studies,
   series, images, studies by modality, the last received). Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
-- **Patients**: one row per Patient ID; a row shows that patient's studies; ⋯ or a right click
-  downloads or deletes.
 - **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
