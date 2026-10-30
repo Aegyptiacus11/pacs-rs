@@ -125,13 +125,15 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
   series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), cine, DICOM
   tags, export (PNG of the view, or the DICOM file), full screen. Each viewport has a plane menu
-  (as acquired, axial, sagittal, coronal) and can be removed. On the left, the patient's studies (current, priors and later
+  (as acquired, axial, sagittal, coronal, 3D) and can be removed. A 3D view renders the
+  series' volume (CT: bone, muscle and bone, vessels, lung, skin, MIP; MR: default, angio, T2
+  brain, MIP); drag to turn it, the wheel or a right drag zooms. On the left, the patient's studies (current, priors and later
   ones) and their series: a click shows one in the active viewport, a drag shows it in any.
   Each viewport has its own text, orientation letters, a centimetre scale, its position in
   the series along the top, and a preset menu. MPR shows the series as a volume, axial,
   sagittal and coronal with crosshairs, and a full-thickness coronal MIP; each view takes a
   thin slice or a MIP slab of 5, 10 or 20 mm. Frames come over WADO-RS as stored and are
-  decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). MPR needs WebGL; the rest
+  decoded in the browser (JPEG-LS, JPEG, JPEG 2000, HTJ2K, JPEG XL). MPR, other planes and 3D need WebGL; the rest
   also renders without it ("Software rendering" under Views, turned on by itself when a
   browser's WebGL draws blank). Keys follow the names: W window, P pan, Z zoom, M magnifier,
   L length, A angle, C Cobb, B bidirectional, E ellipse, ⇧E rectangle, D pixel value (density),
