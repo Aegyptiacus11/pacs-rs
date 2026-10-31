@@ -1,6 +1,7 @@
 # Hospital interfaces: the plan
 
-Not built yet. pacs-rs speaks DICOMweb and its REST API today. Next to Quorum it is a **research PACS**
+Steps 1 and 2 are built (`crates/pacs-dimse`, see the README's "DIMSE"); the rest is not yet.
+pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO and C-STORE today. Next to Quorum it is a **research PACS**
 beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies them when the project
 asks for it, and serves Quorum. It does not replace the clinical PACS.
 
@@ -25,9 +26,10 @@ hospital names.
 
 ## Build order
 
-1. **C-ECHO**, SCU and SCP (PS3.7 9.1.5): test the link both ways.
+1. **C-ECHO**, SCU and SCP (PS3.7 9.1.5): test the link both ways. *Done.*
 2. **C-STORE SCP** (PS3.4 Annex B; statuses B.2.3): receives what a C-MOVE sends, and what a workstation
-   pushes. Ingest goes through `pacs-archive` like a REST upload, into staging in research mode.
+   pushes. Ingest goes through `pacs-archive` like a REST upload, into staging in research mode. *Done,
+   without staging: `pacs_dimse::Destination` is where step 5 adds it.*
 3. **C-FIND SCU** (PS3.4 C.4.1.2): Study Root first, then Patient Root; by Patient ID, Accession Number,
    Study Date range and Modality; the pending responses fill a result list as they arrive; C-CANCEL when
    the user stops.
@@ -36,8 +38,8 @@ hospital names.
    the hospital supports it, with SCP/SCU Role Selection for the storage SOP classes (PS3.7 D.3.3.4). When
    the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP.
 5. **De-identification on ingest** (research mode), below.
-6. **TLS** on associations, and the configuration of remote AEs (title, host, port) and pacs-rs's own,
-   following PS3.15 H.1.
+6. **TLS** on associations, following PS3.15 H.1. Remote AEs (title, host, port) and pacs-rs's own are
+   configured already (`PACS_DIMSE_*`).
 7. **Write-back** (clinical mode only): Quorum's masks as DICOM Segmentation and measurements as Structured
    Reports, sent by C-STORE SCU to the hospital's destination. Never in research mode: the de-identified
    UIDs no longer match the hospital's.
