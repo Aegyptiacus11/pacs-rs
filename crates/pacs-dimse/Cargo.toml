@@ -1,0 +1,25 @@
+[package]
+name = "pacs-dimse"
+description = "DIMSE for pacs-rs: C-ECHO and C-STORE over the DICOM Upper Layer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+dicom-dictionary-std.workspace = true
+dicom-object.workspace = true
+dicom-ul.workspace = true
+pacs-archive.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+pacs-core = { workspace = true, features = ["synthetic"] }
+pacs-index.workspace = true
+pacs-store.workspace = true
+dicom-core.workspace = true
+tempfile.workspace = true

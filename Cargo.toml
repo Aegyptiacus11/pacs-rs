@@ -20,6 +20,9 @@ dicom-core = "0.10.0"
 dicom-dictionary-std = "0.10.0"
 dicom-json = "0.10.0"
 dicom-object = "0.10.0"
+# async, so the association tasks share tokio with the HTTP server; async-tls for step 6
+# of docs/interop.md.
+dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
 futures = "0.3.34"
 http-body-util = "0.1.5"
 # jxl-rs, the libjxl project's JPEG XL decoder.
@@ -30,6 +33,7 @@ object_store = { version = "0.14.2", features = ["aws"] }
 pacs-archive = { path = "crates/pacs-archive" }
 pacs-core = { path = "crates/pacs-core" }
 pacs-dicomweb = { path = "crates/pacs-dicomweb" }
+pacs-dimse = { path = "crates/pacs-dimse" }
 pacs-index = { path = "crates/pacs-index" }
 pacs-rest = { path = "crates/pacs-rest" }
 pacs-server = { path = "crates/pacs-server" }
