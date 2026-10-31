@@ -40,11 +40,11 @@ import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { SeriesThumb } from "@/components/series-thumb";
 import { useUpload } from "@/components/upload";
 import { Modalities } from "@/components/modalities";
+import { FilterBox } from "@/components/search-bar";
 import { PAGE_SIZE, Pager } from "@/components/pager";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
-import { setSearch, useSearch } from "@/lib/search";
 import {
   deleteStudies,
   usePatientStudies,
@@ -131,9 +131,8 @@ function rangeDates(range: Range | "custom", span: Span): { from: string | null;
 export function StudiesPage({ patient, open }: { patient: string | null; open: string | null }) {
   const refresh = useRefreshStudies();
   const upload = useUpload();
-  // the top bar's search
-  const typed = useSearch("studies");
-  const [q, setQ] = useState(typed);
+  const [typed, setTyped] = useState("");
+  const [q, setQ] = useState("");
   const [modalities, setModalities] = useState<string[]>([]);
   const [range, setRange] = useState<Range | "custom">("any");
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
@@ -377,6 +376,10 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           </Button>
         </div>
 
+        <div className="px-6 pb-3">
+          <FilterBox value={typed} onChange={setTyped} placeholder="Filter the studies: name, ID, accession, description, referring…" className="w-full" />
+        </div>
+
         {/* the filters, right above what they filter: when, then what and who */}
         <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
           <ToggleGroup
@@ -424,7 +427,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               className="h-8 px-2 text-muted-foreground"
               title="Clear the search and every filter"
               onClick={() => {
-                setSearch("studies", "");
+                setTyped("");
                 setQ("");
                 setModalities([]);
                 setSexes([]);
