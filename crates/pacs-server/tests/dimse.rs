@@ -1,5 +1,6 @@
-//! The DIMSE side as pacs-server runs it: its settings, the `/modalities` routes, and an
-//! instance received by C-STORE showing in the REST API and the web interface's list.
+//! The DIMSE side as pacs-server runs it: its settings, the `/modalities` routes (echo and a
+//! C-FIND search), and an instance received by C-STORE showing in the REST API and the web
+//! interface's list.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -216,4 +217,198 @@ async fn a_c_store_shows_in_the_rest_api_and_the_study_list() {
     );
     let (_, page) = get(&app, "/ui/api/studies").await;
     assert_eq!(page["Total"], 1);
+}
+
+/// A query SCP for `/modalities/{id}/studies`: answers one C-FIND with a Pending response per
+/// Patient ID in `patients`, then Success, or Cancel once a C-CANCEL comes. Returns the port
+/// and the Patient ID the request asked for.
+async fn query_scp(patients: &'static [&'static str]) -> (u16, tokio::task::JoinHandle<String>) {
+    use dicom_core::{DataElement, PrimitiveValue, VR};
+    use dicom_dictionary_std::tags;
+    use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+    use dicom_object::InMemDicomObject;
+    use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+    use dicom_ul::ServerAssociationOptions;
+    use pacs_dimse::query::STUDY_ROOT_FIND;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut association = ServerAssociationOptions::new()
+            .ae_title("QRSCP")
+            .with_abstract_syntax(STUDY_ROOT_FIND)
+            .establish_async(socket)
+            .await
+            .unwrap();
+        let context = association.presentation_contexts()[0].clone();
+        let ts = TransferSyntaxRegistry
+            .get(&context.transfer_syntax)
+            .unwrap();
+        let Incoming::Message(rq) = message::receive(&mut association, 1 << 20).await.unwrap()
+        else {
+            panic!("no C-FIND-RQ");
+        };
+        let pacs_dimse::message::DataSet::Received(bytes) = rq.data else {
+            panic!()
+        };
+        let asked = InMemDicomObject::read_dataset_with_ts(&bytes[..], ts).unwrap();
+        let asked = asked
+            .element(tags::PATIENT_ID)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .trim()
+            .to_owned();
+        let rsp = |status: u16, data: bool| {
+            Command::new()
+                .with_ui(tag::AFFECTED_SOP_CLASS_UID, STUDY_ROOT_FIND)
+                .with_us(tag::COMMAND_FIELD, field::C_FIND_RSP)
+                .with_us(
+                    tag::MESSAGE_ID_BEING_RESPONDED_TO,
+                    rq.command.message_id().unwrap(),
+                )
+                .with_us(
+                    tag::COMMAND_DATA_SET_TYPE,
+                    if data { 0x0102 } else { 0x0101 },
+                )
+                .with_us(tag::STATUS, status)
+        };
+        let mut cancelled = false;
+        for (i, patient) in patients.iter().enumerate() {
+            let mut study = InMemDicomObject::new_empty();
+            study.put(DataElement::new(
+                tags::QUERY_RETRIEVE_LEVEL,
+                VR::CS,
+                PrimitiveValue::from("STUDY"),
+            ));
+            study.put(DataElement::new(
+                tags::PATIENT_ID,
+                VR::LO,
+                PrimitiveValue::from(*patient),
+            ));
+            study.put(DataElement::new(
+                tags::STUDY_INSTANCE_UID,
+                VR::UI,
+                PrimitiveValue::from(format!("2.25.{}", i + 1)),
+            ));
+            let mut out = Vec::new();
+            study.write_dataset_with_ts(&mut out, ts).unwrap();
+            message::send(&mut association, context.id, &rsp(0xFF00, true), Some(&out))
+                .await
+                .unwrap();
+            // a cancel, if one comes, is read before the next match
+            if let Ok(Ok(Incoming::Message(m))) = tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                message::receive(&mut association, 0),
+            )
+            .await
+            {
+                cancelled = m.command.command_field() == Ok(field::C_CANCEL_RQ);
+                break;
+            }
+        }
+        let last = if cancelled { 0xFE00 } else { 0x0000 };
+        message::send(&mut association, context.id, &rsp(last, false), None)
+            .await
+            .unwrap();
+        let _ = message::receive(&mut association, 0).await;
+        asked
+    });
+    (port, task)
+}
+
+/// `GET /modalities/{id}/studies`: the C-FIND's matches as a DICOM JSON array.
+#[tokio::test]
+async fn studies_searches_a_remote_ae_by_c_find() {
+    let (port, scp) = query_scp(&["P1", "P1"]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(dir.path(), &["--dimse-remotes", &remotes]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/modalities/qr/studies?PatientID=P1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "application/dicom+json");
+    assert!(response.headers().get("warning").is_none());
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let studies: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(studies.as_array().unwrap().len(), 2);
+    assert_eq!(studies[1]["0020000D"]["Value"][0], "2.25.2");
+    assert_eq!(scp.await.unwrap(), "P1");
+}
+
+/// Past `limit`, the search is cancelled and a Warning header says more studies match.
+#[tokio::test]
+async fn studies_stops_at_the_limit_with_a_warning() {
+    let (port, _scp) = query_scp(&["P1", "P1", "P1"]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(dir.path(), &["--dimse-remotes", &remotes]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let response = app
+        .oneshot(
+            Request::get("/modalities/qr/studies?PatientID=P1&limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let warning = response.headers()["warning"].to_str().unwrap().to_owned();
+    assert!(
+        warning.starts_with("299 pacs-rs") && warning.contains("limit of 1"),
+        "{warning}"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// 400 for keys that break the matching rules or are not search keys, before any
+/// association; 404 for an unknown id; 502 when the remote AE cannot be reached.
+#[tokio::test]
+async fn studies_refuses_bad_queries_and_reports_unreachable_archives() {
+    let dir = tempfile::tempdir().unwrap();
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let remotes = format!("gone=GONE@127.0.0.1:{}", closed.port());
+    let settings = settings_in(
+        dir.path(),
+        &["--dimse-remotes", &remotes, "--dimse-timeout", "2"],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    for bad in [
+        "StudyDate=2026-01-01",
+        "StudyDate=20260131-20260101",
+        "PatientID=A%5CB",
+        "Modality=CT",
+        "limit=0",
+        "limit=5000",
+    ] {
+        let (status, _) = get(&app, &format!("/modalities/gone/studies?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(
+        get(&app, "/modalities/nobody/studies").await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, body) = get(&app, "/modalities/gone/studies?PatientID=P1").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["Message"], "C-FIND to gone failed");
 }

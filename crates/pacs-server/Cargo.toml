@@ -31,6 +31,11 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+dicom-core.workspace = true
+dicom-dictionary-std.workspace = true
+dicom-encoding.workspace = true
+dicom-object.workspace = true
+dicom-transfer-syntax-registry.workspace = true
 dicom-ul.workspace = true
 http-body-util.workspace = true
 pacs-core = { workspace = true, features = ["synthetic"] }
