@@ -97,6 +97,7 @@ where
         STUDY_ROOT_FIND,
         &[EXPLICIT_VR_LE, IMPLICIT_VR_LE],
         timeout,
+        timeout,
     )
     .await?;
     let ts = TransferSyntaxRegistry

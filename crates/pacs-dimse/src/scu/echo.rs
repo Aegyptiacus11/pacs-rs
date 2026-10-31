@@ -45,7 +45,15 @@ pub async fn echo(
         mut association,
         context,
         ..
-    } = connect(remote, calling, VERIFICATION, &[IMPLICIT_VR_LE], timeout).await?;
+    } = connect(
+        remote,
+        calling,
+        VERIFICATION,
+        &[IMPLICIT_VR_LE],
+        timeout,
+        timeout,
+    )
+    .await?;
     let message_id = 1;
     let exchange = async {
         message::send(

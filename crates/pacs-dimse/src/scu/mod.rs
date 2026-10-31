@@ -1,8 +1,10 @@
 //! pacs-rs as an association requestor: the association every operation opens, here, and
-//! the operations, one module each: [`echo`] (C-ECHO), [`find`] (C-FIND).
+//! the operations, one module each: [`echo`] (C-ECHO), [`find`] (C-FIND), [`retrieve`]
+//! (C-MOVE).
 
 pub mod echo;
 pub mod find;
+pub mod retrieve;
 
 use std::time::Duration;
 
@@ -34,21 +36,22 @@ pub(crate) struct Connected {
 }
 
 /// Associate with `remote` as `calling`, proposing `abstract_syntax` with
-/// `transfer_syntaxes` in one presentation context; `timeout` bounds the connection and
-/// every later wait for a PDU.
+/// `transfer_syntaxes` in one presentation context; `timeout` bounds the connection and each
+/// write, `response_timeout` every later wait for a PDU.
 pub(crate) async fn connect(
     remote: &RemoteAe,
     calling: &AeTitle,
     abstract_syntax: &'static str,
     transfer_syntaxes: &[&str],
     timeout: Duration,
+    response_timeout: Duration,
 ) -> Result<Connected, ConnectError> {
     let association = ClientAssociationOptions::new()
         .calling_ae_title(calling.as_str().to_owned())
         .called_ae_title(remote.ae_title.as_str().to_owned())
         .with_presentation_context(abstract_syntax, transfer_syntaxes.to_vec())
         .connection_timeout(timeout)
-        .read_timeout(timeout)
+        .read_timeout(response_timeout)
         .write_timeout(timeout)
         .establish_async((remote.host.as_str(), remote.port))
         .await

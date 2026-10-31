@@ -1,5 +1,5 @@
 //! DIMSE for pacs-rs, on dicom-ul's associations: C-ECHO as SCP and SCU, C-STORE as SCP,
-//! C-FIND as SCU.
+//! C-FIND and C-MOVE as SCU.
 //!
 //! Behaviour follows DICOM 2026d: messages and statuses from PS3.7 (6.3, 9.1, 9.3, Annexes
 //! C and E), the Verification, Storage and Query/Retrieve Service Classes from PS3.4 (Annexes
@@ -27,6 +27,7 @@ pub use scp::{Destination, Scp};
 pub use scu::ConnectError;
 pub use scu::echo::{EchoError, echo};
 pub use scu::find::{FindError, FindOutcome, find_studies};
+pub use scu::retrieve::{MoveError, MoveOutcome, Progress, move_studies};
 pub use status::{Status, StatusClass};
 
 /// Implicit VR Little Endian, the default transfer syntax every AE accepts (PS3.5 10.1).
@@ -63,6 +64,9 @@ pub struct Config {
     pub max_associations: usize,
     /// The longest wait for the peer: to connect, for its next PDU, for a response.
     pub timeout: Duration,
+    /// The longest wait between two C-MOVE responses: a remote AE may send none while it
+    /// sends a large study.
+    pub move_timeout: Duration,
     /// The largest data set kept; a larger C-STORE is read through and refused.
     pub max_data_set_bytes: usize,
 }
@@ -76,6 +80,7 @@ impl Config {
             known_callers_only: false,
             max_associations: 16,
             timeout: Duration::from_secs(30),
+            move_timeout: Duration::from_secs(600),
             max_data_set_bytes: 1 << 30,
         }
     }

@@ -14,6 +14,7 @@ pub mod field {
     pub const C_FIND_RQ: u16 = 0x0020;
     pub const C_FIND_RSP: u16 = 0x8020;
     pub const C_MOVE_RQ: u16 = 0x0021;
+    pub const C_MOVE_RSP: u16 = 0x8021;
     pub const C_ECHO_RQ: u16 = 0x0030;
     pub const C_ECHO_RSP: u16 = 0x8030;
     pub const C_CANCEL_RQ: u16 = 0x0FFF;
@@ -28,11 +29,16 @@ pub mod tag {
     pub const COMMAND_FIELD: u16 = 0x0100;
     pub const MESSAGE_ID: u16 = 0x0110;
     pub const MESSAGE_ID_BEING_RESPONDED_TO: u16 = 0x0120;
+    pub const MOVE_DESTINATION: u16 = 0x0600;
     pub const PRIORITY: u16 = 0x0700;
     pub const COMMAND_DATA_SET_TYPE: u16 = 0x0800;
     pub const STATUS: u16 = 0x0900;
     pub const ERROR_COMMENT: u16 = 0x0902;
     pub const AFFECTED_SOP_INSTANCE_UID: u16 = 0x1000;
+    pub const NUMBER_OF_REMAINING_SUB_OPERATIONS: u16 = 0x1020;
+    pub const NUMBER_OF_COMPLETED_SUB_OPERATIONS: u16 = 0x1021;
+    pub const NUMBER_OF_FAILED_SUB_OPERATIONS: u16 = 0x1022;
+    pub const NUMBER_OF_WARNING_SUB_OPERATIONS: u16 = 0x1023;
     pub const MOVE_ORIGINATOR_AE_TITLE: u16 = 0x1030;
     pub const MOVE_ORIGINATOR_MESSAGE_ID: u16 = 0x1031;
 }

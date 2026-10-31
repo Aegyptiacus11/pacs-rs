@@ -24,6 +24,10 @@ impl Status {
     pub const SUCCESS: Status = Status(0x0000);
     /// Cancel: matching terminated due to a cancel request (PS3.4 Table C.4-1).
     pub const CANCEL: Status = Status(0xFE00);
+    /// Warning: C-MOVE sub-operations complete, one or more failed or warned (Table C.4-2).
+    pub const SUB_OPERATIONS_WARNING: Status = Status(0xB000);
+    /// Refused: Move Destination unknown (PS3.4 Table C.4-2).
+    pub const MOVE_DESTINATION_UNKNOWN: Status = Status(0xA801);
     /// Pending: a match, every Optional Key supported (PS3.4 Table C.4-1).
     pub const PENDING: Status = Status(0xFF00);
     /// Pending: a match, but one or more Optional Keys were not supported (Table C.4-1).
