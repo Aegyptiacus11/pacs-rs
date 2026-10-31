@@ -109,8 +109,9 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a bar along the top: the name, Studies and Patients, the search, light or dark,
-  and a warning when the server doesn't answer; the page under it.
+- **Layout**: a rail down the left side to go places (Studies, Patients), a bar along the top
+  for the tools (the search, light or dark, a warning when the server doesn't answer), the page
+  in between.
 - **Studies**: a worklist and, beside it, the chosen study. Over the table, under the search: date presets with counts
   (today, 7 days, 30 days, 1 year) and a range of one's own (shortcuts such as last week or last year, two
   months to click the first and last day on, with the days that have studies dotted, or both
