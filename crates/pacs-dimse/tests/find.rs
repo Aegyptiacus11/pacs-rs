@@ -2,18 +2,18 @@
 //! responses, the final statuses of PS3.4 Table C.4-1, C-CANCEL handling (C.4.1.2.1), and
 //! responses PS3.7 9.1.2 does not allow.
 
+mod common;
+
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use common::scripted::{Act, Seen, ended, response};
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
-use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::InMemDicomObject;
-use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use dicom_ul::ServerAssociationOptions;
-use pacs_dimse::command::{Command, NO_DATA_SET, field, tag};
-use pacs_dimse::message::{self, DataSet, Incoming};
+use pacs_dimse::command::{field, tag};
 use pacs_dimse::query::STUDY_ROOT_FIND;
 use pacs_dimse::{AeTitle, FindError, RemoteAe, Status, StudyQuery, find_studies};
 
@@ -21,7 +21,6 @@ const EXPLICIT: &str = "1.2.840.10008.1.2.1";
 const IMPLICIT: &str = "1.2.840.10008.1.2";
 
 /// One thing the scripted SCP does after the C-FIND-RQ.
-#[derive(Clone)]
 enum Step {
     /// A C-FIND-RSP with this status and, for Pending, this Identifier.
     Respond(u16, Option<InMemDicomObject>),
@@ -33,17 +32,6 @@ enum Step {
     WrongMessageId,
     /// Say nothing more.
     Silence,
-}
-
-/// What the SCP saw.
-#[derive(Default)]
-struct Seen {
-    request: Option<Command>,
-    identifier: Option<InMemDicomObject>,
-    transfer_syntax: String,
-    cancel: Option<Command>,
-    /// How the association ended: "release" or "abort".
-    end: Option<&'static str>,
 }
 
 fn study(uid: &str, patient_id: &str) -> InMemDicomObject {
@@ -66,101 +54,27 @@ fn study(uid: &str, patient_id: &str) -> InMemDicomObject {
     o
 }
 
-/// Start the scripted SCP on a free port, accepting `transfer_syntaxes` for Study Root FIND.
+/// Start the scripted SCP, accepting `transfer_syntaxes` for Study Root FIND.
 async fn scripted(
     script: Vec<Step>,
     transfer_syntaxes: &'static [&'static str],
 ) -> (RemoteAe, Arc<Mutex<Seen>>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let seen = Arc::new(Mutex::new(Seen::default()));
-    let record = seen.clone();
-    tokio::spawn(async move {
-        let (socket, _) = listener.accept().await.unwrap();
-        let mut options = ServerAssociationOptions::new()
-            .ae_title("QRSCP")
-            .with_abstract_syntax(STUDY_ROOT_FIND)
-            .read_timeout(Duration::from_secs(5));
-        for ts in transfer_syntaxes {
-            options = options.with_transfer_syntax(*ts);
-        }
-        let mut association = options.establish_async(socket).await.unwrap();
-        let context = &association.presentation_contexts()[0];
-        let (context_id, ts_uid) = (context.id, context.transfer_syntax.clone());
-        let ts = TransferSyntaxRegistry.get(&ts_uid).unwrap();
-        let Incoming::Message(rq) = message::receive(&mut association, 1 << 20).await.unwrap()
-        else {
-            panic!("no C-FIND-RQ");
-        };
-        let DataSet::Received(bytes) = rq.data else {
-            panic!("no Identifier")
-        };
-        let message_id = rq.command.message_id().unwrap();
-        {
-            let mut seen = record.lock().unwrap();
-            seen.identifier = Some(InMemDicomObject::read_dataset_with_ts(&bytes[..], ts).unwrap());
-            seen.request = Some(rq.command);
-            seen.transfer_syntax = ts_uid.clone();
-        }
-        let rsp = |status: u16, id: u16| {
-            Command::new()
-                .with_ui(tag::AFFECTED_SOP_CLASS_UID, STUDY_ROOT_FIND)
-                .with_us(tag::COMMAND_FIELD, field::C_FIND_RSP)
-                .with_us(tag::MESSAGE_ID_BEING_RESPONDED_TO, id)
-                .with_us(tag::STATUS, status)
-        };
-        for step in script {
-            match step {
-                Step::Respond(status, identifier) => {
-                    let data = identifier.map(|i| {
-                        let mut out = Vec::new();
-                        i.write_dataset_with_ts(&mut out, ts).unwrap();
-                        out
-                    });
-                    let command = rsp(status, message_id).with_us(
-                        tag::COMMAND_DATA_SET_TYPE,
-                        if data.is_some() { 0x0102 } else { NO_DATA_SET },
-                    );
-                    message::send(&mut association, context_id, &command, data.as_deref())
-                        .await
-                        .unwrap();
-                }
+    common::scripted::serve("QRSCP", STUDY_ROOT_FIND, transfer_syntaxes, move |id| {
+        let rsp = |status, id| response(STUDY_ROOT_FIND, field::C_FIND_RSP, id, status);
+        script
+            .into_iter()
+            .map(|step| match step {
+                Step::Respond(status, identifier) => Act::Send(rsp(status, id), identifier),
                 Step::Fail(status, comment) => {
-                    let command = rsp(status, message_id)
-                        .with_us(tag::COMMAND_DATA_SET_TYPE, NO_DATA_SET)
-                        .with_text(tag::ERROR_COMMENT, comment);
-                    message::send(&mut association, context_id, &command, None)
-                        .await
-                        .unwrap();
+                    Act::Send(rsp(status, id).with_text(tag::ERROR_COMMENT, comment), None)
                 }
-                Step::ExpectCancel => {
-                    let Incoming::Message(m) = message::receive(&mut association, 0).await.unwrap()
-                    else {
-                        panic!("no C-CANCEL")
-                    };
-                    record.lock().unwrap().cancel = Some(m.command);
-                }
-                Step::WrongMessageId => {
-                    let command = rsp(0x0000, message_id + 1)
-                        .with_us(tag::COMMAND_DATA_SET_TYPE, NO_DATA_SET);
-                    message::send(&mut association, context_id, &command, None)
-                        .await
-                        .unwrap();
-                }
-                Step::Silence => {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    return;
-                }
-            }
-        }
-        let end = match message::receive(&mut association, 0).await {
-            Ok(Incoming::Released) => "release",
-            _ => "abort",
-        };
-        record.lock().unwrap().end = Some(end);
-    });
-    let remote = format!("qr=QRSCP@127.0.0.1:{port}").parse().unwrap();
-    (remote, seen)
+                Step::ExpectCancel => Act::ExpectCancel,
+                Step::WrongMessageId => Act::Send(rsp(0x0000, id + 1), None),
+                Step::Silence => Act::Silence,
+            })
+            .collect()
+    })
+    .await
 }
 
 async fn find(
@@ -189,17 +103,6 @@ async fn find(
     )
     .await;
     (result, found)
-}
-
-/// Wait for the scripted SCP to record how the association ended.
-async fn ended(seen: &Arc<Mutex<Seen>>) -> Option<&'static str> {
-    for _ in 0..50 {
-        if let Some(end) = seen.lock().unwrap().end {
-            return Some(end);
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    None
 }
 
 fn by_patient(id: &str) -> StudyQuery {

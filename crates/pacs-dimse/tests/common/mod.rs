@@ -2,6 +2,8 @@
 //! sends whatever command it is given.
 #![allow(dead_code)]
 
+pub mod scripted;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
