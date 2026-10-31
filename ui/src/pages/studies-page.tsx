@@ -617,6 +617,8 @@ function TypedDate({ label, value, onChange }: { label: string; value: string; o
         const v = readDate(e.target.value);
         if (v || !e.target.value.trim()) onChange(v);
       }}
+      // a whole date, once left, is written like the others
+      onBlur={() => readDate(text) && setText(writeDate(readDate(text)))}
       className="tabular h-8 text-sm"
     />
   );
