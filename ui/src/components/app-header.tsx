@@ -1,13 +1,12 @@
-// The rail down the left side: the name, the studies, search (⌘K) and upload; at the bottom
+// The rail down the left side: the name, the studies, the patients and upload; at the bottom
 // light or dark, and a warning when the server doesn't answer. Icons over their names, like
 // the viewer's toolbar.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Moon, Search, Sun, Upload, WifiOff } from "lucide-react";
+import { FileStack, Moon, Sun, Upload, Users, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
-import { CommandMenu } from "@/components/command-menu";
 import { useUpload } from "@/components/upload";
 import { ROOT } from "@/lib/api";
 import { href, type Route } from "@/lib/route";
@@ -33,7 +32,7 @@ function RailItem({ label, tip, shortcut, Icon, active, href: to, onClick, class
   label: string;
   tip?: string;
   shortcut?: string;
-  Icon: typeof Search;
+  Icon: typeof Users;
   active?: boolean;
   href?: string;
   onClick?: () => void;
@@ -97,12 +96,15 @@ function ThemeToggle() {
 
 export function AppRail({ route }: { route: Route }) {
   const upload = useUpload();
-  const [search, setSearch] = useState(false);
+  // Ctrl K (⌘K) or /: the page's search box
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || (e.key === "/" && !(e.target as HTMLElement).closest("input, textarea, [contenteditable]"))) {
+        const box = document.querySelector<HTMLInputElement>("[data-search]");
+        if (!box) return;
         e.preventDefault();
-        setSearch((s) => !s);
+        box.focus();
+        box.select();
       }
     };
     addEventListener("keydown", key);
@@ -114,13 +116,12 @@ export function AppRail({ route }: { route: Route }) {
         <Logo className="size-6" />
       </a>
       <RailItem label="Studies" Icon={FileStack} href={href.studies()} active={route.page === "studies"} />
-      <RailItem label="Search" tip="Search patients, studies and actions" shortcut="⌘K" Icon={Search} onClick={() => setSearch(true)} />
+      <RailItem label="Patients" Icon={Users} href={href.patients()} active={route.page === "patients"} />
       <RailItem label="Upload" tip="Upload DICOM files or folders" Icon={Upload} onClick={upload.open} />
       <div className="mt-auto flex flex-col items-center gap-1">
         <ServerStatus />
         <ThemeToggle />
       </div>
-      <CommandMenu open={search} onOpenChange={setSearch} />
     </nav>
   );
 }

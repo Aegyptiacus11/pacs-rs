@@ -38,6 +38,9 @@ import { FacetedFilter } from "@/components/faceted-filter";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { SeriesThumb } from "@/components/series-thumb";
 import { useUpload } from "@/components/upload";
+import { Modalities } from "@/components/modalities";
+import { SearchBar } from "@/components/search-bar";
+import { PAGE_KEY, Pager, savedPageSize } from "@/components/pager";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
@@ -79,17 +82,6 @@ function spanLabel({ from, to }: Span) {
 }
 const RANGE_NAMES: Record<Range, string> = { any: "All time", today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", "1y": "Last 12 months" };
 
-// rows per page, kept in this browser
-const PAGE_SIZES = [25, 50, 100, 200];
-const PAGE_KEY = "pacs-rs-page-size";
-function savedPageSize() {
-  try {
-    const n = Number(localStorage.getItem(PAGE_KEY));
-    return PAGE_SIZES.includes(n) ? n : 50;
-  } catch {
-    return 50;
-  }
-}
 const SEXES: Record<string, string> = { F: "Female", M: "Male", O: "Other" };
 
 function sinceFor(range: Range) {
@@ -109,18 +101,6 @@ function openStudy(id: string, seriesId?: string) {
 function copy(text: string, what: string) {
   navigator.clipboard?.writeText(text);
   toast(`${what} copied`);
-}
-
-function Modalities({ list, className }: { list: string[]; className?: string }) {
-  return (
-    <div className={cn("flex flex-wrap gap-1", className)}>
-      {list.map((m) => (
-        <Badge key={m} variant="outline" className="h-5 rounded px-1.5 font-mono text-[11px] font-medium text-muted-foreground">
-          {m}
-        </Badge>
-      ))}
-    </div>
-  );
 }
 
 function SortHeader({ column, children, className }: { column: any; children: ReactNode; className?: string }) {
@@ -408,10 +388,13 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         </div>
 
         <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
-          <div className="relative w-full sm:w-72">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Name, ID, accession, description…" className="h-8 bg-card pl-8" />
-          </div>
+          <SearchBar
+            value={typed}
+            onChange={setTyped}
+            placeholder="Search patients and studies: name, ID, accession, description…"
+            onPatient={(p) => go(href.patients(p.id))}
+            className="w-full sm:w-[26rem]"
+          />
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
           <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
           {owner && (
@@ -969,75 +952,6 @@ function ArchiveSummary({ summary, scope, total, onPick }: { summary: StudySumma
         <MousePointerClick className="size-4" strokeWidth={1.75} />
         Choose a study to see its series and details.
       </div>
-    </div>
-  );
-}
-
-// the pages: where we are, rows per page, first, previous, numbered pages around this one, next, last
-function Pager({ total, pageIndex, pageSize, loading, onPage, onPageSize }: { total: number; pageIndex: number; pageSize: number; loading: boolean; onPage: (i: number) => void; onPageSize: (n: number) => void }) {
-  const pages = Math.max(1, Math.ceil(total / pageSize));
-  const near = [...new Set([0, pageIndex - 1, pageIndex, pageIndex + 1, pages - 1])].filter((i) => i >= 0 && i < pages).sort((a, b) => a - b);
-  const items: (number | "gap")[] = [];
-  for (const i of near) {
-    const last = items[items.length - 1];
-    if (typeof last === "number" && i - last > 1) items.push(i - last === 2 ? last + 1 : "gap");
-    items.push(i);
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t bg-background px-6 py-2 text-sm text-muted-foreground">
-      <span className="tabular inline-flex items-center gap-2">
-        {(pageIndex * pageSize + 1).toLocaleString()}–{Math.min(total, (pageIndex + 1) * pageSize).toLocaleString()} of {total.toLocaleString()}
-        {loading && <Loader2 className="size-3.5 animate-spin" aria-label="Loading the page" />}
-      </span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 font-normal text-muted-foreground">
-            <span className="tabular">{pageSize}</span> per page <ChevronDown className="size-3.5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-36">
-          <DropdownMenuRadioGroup value={String(pageSize)} onValueChange={(v) => onPageSize(Number(v))}>
-            {PAGE_SIZES.map((n) => (
-              <DropdownMenuRadioItem key={n} value={String(n)}>
-                {n} per page
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {pages > 1 && (
-        <nav aria-label="Pages" className="ml-auto flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" aria-label="First page" disabled={pageIndex === 0} onClick={() => onPage(0)}>
-            <ChevronsLeft />
-          </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Previous page" disabled={pageIndex === 0} onClick={() => onPage(pageIndex - 1)}>
-            <ChevronLeft />
-          </Button>
-          {items.map((i, k) =>
-            i === "gap" ? (
-              <span key={`gap${k}`} className="w-7 text-center">…</span>
-            ) : (
-              <Button
-                key={i}
-                variant="ghost"
-                size="sm"
-                aria-label={`Page ${i + 1}`}
-                aria-current={i === pageIndex ? "page" : undefined}
-                className={cn("tabular h-8 min-w-8 px-2 font-normal", i === pageIndex && "bg-selection-soft font-medium text-selection hover:bg-selection-soft hover:text-selection")}
-                onClick={() => onPage(i)}
-              >
-                {i + 1}
-              </Button>
-            ),
-          )}
-          <Button variant="ghost" size="icon-sm" aria-label="Next page" disabled={pageIndex >= pages - 1} onClick={() => onPage(pageIndex + 1)}>
-            <ChevronRight />
-          </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Last page" disabled={pageIndex >= pages - 1} onClick={() => onPage(pages - 1)}>
-            <ChevronsRight />
-          </Button>
-        </nav>
-      )}
     </div>
   );
 }
