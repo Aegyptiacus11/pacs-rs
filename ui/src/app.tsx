@@ -1,8 +1,8 @@
-// The pages: the lists under the top bar, or the viewer on its own.
+// The pages: the lists framed by the rail and the top bar, or the viewer on its own.
 
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
-import { AppHeader } from "@/components/app-header";
+import { AppHeader, AppRail } from "@/components/app-header";
 import { useRoute } from "@/lib/route";
 import { PatientsPage } from "@/pages/patients-page";
 import { StudiesPage } from "@/pages/studies-page";
@@ -25,11 +25,14 @@ export function App() {
       </Suspense>
     );
   return (
-    <div className="flex h-dvh flex-col">
-      <AppHeader route={route} />
-      <main className="min-h-0 flex-1 overflow-hidden">
-        {route.page === "patients" ? <PatientsPage open={route.open} /> : <StudiesPage patient={route.patient} open={route.open} />}
-      </main>
+    <div className="flex h-dvh">
+      <AppRail route={route} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <AppHeader route={route} />
+        <main className="min-h-0 flex-1 overflow-hidden">
+          {route.page === "patients" ? <PatientsPage open={route.open} /> : <StudiesPage patient={route.patient} open={route.open} />}
+        </main>
+      </div>
     </div>
   );
 }

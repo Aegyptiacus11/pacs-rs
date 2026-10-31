@@ -1,7 +1,8 @@
-// The bar along the top: the name, the two lists, the search (Ctrl K, ⌘K on a Mac, or /) of
-// the list shown, light or dark, and a warning when the server doesn't answer.
+// The frame around the pages. Down the left, the rail: the name and the two lists, icons over
+// their names like the viewer's toolbar. Along the top, the bar: the search (Ctrl K, ⌘K on a
+// Mac, or /) of the list shown, light or dark, and a warning when the server doesn't answer.
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileStack, Moon, Sun, Users, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -61,21 +62,39 @@ function ThemeToggle() {
   );
 }
 
-function Tab({ to, active, Icon, children }: { to: string; active: boolean; Icon: typeof Users; children: string }) {
+function RailItem({ label, Icon, active, to }: { label: string; Icon: typeof Users; active: boolean; to: string }) {
+  const body: ReactNode = (
+    <>
+      <Icon className="size-5" strokeWidth={1.6} />
+      <span className="text-[10.5px] leading-none">{label}</span>
+    </>
+  );
   return (
     <a
       href={to}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex h-14 items-center gap-2 px-3 text-sm transition-colors",
-        active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+        "flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection",
       )}
     >
-      <Icon className="size-4" strokeWidth={1.75} />
-      {children}
-      {/* the page shown: a line along the bar's bottom edge */}
-      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground" />}
+      {body}
     </a>
+  );
+}
+
+export function AppRail({ route }: { route: Route }) {
+  return (
+    <nav aria-label="pacs-rs" className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r bg-card pb-3">
+      {/* as tall as the top bar, its line carried across */}
+      <div className="mb-2 grid h-14 w-full shrink-0 place-items-center border-b">
+        <a href={href.studies()} aria-label="pacs-rs: the studies" className="grid size-10 place-items-center rounded-lg hover:bg-accent">
+          <Logo className="size-6" />
+        </a>
+      </div>
+      <RailItem label="Studies" Icon={FileStack} to={href.studies()} active={route.page === "studies"} />
+      <RailItem label="Patients" Icon={Users} to={href.patients()} active={route.page === "patients"} />
+    </nav>
   );
 }
 
@@ -97,19 +116,8 @@ export function AppHeader({ route }: { route: Route }) {
     return () => removeEventListener("keydown", key);
   }, []);
   return (
-    <header className="flex h-14 shrink-0 items-center gap-6 border-b bg-card px-5">
-      <a href={href.studies()} className="flex items-center gap-2 font-semibold tracking-tight">
-        <Logo className="size-6" />
-        pacs-rs
-      </a>
-      <nav aria-label="Lists" className="-mb-px flex self-stretch">
-        <Tab to={href.studies()} active={page === "studies"} Icon={FileStack}>
-          Studies
-        </Tab>
-        <Tab to={href.patients()} active={page === "patients"} Icon={Users}>
-          Patients
-        </Tab>
-      </nav>
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-card px-5">
+      <span className="w-24 shrink-0 font-semibold tracking-tight">pacs-rs</span>
       <SearchBar
         key={page}
         value={text}
@@ -119,7 +127,7 @@ export function AppHeader({ route }: { route: Route }) {
         onPatient={(p) => go(href.patients(p.id))}
         className="mx-auto w-full max-w-xl"
       />
-      <div className="flex items-center gap-2">
+      <div className="flex w-24 shrink-0 items-center justify-end gap-2">
         <ServerStatus />
         <ThemeToggle />
       </div>
