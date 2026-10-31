@@ -1,7 +1,8 @@
 // A filter chip: a dashed "+ Title" button opening a searchable checklist, each option with
-// how many rows have it, the picked ones shown on the chip. `single` makes it pick one.
+// how many rows have it, the picked ones shown on the chip, each with an × that takes it off
+// (or one × for all, when they are many). `single` makes it pick one.
 
-import { Check, PlusCircle } from "lucide-react";
+import { Check, PlusCircle, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
@@ -10,6 +11,26 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 export type FacetOption = { value: string; label: string; hint?: string; count?: number };
+
+// an × inside the chip: takes off what it sits on, without opening the list
+function Remove({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span
+      role="button"
+      tabIndex={-1}
+      aria-label={label}
+      className="-mr-0.5 ml-0.5 grid size-4 place-items-center rounded-sm text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        onRemove();
+      }}
+    >
+      <X className="size-3" />
+    </span>
+  );
+}
 
 export function FacetedFilter({
   title,
@@ -36,22 +57,24 @@ export function FacetedFilter({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 border-dashed bg-card">
+        <Button variant="outline" size="sm" className={cn("h-8 bg-card", picked.size === 0 && "border-dashed")}>
           <PlusCircle />
           {title}
           {picked.size > 0 && (
             <>
               <Separator orientation="vertical" className="mx-1 h-4" />
               {picked.size > 2 ? (
-                <Badge variant="secondary" className="rounded-sm px-1 font-normal">
-                  {picked.size} selected
+                <Badge variant="secondary" className="gap-0 rounded-sm px-1 font-normal">
+                  {picked.size} chosen
+                  <Remove label={`Clear ${title.toLowerCase()}`} onRemove={() => onChange([])} />
                 </Badge>
               ) : (
                 options
                   .filter((o) => picked.has(o.value))
                   .map((o) => (
-                    <Badge key={o.value} variant="secondary" className="rounded-sm px-1 font-normal">
+                    <Badge key={o.value} variant="secondary" className="gap-0 rounded-sm px-1 font-normal">
                       {o.label}
+                      <Remove label={`Remove ${o.label}`} onRemove={() => toggle(o.value)} />
                     </Badge>
                   ))
               )}
