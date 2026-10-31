@@ -1,4 +1,5 @@
-//! DIMSE for pacs-rs, on dicom-ul's associations: C-ECHO as SCP and SCU, C-STORE as SCP.
+//! DIMSE for pacs-rs, on dicom-ul's associations: C-ECHO as SCP and SCU, C-STORE as SCP,
+//! C-FIND as SCU.
 //!
 //! Behaviour follows DICOM 2026d: messages and statuses from PS3.7 (6.3, 9.1, 9.3, Annexes
 //! C and E), the Verification and Storage Service Classes from PS3.4 (Annexes A and B), the
@@ -9,6 +10,7 @@ use std::time::Duration;
 
 pub mod ae;
 pub mod command;
+pub mod find;
 pub mod message;
 pub mod query;
 pub mod scp;
@@ -17,6 +19,7 @@ pub mod sop_classes;
 pub mod status;
 
 pub use ae::{AeError, AeTitle, RemoteAe};
+pub use find::{FindError, FindOutcome, find_studies};
 pub use query::{DateRange, QueryError, StudyQuery};
 pub use scp::{Destination, Scp};
 pub use scu::{ConnectError, EchoError, echo};

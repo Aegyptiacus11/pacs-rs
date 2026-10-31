@@ -1,10 +1,13 @@
 //! Study queries: the matching rules of PS3.4 C.2.2.2, the Request Identifier of C.4.1.1.3.1
-//! and Table C.6-5, and the SCU's own filtering (C.4.1.2.1).
+//! and Table C.6-5, the SCU's own filtering (C.4.1.2.1), and the C-FIND-RQ and
+//! C-CANCEL-FIND-RQ of PS3.7 Tables 9.3-3 and 9.3-5.
 
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::InMemDicomObject;
-use pacs_dimse::query::wildcard_match;
+use pacs_dimse::command::{NO_DATA_SET, field, tag};
+use pacs_dimse::find::{c_cancel_rq, c_find_rq};
+use pacs_dimse::query::{STUDY_ROOT_FIND, wildcard_match};
 use pacs_dimse::{DateRange, StudyQuery};
 
 fn text(object: &InMemDicomObject, tag: dicom_core::Tag) -> Option<String> {
@@ -241,4 +244,26 @@ fn the_scu_filters_what_comes_back() {
         q.accepts(&InMemDicomObject::new_empty()),
         "absent ones neither"
     );
+}
+
+/// PS3.7 Table 9.3-3: Affected SOP Class UID, Command Field 0020H, Message ID, Priority
+/// (MEDIUM, 0000H) and a Command Data Set Type other than 0101H.
+#[test]
+fn the_c_find_rq() {
+    let rq = c_find_rq(9);
+    assert_eq!(rq.ui(tag::AFFECTED_SOP_CLASS_UID), Ok(STUDY_ROOT_FIND));
+    assert_eq!(rq.command_field(), Ok(field::C_FIND_RQ));
+    assert_eq!(rq.message_id(), Ok(9));
+    assert_eq!(rq.us(tag::PRIORITY), Ok(0x0000));
+    assert_eq!(rq.has_data_set(), Ok(true));
+}
+
+/// PS3.7 Table 9.3-5: Command Field 0FFFH, Message ID Being Responded To, no data set.
+#[test]
+fn the_c_cancel_find_rq() {
+    let rq = c_cancel_rq(9);
+    assert_eq!(rq.command_field(), Ok(field::C_CANCEL_RQ));
+    assert_eq!(rq.us(tag::MESSAGE_ID_BEING_RESPONDED_TO), Ok(9));
+    assert_eq!(rq.us(tag::COMMAND_DATA_SET_TYPE), Ok(NO_DATA_SET));
+    assert!(rq.get(tag::MESSAGE_ID).is_none() && rq.get(tag::AFFECTED_SOP_CLASS_UID).is_none());
 }

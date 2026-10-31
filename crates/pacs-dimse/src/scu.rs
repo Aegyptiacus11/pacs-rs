@@ -1,5 +1,5 @@
 //! pacs-rs as an association requestor: the association, and C-ECHO (PS3.7 9.1.5, 9.3.5),
-//! proof that a remote AE accepts pacs-rs and answers. C-FIND comes next.
+//! proof that a remote AE accepts pacs-rs and answers. C-FIND is in [`crate::find`].
 
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,7 @@ pub enum ConnectError {
 pub(crate) struct Connected {
     pub association: AsyncClientAssociation<TcpStream>,
     pub context: u8,
+    pub transfer_syntax: String,
 }
 
 /// Associate with `remote` as `calling`, proposing `abstract_syntax` with
@@ -58,11 +59,11 @@ pub(crate) async fn connect(
             port: remote.port,
             source: Box::new(source),
         })?;
-    let Some(context) = association
+    let Some((context, transfer_syntax)) = association
         .presentation_contexts()
         .iter()
         .find(|pc| pc.reason == PresentationContextResultReason::Acceptance)
-        .map(|pc| pc.id)
+        .map(|pc| (pc.id, pc.transfer_syntax.trim_end_matches('\0').to_owned()))
     else {
         let _ = association.abort().await;
         return Err(ConnectError::NotAccepted(abstract_syntax));
@@ -70,6 +71,7 @@ pub(crate) async fn connect(
     Ok(Connected {
         association,
         context,
+        transfer_syntax,
     })
 }
 

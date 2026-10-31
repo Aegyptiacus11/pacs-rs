@@ -12,6 +12,7 @@ pub mod field {
     pub const C_STORE_RSP: u16 = 0x8001;
     pub const C_GET_RQ: u16 = 0x0010;
     pub const C_FIND_RQ: u16 = 0x0020;
+    pub const C_FIND_RSP: u16 = 0x8020;
     pub const C_MOVE_RQ: u16 = 0x0021;
     pub const C_ECHO_RQ: u16 = 0x0030;
     pub const C_ECHO_RSP: u16 = 0x8030;

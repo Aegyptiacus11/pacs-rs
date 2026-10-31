@@ -22,6 +22,12 @@ pub enum StatusClass {
 impl Status {
     /// Success (PS3.7 C.1.1).
     pub const SUCCESS: Status = Status(0x0000);
+    /// Cancel: matching terminated due to a cancel request (PS3.4 Table C.4-1).
+    pub const CANCEL: Status = Status(0xFE00);
+    /// Pending: a match, every Optional Key supported (PS3.4 Table C.4-1).
+    pub const PENDING: Status = Status(0xFF00);
+    /// Pending: a match, but one or more Optional Keys were not supported (Table C.4-1).
+    pub const PENDING_OPTIONAL_KEYS: Status = Status(0xFF01);
 
     // General codes, PS3.7 C.5 and the C-STORE (9.1.1.1.9) and C-ECHO (9.1.5.1.4) lists.
     /// Refused: SOP Class not supported.
