@@ -1,7 +1,9 @@
 //! The Command Set encoding (PS3.7 6.3.1, Annex E), status classes (PS3.7 Annex C), AE
-//! titles (PS3.5 Table 6.2-1).
+//! titles (PS3.5 Table 6.2-1) and the file meta information of received instances
+//! (PS3.10 7.1).
 
 use pacs_dimse::command::{self, Command, CommandError, NO_DATA_SET, field, tag};
+use pacs_dimse::scp::part10;
 use pacs_dimse::{AeError, AeTitle, RemoteAe, Status, StatusClass, VERIFICATION};
 
 /// PS3.7 6.3.1: Implicit VR Little Endian, Command Group Length first, tags increasing.
@@ -198,4 +200,38 @@ fn remote_aes_are_read_from_id_title_host_port() {
     assert!("HOSP@host:104".parse::<RemoteAe>().is_err());
     assert!("h=HOSP@host:0".parse::<RemoteAe>().is_err());
     assert!("h=HOSP@host".parse::<RemoteAe>().is_err());
+}
+
+/// PS3.10 7.1: preamble, "DICM", group 0002 in Explicit VR Little Endian with its length,
+/// Media Storage SOP Class and Instance UIDs from the request, the negotiated transfer
+/// syntax, and the data set unchanged after it.
+#[test]
+fn a_received_data_set_becomes_a_part_10_file() {
+    let series = pacs_core::synthetic::SyntheticSeries::new(3, 1);
+    let original = series.slice_bytes(0);
+    let meta_length = u32::from_le_bytes(original[140..144].try_into().unwrap()) as usize;
+    let data_set = &original[144 + meta_length..];
+    let file = part10(
+        data_set,
+        "1.2.840.10008.5.1.4.1.1.2",
+        &series.instance_uid(0),
+        "1.2.840.10008.1.2.1",
+        "STORESCU",
+        "PACSRS",
+    );
+    assert!(file[..128].iter().all(|b| *b == 0));
+    assert!(file.ends_with(data_set));
+    let instance = pacs_core::Instance::from_bytes(&file).unwrap();
+    assert_eq!(instance.key.sop_instance_uid, series.instance_uid(0));
+    assert_eq!(instance.key.transfer_syntax_uid, "1.2.840.10008.1.2.1");
+    let meta = instance.object.meta();
+    assert_eq!(
+        meta.media_storage_sop_class_uid(),
+        "1.2.840.10008.5.1.4.1.1.2"
+    );
+    assert_eq!(
+        meta.implementation_class_uid(),
+        pacs_dimse::IMPLEMENTATION_CLASS_UID
+    );
+    assert_eq!(meta.information_version, [0, 1]);
 }
