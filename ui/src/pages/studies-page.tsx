@@ -576,6 +576,52 @@ function spanName(span: Span) {
   return shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] ?? spanLabel(span);
 }
 
+// dates typed the way this browser's language writes them (day, month, year in its order)
+const DATE_ORDER = new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "2-digit", year: "numeric" })
+  .formatToParts(new Date(2001, 10, 22))
+  .map((p) => p.type)
+  .filter((t): t is "day" | "month" | "year" => t === "day" || t === "month" || t === "year");
+const DATE_HINT = DATE_ORDER.map((t) => ({ day: "dd", month: "mm", year: "yyyy" })[t]).join("/");
+function writeDate(isoDate: string) {
+  const [y, m, d] = isoDate.split("-");
+  return isoDate ? DATE_ORDER.map((t) => ({ day: d, month: m, year: y })[t]).join("/") : "";
+}
+/** An ISO date from what was typed: in this browser's order, or year first; "" when it is none. */
+function readDate(text: string) {
+  const parts = text.trim().split(/\D+/).filter(Boolean);
+  if (parts.length !== 3) return "";
+  const at = (t: "day" | "month" | "year") => parts[DATE_ORDER.indexOf(t)];
+  const [y, m, d] = parts[0].length === 4 ? parts : [at("year"), at("month"), at("day")];
+  const date = new Date(Number(y), Number(m) - 1, Number(d));
+  if (y.length !== 4 || date.getFullYear() !== Number(y) || date.getMonth() !== Number(m) - 1 || date.getDate() !== Number(d) || date > new Date()) return "";
+  return iso(date);
+}
+
+// one end of the range, typed: taken as soon as it is a whole date, red while it is not one
+function TypedDate({ label, value, onChange }: { label: string; value: string; onChange: (isoDate: string) => void }) {
+  const [text, setText] = useState(writeDate(value));
+  useEffect(() => {
+    // a day clicked on the calendar shows here
+    if (readDate(text) !== value) setText(writeDate(value));
+  }, [value]);
+  const wrong = !!text.trim() && !readDate(text);
+  return (
+    <Input
+      aria-label={label}
+      aria-invalid={wrong || undefined}
+      inputMode="numeric"
+      placeholder={DATE_HINT}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = readDate(e.target.value);
+        if (v || !e.target.value.trim()) onChange(v);
+      }}
+      className="tabular h-8 text-sm"
+    />
+  );
+}
+
 function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates: string[]; count: (s: Span) => number; total: number; onApply: (s: Span) => void }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(span);
@@ -681,17 +727,13 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
                         className="px-3 pt-1 pb-3"
                       />
                       <div className="border-t px-3 py-3">
-                        <Input
-                          type="date"
-                          aria-label={end === "from" ? "From" : "To"}
-                          max={iso(today)}
+                        <TypedDate
+                          label={end === "from" ? "From" : "To"}
                           value={draft[end]}
-                          onChange={(e) => {
-                            const v = e.target.value;
+                          onChange={(v) => {
                             setDraft((d) => ({ ...d, [end]: v }));
-                            if (fromIso(v)) (end === "from" ? setFromMonth : setToMonth)(monthOf(v, thisMonth));
+                            if (v) (end === "from" ? setFromMonth : setToMonth)(monthOf(v, thisMonth));
                           }}
-                          className="h-8 text-sm"
                         />
                       </div>
                     </div>
