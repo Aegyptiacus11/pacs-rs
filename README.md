@@ -109,7 +109,7 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a rail down the left side (Studies, Search, Upload; light or dark at the
+- **Layout**: a rail down the left side (Studies, Patients, Upload; light or dark at the
   bottom, and a warning when the server doesn't answer), the page beside it.
 - **Studies**: a worklist and, beside it, the chosen study. Date presets with counts (today, 7
   days, 30 days, 12 months) and a range of one's own (shortcuts such as last week or last year, two
@@ -126,7 +126,15 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   going on to the next or previous page. The server filters, sorts, counts and pages the list
   (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
-- **Search** (`⌘K` or `/`): patients, studies by any value, and actions.
+- **Search**: one box at the top of each list (`Ctrl K`, `⌘K` on a Mac, or `/` from anywhere).
+  On the studies it filters the list as words are typed and suggests the patients whose name
+  or ID has them; ↓ ↑ and Enter open one.
+- **Patients**: a list (latest study first, by name or by number of studies, a page at a time
+  from `/ui/api/patients`) and the chosen patient's record: who they are, their totals
+  (studies, series, images, first study, modalities), and a timeline of their studies, newest
+  first, each with its series as thumbnails. Tick two studies to compare them: the viewer shows
+  each one's largest series side by side, scrolling together. Download everything of the
+  patient, or delete them.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
@@ -174,6 +182,9 @@ public ID), `sort` (`patient`, `description`, `modality`, `date`, `series`, `ima
 `received`), `order` (`asc`, `desc`), `offset`, `limit` (at most 1000) and `summary=true` (the
 whole list's totals and its last received studies). It answers `{"Total", "Studies",
 "Summary"?}`; `/ui/api/studies/facets[?patient=]` gives the filters' choices with their counts.
+`/ui/api/patients` lists patients the same way (`q`, `sort`: `name`, `last` or `studies`,
+`order`, `offset`, `limit`), each with its study and image counts, modalities and first and last
+study dates.
 
 The measurements are at `/ui/api/annotations/{StudyInstanceUID}`: `GET` returns the study's list
 (a JSON array, empty when it has none), `PUT` replaces it (an array of objects, at most 1 MiB; an
