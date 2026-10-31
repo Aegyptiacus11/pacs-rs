@@ -598,7 +598,7 @@ function readDate(text: string) {
 }
 
 // one end of the range, typed: taken as soon as it is a whole date, red while it is not one
-function TypedDate({ label, value, onChange }: { label: string; value: string; onChange: (isoDate: string) => void }) {
+function TypedDate({ label, value, onChange, className }: { label: string; value: string; onChange: (isoDate: string) => void; className?: string }) {
   const [text, setText] = useState(writeDate(value));
   useEffect(() => {
     // a day clicked on the calendar shows here
@@ -619,43 +619,92 @@ function TypedDate({ label, value, onChange }: { label: string; value: string; o
       }}
       // a whole date, once left, is written like the others
       onBlur={() => readDate(text) && setText(writeDate(readDate(text)))}
-      className="tabular h-8 text-sm"
+      className={cn("tabular h-8 text-sm", className)}
     />
+  );
+}
+
+// one end of the range: typed, or picked on a small calendar under its 📅, which can't pick
+// past `after`/`before` (the other end) or today; the days with studies dotted
+function DateField({ label, value, onChange, after, before, studyDays, firstYear }: {
+  label: string;
+  value: string;
+  onChange: (isoDate: string) => void;
+  after?: string;
+  before?: string;
+  studyDays: Date[];
+  firstYear: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const today = new Date();
+  const day = fromIso(value);
+  return (
+    <div className="relative min-w-0 flex-1">
+      <TypedDate label={label} value={value} onChange={onChange} className="pr-9" />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Pick the ${label.toLowerCase()} date`}
+            className="absolute top-1/2 right-1 grid size-7 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <CalendarRange className="size-4" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-auto p-0">
+          <Calendar
+            mode="single"
+            captionLayout="dropdown"
+            showOutsideDays={false}
+            defaultMonth={day ?? (before ? fromIso(before) : undefined) ?? today}
+            startMonth={new Date(Math.min(firstYear, today.getFullYear() - 10), 0, 1)}
+            endMonth={today}
+            disabled={[{ after: today }, ...(before ? [{ after: fromIso(before)! }] : []), ...(after ? [{ before: fromIso(after)! }] : [])]}
+            selected={day}
+            onSelect={(d) => {
+              if (d) onChange(iso(d));
+              setOpen(false);
+            }}
+            modifiers={{ studies: studyDays }}
+            modifiersClassNames={{ studies: "has-studies" }}
+            className="p-3"
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 
 function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates: string[]; count: (s: Span) => number; total: number; onApply: (s: Span) => void }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(span);
-  const today = new Date();
-  const thisMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  // each end its own calendar, each on its own month: January on the left, October on the right
-  const monthOf = (isoDate: string, fallback: Date) => {
-    const d = fromIso(isoDate);
-    return d ? new Date(d.getFullYear(), d.getMonth(), 1) : fallback;
-  };
-  const [fromMonth, setFromMonth] = useState(() => monthOf(span.from, new Date(today.getFullYear(), today.getMonth() - 1, 1)));
-  const [toMonth, setToMonth] = useState(() => monthOf(span.to, thisMonth));
   const active = !!(span.from || span.to);
   // the ends in order, whichever was typed first
   const ordered = draft.from && draft.to && draft.from > draft.to ? { from: draft.to, to: draft.from } : draft;
   const studyDays = useMemo(() => dates.map((d) => parseDate(d)).filter((d): d is Date => !!d), [dates]);
-  const first = studyDays.reduce<Date | null>((a, d) => (!a || d < a ? d : a), null);
+  const firstYear = studyDays.reduce((y, d) => Math.min(y, d.getFullYear()), new Date().getFullYear());
   const apply = (s: Span) => {
     onApply(s);
     setOpen(false);
   };
   const picked = active ? shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] : "Any time";
+  const item = (label: string, s: Span, n: number) => (
+    <button
+      key={label}
+      type="button"
+      onClick={() => apply(s)}
+      className={cn("flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent", picked === label && "bg-selection-soft text-selection hover:bg-selection-soft")}
+    >
+      <span className="truncate">{label}</span>
+      <span className="tabular text-xs text-muted-foreground">{n}</span>
+    </button>
+  );
   return (
     <Popover
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (o) {
-          setDraft(span);
-          setFromMonth(monthOf(span.from, new Date(today.getFullYear(), today.getMonth() - 1, 1)));
-          setToMonth(monthOf(span.to, thisMonth));
-        }
+        if (o) setDraft(span);
       }}
     >
       <PopoverTrigger asChild>
@@ -670,6 +719,7 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
                 role="button"
                 aria-label="Any date"
                 className="-mr-1 grid size-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   onApply({ from: "", to: "" });
@@ -681,81 +731,38 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-0">
+      <PopoverContent align="start" className="w-[22rem] p-2">
         <form
           onSubmit={(e) => {
             e.preventDefault();
             apply(ordered);
           }}
         >
-          <div className="flex">
-            <div className="flex w-48 flex-col gap-0.5 border-r p-2">
-              {([["Any time", { from: "", to: "" }], ...shortcuts()] as [string, Span][]).map(([label, s], i) => (
-                <Fragment key={label}>
-                  {/* any time; counted back from today; calendar periods */}
-                  {(i === 1 || i === 6) && <div className="my-1 border-t" />}
-                  <button
-                    type="button"
-                    onClick={() => apply(s)}
-                    className={cn("flex items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent", picked === label && "bg-selection-soft text-selection hover:bg-selection-soft")}
-                  >
-                    {label}
-                    <span className="tabular text-xs text-muted-foreground">{i === 0 ? total : count(s)}</span>
-                  </button>
-                </Fragment>
-              ))}
+          {item("Any time", { from: "", to: "" }, total)}
+          <div className="my-1 border-t" />
+          {/* counted back from today, then calendar periods */}
+          <div className="grid grid-cols-2 gap-x-1">{shortcuts().map(([label, s]) => item(label, s, count(s)))}</div>
+          <div className="mt-1 border-t px-1 pt-2.5 pb-1">
+            <div className="mb-2 text-xs font-medium text-muted-foreground">Between</div>
+            <div className="grid grid-cols-[2.5rem_1fr] items-center gap-x-2 gap-y-2 text-sm">
+              <span className="text-muted-foreground">From</span>
+              <DateField label="From" value={draft.from} onChange={(v) => setDraft((d) => ({ ...d, from: v }))} before={draft.to} studyDays={studyDays} firstYear={firstYear} />
+              <span className="text-muted-foreground">To</span>
+              <DateField label="To" value={draft.to} onChange={(v) => setDraft((d) => ({ ...d, to: v }))} after={draft.from} studyDays={studyDays} firstYear={firstYear} />
             </div>
-            <div>
-              <div className="flex divide-x">
-                {(["from", "to"] as const).map((end) => {
-                  const other = end === "from" ? ordered.to : ordered.from;
-                  return (
-                    <div key={end} className="flex flex-col">
-                      <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">{end === "from" ? "From" : "To"}</div>
-                      <Calendar
-                        mode="range"
-                        captionLayout="dropdown"
-                        showOutsideDays={false}
-                        month={end === "from" ? fromMonth : toMonth}
-                        onMonthChange={end === "from" ? setFromMonth : setToMonth}
-                        startMonth={new Date(Math.min(first?.getFullYear() ?? today.getFullYear(), today.getFullYear() - 10), 0, 1)}
-                        endMonth={today}
-                        // a start after the end, or an end before the start, can't be picked
-                        disabled={[{ after: today }, ...(other ? [end === "from" ? { after: fromIso(other)! } : { before: fromIso(other)! }] : [])]}
-                        selected={{ from: fromIso(ordered.from), to: fromIso(ordered.to) }}
-                        onSelect={(_, day) => setDraft((d) => ({ ...d, [end]: iso(day) }))}
-                        modifiers={{ studies: studyDays }}
-                        modifiersClassNames={{ studies: "has-studies" }}
-                        className="px-3 pt-1 pb-3"
-                      />
-                      <div className="border-t px-3 py-3">
-                        <TypedDate
-                          label={end === "from" ? "From" : "To"}
-                          value={draft[end]}
-                          onChange={(v) => {
-                            setDraft((d) => ({ ...d, [end]: v }));
-                            if (v) (end === "from" ? setFromMonth : setToMonth)(monthOf(v, thisMonth));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="flex items-center gap-2 border-t px-3 py-2.5">
-                <div className="min-w-0 flex-1 text-xs text-muted-foreground">
-                  {ordered.from || ordered.to ? (
-                    <>
-                      <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span> {spanLabel(ordered).replace(/^From /, "since ").replace(/^Until /, "until ")}
-                    </>
-                  ) : (
-                    "Pick the first day on the left, the last on the right; either can stay open"
-                  )}
-                </div>
-                <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
-                  Apply
-                </Button>
-              </div>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                {ordered.from || ordered.to ? (
+                  <>
+                    <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span> {spanLabel(ordered).replace(/^From /, "since ").replace(/^Until /, "until ")}
+                  </>
+                ) : (
+                  "Either end can stay open"
+                )}
+              </span>
+              <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
+                Apply
+              </Button>
             </div>
           </div>
         </form>
