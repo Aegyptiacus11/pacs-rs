@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -65,7 +66,7 @@ const RANGES = [
   ["today", "Today", 0],
   ["7d", "7 days", 7],
   ["30d", "30 days", 30],
-  ["1y", "12 months", 365],
+  ["1y", "1 year", 365],
 ] as const;
 type Range = (typeof RANGES)[number][0];
 /** A custom range: ISO dates (yyyy-mm-dd) from the date fields, either end open. */
@@ -348,7 +349,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   return (
     <div className="flex h-full">
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 px-6 pt-5 pb-3">
+        <div className="flex items-center gap-4 px-6 pt-5 pb-3">
           <div className="mr-auto min-w-0">
             <h1 className="truncate text-lg font-semibold tracking-tight">{owner ? personName(owner.name) : "Studies"}</h1>
             <p className="text-sm text-muted-foreground">
@@ -359,6 +360,23 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                   : `${plural(total, "study", "studies")}${summary.data ? ` from ${plural(summary.data.patients, "patient")}` : ""}${filtered ? " match" : ""}`}
             </p>
           </div>
+          <Button onClick={upload.open} title="Or drop DICOM files or folders anywhere on the page">
+            <Upload /> Upload
+          </Button>
+        </div>
+
+        <div className="px-6 pb-3">
+          <SearchBar
+            value={typed}
+            onChange={setTyped}
+            placeholder="Search patients and studies: name, ID, accession, description…"
+            onPatient={(p) => go(href.patients(p.id))}
+            className="w-full"
+          />
+        </div>
+
+        {/* the filters, right above what they filter: when, then what and who */}
+        <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
           <ToggleGroup
             type="single"
             variant="outline"
@@ -369,7 +387,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             className="bg-card"
           >
             {RANGES.map(([value, label]) => (
-              <ToggleGroupItem key={value} value={value} className="gap-1.5 px-3 text-xs data-[state=on]:bg-selection-soft data-[state=on]:text-selection">
+              <ToggleGroupItem key={value} value={value} className="h-8 gap-1.5 px-2.5 text-xs data-[state=on]:bg-selection-soft data-[state=on]:text-selection">
                 {label}
                 <span className="tabular text-[11px] opacity-60">{facets.ranges[value]}</span>
               </ToggleGroupItem>
@@ -385,16 +403,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               setRange(s.from || s.to ? "custom" : "any");
             }}
           />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
-          <SearchBar
-            value={typed}
-            onChange={setTyped}
-            placeholder="Search patients and studies: name, ID, accession, description…"
-            onPatient={(p) => go(href.patients(p.id))}
-            className="w-full sm:w-[26rem]"
-          />
+          <Separator orientation="vertical" className="mx-1 !h-5" />
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
           <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
           {owner && (
@@ -411,12 +420,14 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               variant="ghost"
               size="sm"
               className="h-8 px-2 text-muted-foreground"
+              title="Clear the search and every filter"
               onClick={() => {
                 setTyped("");
                 setQ("");
                 setModalities([]);
                 setSexes([]);
                 setRange("any");
+                setSpan({ from: "", to: "" });
               }}
             >
               Reset <X />

@@ -1,13 +1,12 @@
-// The rail down the left side: the name, the studies, the patients and upload; at the bottom
+// The rail down the left side: the name, the studies and the patients; at the bottom
 // light or dark, and a warning when the server doesn't answer. Icons over their names, like
 // the viewer's toolbar.
 
 import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Moon, Sun, Upload, Users, WifiOff } from "lucide-react";
+import { FileStack, Moon, Sun, Users, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
-import { useUpload } from "@/components/upload";
 import { ROOT } from "@/lib/api";
 import { href, type Route } from "@/lib/route";
 import { useTheme } from "@/lib/theme";
@@ -95,7 +94,6 @@ function ThemeToggle() {
 }
 
 export function AppRail({ route }: { route: Route }) {
-  const upload = useUpload();
   // Ctrl K (⌘K) or /: the page's search box
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -117,7 +115,6 @@ export function AppRail({ route }: { route: Route }) {
       </a>
       <RailItem label="Studies" Icon={FileStack} href={href.studies()} active={route.page === "studies"} />
       <RailItem label="Patients" Icon={Users} href={href.patients()} active={route.page === "patients"} />
-      <RailItem label="Upload" tip="Upload DICOM files or folders" Icon={Upload} onClick={upload.open} />
       <div className="mt-auto flex flex-col items-center gap-1">
         <ServerStatus />
         <ThemeToggle />
