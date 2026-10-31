@@ -109,13 +109,13 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a rail down the left side (Studies, Patients; light or dark at the
-  bottom, and a warning when the server doesn't answer), the page beside it.
+- **Layout**: a bar along the top: the name, Studies and Patients, the search, light or dark,
+  and a warning when the server doesn't answer; the page under it.
 - **Studies**: a worklist and, beside it, the chosen study. Over the table, under the search: date presets with counts
   (today, 7 days, 30 days, 1 year) and a range of one's own (shortcuts such as last week or last year, two
   months to click the first and last day on, with the days that have studies dotted, or both
   ends typed), search, modality (every DICOM imaging modality) and sex filters,
-  sortable columns (patient, study, modality, date, series, images). A click on a row shows the
+  sortable columns (date first, then patient, study, modality, series, images). A click on a row shows the
   study in the pane: the patient, its series as thumbnails (a click opens one), the patient's
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
   ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
@@ -126,9 +126,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   going on to the next or previous page. The server filters, sorts, counts and pages the list
   (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
-- **Search**: one box at the top of each list (`Ctrl K`, `⌘K` on a Mac, or `/` from anywhere).
-  On the studies it filters the list as words are typed and suggests the patients whose name
-  or ID has them; ↓ ↑ and Enter open one.
+- **Search**: one box, in the top bar (`Ctrl K`, `⌘K` on a Mac, or `/` from anywhere). It
+  searches the list shown: on the studies it filters them as words are typed and suggests the
+  patients whose name or ID has them (↓ ↑ and Enter open one); on the patients, it filters them.
 - **Patients**: a list (latest study first, by name or by number of studies, a page at a time
   from `/ui/api/patients`) and the chosen patient's record: who they are, their totals
   (studies, series, images, first study, modalities), and a timeline of their studies, newest
