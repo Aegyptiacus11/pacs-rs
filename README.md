@@ -18,6 +18,7 @@ C-MOVE to search another archive's studies and pull them in.
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
 | `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND and C-MOVE SCU |
+| `pacs-deid` | de-identification by PS3.15 Annex E, configured per project; no network or storage, usable on its own |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |
 
 `ui/` is the web interface, a Vite project built into the binary (see "Web interface").
@@ -90,7 +91,7 @@ DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gi
 | `GET /modalities[?expand]` | the remote AEs of `PACS_DIMSE_REMOTES`: their ids, or each one's `AET`, `Host` and `Port` |
 | `POST /modalities/{id}/echo` | a C-ECHO to that AE: 200 with `Status` and `ElapsedMs` when it answers Success, 502 with the reason when not |
 | `GET /modalities/{id}/studies?PatientID=&PatientName=&AccessionNumber=&StudyDate=&ModalitiesInStudy=&limit=` | that AE's studies, by C-FIND (see "DIMSE"), as a DICOM JSON array |
-| `POST /modalities/{id}/move` (`{"StudyInstanceUID": "..."}` or a list) | that AE sends the studies to pacs-rs by C-MOVE; the final status and counts, or with `"Asynchronous": true` a job |
+| `POST /modalities/{id}/move` (`{"StudyInstanceUID": "..."}` or a list) | that AE sends the studies to pacs-rs by C-MOVE, or with `"Project"` to a project's AE title to be de-identified; the final status and counts, or with `"Asynchronous": true` a job |
 | `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` | the moves running in the background: state, progress and counts as they come; cancel sends C-CANCEL |
 
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
@@ -165,8 +166,49 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 | `0211` Unrecognized operation | an operation pacs-rs does not provide (C-FIND, C-MOVE, C-GET for now) |
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`) and pynetdicom 3.0.4,
-both ways (see "Building"); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`. Not yet:
-Patient Root, C-GET, de-identification on ingest, TLS, C-STORE SCU. The order is in
+both ways (see "Building"); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
+into a project shows there de-identified. Not yet: Patient Root, C-GET, TLS, C-STORE SCU. The order is
+in [docs/interop.md](docs/interop.md).
+
+## De-identification
+
+Off unless `PACS_PROJECTS` names a file of projects. A project is an AE title of its own and a
+profile: whatever is sent to that AE title, pushed or pulled (`"Project"` in a move), is
+de-identified on the way in, and only the result is stored, indexed and served. The identified
+instance is held in memory meanwhile, never written. Everything else is stored as received.
+
+```json
+[{"ae_title": "LIVER_2026",
+  "profile": {"name": "liver-2026", "pseudonym_prefix": "LIV-",
+              "options": ["retain-longitudinal-modified-dates", "retain-patient-characteristics",
+                          "clean-descriptors"],
+              "overrides": [{"tag": "(0019,xxxx)", "action": "K", "reason": "GE acquisition values"}],
+              "date_shift_days": [-1095, -1],
+              "extra_identifiers": ["Mustapha"]}}]
+```
+
+- **Profile**: PS3.15 Table E.1-1 (2026d) whole, sequences included, with the options chosen:
+  `retain-uids`, `retain-device-identity`, `retain-institution-identity`,
+  `retain-patient-characteristics` (Patient's Age added from the dates), `retain-longitudinal-full-dates`,
+  `retain-longitudinal-modified-dates` (one shift per patient, every date, times kept) and
+  `clean-descriptors` (text kept unless it holds the patient's names or identifiers, the people and
+  institution, or `extra_identifiers`). `overrides` change any attribute's action, private ones included;
+  `remove_when_allowed` takes X wherever the table allows it. A profile pacs-rs cannot apply is refused at
+  start.
+- **Replacement values**: UIDs, pseudonyms (Patient ID and Name) and date shifts are derived with HMAC from
+  the project's secret, in `PACS_PROJECT_SECRET_<AE title>` (or `..._FILE`), at least 32 bytes
+  (`openssl rand -hex 32`): the same patient and UIDs map the same way on every pull, and studies, series and
+  references stay linked. Keep the secret as safe as the data.
+- **Recorded**: Patient Identity Removed YES, the De-identification Method Code Sequence (CID 7050) and a
+  De-identification Method naming the profile and each override, new File Meta Information.
+- **Quarantine**: what may carry identification pacs-rs cannot remove is not de-identified: Secondary
+  Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
+  SCREEN SAVE (each profile may change the list). It is kept as received in `PACS_QUARANTINE`, never indexed
+  or served, or without it refused (C-STORE status C003, with the reason).
+
+Not yet: a re-identification key (the Encrypted Attributes Sequence of PS3.15 E.1.1, or an encrypted
+table), Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data, a review of the
+quarantine in the web interface, and a run on the MIDI-B validation data. The plan is in
 [docs/interop.md](docs/interop.md).
 
 ## Web interface
@@ -299,6 +341,9 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
 | `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |
 | `PACS_DIMSE_MOVE_TIMEOUT` | `600` | seconds to wait between two C-MOVE responses, while a large study is sent |
+| `PACS_PROJECTS` | none | a JSON file of projects, each an AE title and a de-identification profile (see "De-identification") |
+| `PACS_PROJECT_SECRET_<AE title>` | | a project's secret; environment only, or `..._FILE` naming a file |
+| `PACS_QUARANTINE` | none | `file:<directory>` or `s3://<bucket>[/<prefix>]` for quarantined instances; without it they are refused |
 | `RUST_LOG` | `info` | log filter |
 
 In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
