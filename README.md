@@ -101,7 +101,8 @@ order.
 
 Not yet: labels, metadata, modifications, wildcard and range searches in `/tools/find`.
 
-DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after.
+DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after; the plan is in
+[docs/dimse.md](docs/dimse.md).
 
 ## Web interface
 
