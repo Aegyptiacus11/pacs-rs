@@ -1,14 +1,15 @@
-// The rail down the left side: the name, the studies and the patients; at the bottom
-// light or dark, and a warning when the server doesn't answer. Icons over their names, like
-// the viewer's toolbar.
+// The bar along the top: the name, the two lists, the search (Ctrl K, ⌘K on a Mac, or /) of
+// the list shown, light or dark, and a warning when the server doesn't answer.
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileStack, Moon, Sun, Users, WifiOff } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Kbd } from "@/components/ui/kbd";
+import { SearchBar } from "@/components/search-bar";
 import { ROOT } from "@/lib/api";
-import { href, type Route } from "@/lib/route";
+import { go, href, type Route } from "@/lib/route";
+import { setSearch, useSearch } from "@/lib/search";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -18,49 +19,6 @@ export function Logo({ className }: { className?: string }) {
       <rect x="1" y="1" width="18" height="18" rx="5" fill="currentColor" />
       <path d="M7 14V6h3.6a2.6 2.6 0 0 1 0 5.2H7" fill="none" stroke="var(--background)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
-  );
-}
-
-const itemClass = (active?: boolean) =>
-  cn(
-    "relative flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-    active && "bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection",
-  );
-
-function RailItem({ label, tip, shortcut, Icon, active, href: to, onClick, className }: {
-  label: string;
-  tip?: string;
-  shortcut?: string;
-  Icon: typeof Users;
-  active?: boolean;
-  href?: string;
-  onClick?: () => void;
-  className?: string;
-}) {
-  const body: ReactNode = (
-    <>
-      <Icon className="size-5" strokeWidth={1.6} />
-      <span className="text-[10.5px] leading-none">{label}</span>
-    </>
-  );
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {to ? (
-          <a href={to} aria-current={active ? "page" : undefined} className={cn(itemClass(active), className)}>
-            {body}
-          </a>
-        ) : (
-          <button type="button" onClick={onClick} className={cn(itemClass(active), className)}>
-            {body}
-          </button>
-        )}
-      </TooltipTrigger>
-      <TooltipContent side="right" className="flex items-center gap-2">
-        {tip ?? label}
-        {shortcut && <Kbd>{shortcut}</Kbd>}
-      </TooltipContent>
-    </Tooltip>
   );
 }
 
@@ -76,12 +34,12 @@ function ServerStatus() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span role="status" className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-lg bg-destructive/10 text-destructive">
-          <WifiOff className="size-5" strokeWidth={1.6} />
-          <span className="text-[10.5px] leading-none">Offline</span>
+        <span role="status" className="flex h-8 items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 text-xs font-medium text-destructive">
+          <WifiOff className="size-3.5" />
+          Offline
         </span>
       </TooltipTrigger>
-      <TooltipContent side="right">pacs-rs does not answer; retrying every 15 seconds</TooltipContent>
+      <TooltipContent>pacs-rs does not answer; retrying every 15 seconds</TooltipContent>
     </Tooltip>
   );
 }
@@ -90,11 +48,41 @@ function ServerStatus() {
 function ThemeToggle() {
   const [theme, setTheme] = useTheme();
   const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-  return <RailItem label={dark ? "Light" : "Dark"} tip={dark ? "Switch to light" : "Switch to dark"} Icon={dark ? Sun : Moon} onClick={() => setTheme(dark ? "light" : "dark")} />;
+  const label = dark ? "Switch to light" : "Switch to dark";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label={label} className="text-muted-foreground hover:text-foreground" onClick={() => setTheme(dark ? "light" : "dark")}>
+          {dark ? <Sun /> : <Moon />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
-export function AppRail({ route }: { route: Route }) {
-  // Ctrl K (⌘K) or /: the page's search box
+function Tab({ to, active, Icon, children }: { to: string; active: boolean; Icon: typeof Users; children: string }) {
+  return (
+    <a
+      href={to}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "relative flex h-14 items-center gap-2 px-3 text-sm transition-colors",
+        active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Icon className="size-4" strokeWidth={1.75} />
+      {children}
+      {/* the page shown: a line along the bar's bottom edge */}
+      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground" />}
+    </a>
+  );
+}
+
+export function AppHeader({ route }: { route: Route }) {
+  const page = route.page === "patients" ? "patients" : "studies";
+  const text = useSearch(page);
+  // Ctrl K (⌘K) or /: the search
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || (e.key === "/" && !(e.target as HTMLElement).closest("input, textarea, [contenteditable]"))) {
@@ -109,16 +97,32 @@ export function AppRail({ route }: { route: Route }) {
     return () => removeEventListener("keydown", key);
   }, []);
   return (
-    <nav aria-label="pacs-rs" className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r bg-card py-3">
-      <a href={href.studies()} aria-label="pacs-rs: the studies" className="mb-3 grid size-10 place-items-center rounded-lg hover:bg-accent">
+    <header className="flex h-14 shrink-0 items-center gap-6 border-b bg-card px-5">
+      <a href={href.studies()} className="flex items-center gap-2 font-semibold tracking-tight">
         <Logo className="size-6" />
+        pacs-rs
       </a>
-      <RailItem label="Studies" Icon={FileStack} href={href.studies()} active={route.page === "studies"} />
-      <RailItem label="Patients" Icon={Users} href={href.patients()} active={route.page === "patients"} />
-      <div className="mt-auto flex flex-col items-center gap-1">
+      <nav aria-label="Lists" className="-mb-px flex self-stretch">
+        <Tab to={href.studies()} active={page === "studies"} Icon={FileStack}>
+          Studies
+        </Tab>
+        <Tab to={href.patients()} active={page === "patients"} Icon={Users}>
+          Patients
+        </Tab>
+      </nav>
+      <SearchBar
+        key={page}
+        value={text}
+        onChange={(v) => setSearch(page, v)}
+        placeholder={page === "studies" ? "Search studies and patients: name, ID, accession, description…" : "Search patients: name or patient ID…"}
+        suggest={page === "studies"}
+        onPatient={(p) => go(href.patients(p.id))}
+        className="mx-auto w-full max-w-xl"
+      />
+      <div className="flex items-center gap-2">
         <ServerStatus />
         <ThemeToggle />
       </div>
-    </nav>
+    </header>
   );
 }
