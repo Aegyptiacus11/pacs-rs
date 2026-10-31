@@ -17,9 +17,11 @@ hospital PACS --C-FIND / C-MOVE--> pacs-rs staging --de-identify--> pacs-rs arch
 (read-only source)                 (identified, never served)       (what readers see)
 ```
 
-- **Research mode** (the default): every study is de-identified on ingest; only the de-identified copy is
-  stored and served.
-- **Clinical mode**: identified studies inside the hospital; results may go back to the hospital PACS.
+- **Research mode**: a project, an AE title with a de-identification profile; every study sent to it is
+  de-identified on ingest, and only the de-identified copy is stored and served.
+- **Clinical mode**: studies sent to pacs-rs's own AE title are stored as received, inside the hospital;
+  results may go back to the hospital PACS. pacs-rs is a general PACS: this is what it does with no
+  project configured.
 
 The hospital PACS stays read-only for pacs-rs, except for a clinical-mode write-back to a destination the
 hospital names.
@@ -40,7 +42,8 @@ hospital names.
    the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP. *C-MOVE done for Study
    Root (`POST /modalities/{id}/move`), synchronous or as a job with its progress (`/jobs/{id}`). C-GET
    not yet.*
-5. **De-identification on ingest** (research mode), below.
+5. **De-identification on ingest** (research mode), below. *Built: `pacs-deid` and projects
+   (`PACS_PROJECTS`); what is not yet is said below.*
 6. **TLS** on associations, following PS3.15 H.1. Remote AEs (title, host, port) and pacs-rs's own are
    configured already (`PACS_DIMSE_*`).
 7. **Write-back** (clinical mode only): Quorum's masks as DICOM Segmentation and measurements as Structured
@@ -54,21 +57,33 @@ a site that wants them pushed; a C-FIND by Accession Number or Patient ID covers
 
 ## De-identification
 
-- The Basic Application Level Confidentiality Profile (PS3.15 E.2), with the options a project's approval
-  allows, chosen per project and recorded with it: Retain Longitudinal Temporal Information With Modified
-  Dates (E.3.6, dates shifted per patient so intervals survive), Clean Descriptors (E.3.5), Retain Patient
-  Characteristics (E.3.7, such as sex and age), Retain Device Identity (E.3.8, such as scanner model).
-- UIDs replaced consistently, so series and studies stay linked; one pseudonym per patient per project.
-- Patient Identity Removed (0012,0062) set to YES and the De-identification Method Code Sequence
-  (0012,0064) filled with the profile and options used (E.1.1).
-- Clean Pixel Data (E.3.1): instances that may carry burned-in text (Burned In Annotation YES, secondary
-  captures, dose screens) are refused unless cleaned.
-- The re-identification key (E.1.2) is either kept encrypted and readable by one honest-broker role, or not
-  kept at all. The project's ethics approval decides which.
-- Staging is deleted once a study is de-identified; the identified copy is never indexed or served.
+Built:
+
+- The Basic Application Level Confidentiality Profile, PS3.15 Table E.1-1 (2026d) applied whole, in
+  sequence items too, with the options a project chooses: Retain UIDs, Device Identity, Institution
+  Identity, Patient Characteristics (Patient's Age added from the dates), Full Dates, Modified Dates (one
+  shift per patient, unlisted dates included, times kept), Clean Descriptors. Every choice a deployment may
+  want differently is in the profile: options, per-tag overrides, the date shift range, the pseudonym
+  prefix, the quarantine rules.
+- UIDs, pseudonyms and date shifts derived from a project secret with HMAC, so the same patient and the
+  same UIDs map the same way on every pull, with no table kept.
+- Patient Identity Removed YES, the De-identification Method Code Sequence (CID 7050) and a
+  De-identification Method naming the profile and each override (E.1.1); new File Meta Information.
+- Quarantine instead of Clean Pixel Data (E.3.1), Clean Structured Content and Clean Graphics: Secondary
+  Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
+  SCREEN SAVE; kept apart in `PACS_QUARANTINE`, or refused.
+- No staging on disk: the identified instance is held in memory while it is de-identified, never stored.
+
+Not yet:
+
+- The re-identification key. The standard's way is the Encrypted Attributes Sequence (E.1.1): the
+  original values inside each instance, encrypted to an honest broker's RSA key, so pacs-rs never holds a
+  key that reads them. A separate encrypted table is the alternative; neither is built.
+- Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data (OCR and review).
+- A review of the quarantine in the web interface.
 - Tested on the MIDI-B challenge's validation data (Data in Support of the MIDI-B Challenge,
-  doi:10.7937/cf2p-aw56), whose answer key scores every required action, and against the action codes of
-  PS3.15 Table E.1-1.
+  doi:10.7937/cf2p-aw56), whose answer key scores every required action; so far tested rule by rule
+  against Table E.1-1.
 
 ## Rules for the SCP side (step 8)
 
