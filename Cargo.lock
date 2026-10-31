@@ -1728,6 +1728,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pacs-deid"
+version = "0.3.0"
+dependencies = [
+ "dicom-core",
+ "dicom-dictionary-std",
+ "dicom-object",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+]
+
+[[package]]
 name = "pacs-dicomweb"
 version = "0.3.0"
 dependencies = [

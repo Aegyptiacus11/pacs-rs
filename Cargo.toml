@@ -26,6 +26,7 @@ dicom-transfer-syntax-registry = { version = "0.10.1", default-features = false 
 # of docs/interop.md.
 dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
 futures = "0.3.34"
+hmac = "0.13.0"
 http-body-util = "0.1.5"
 # jxl-rs, the libjxl project's JPEG XL decoder.
 jxl = "0.8.0"
@@ -34,6 +35,7 @@ mimalloc = { version = "0.1.52", default-features = false }
 object_store = { version = "0.14.2", features = ["aws"] }
 pacs-archive = { path = "crates/pacs-archive" }
 pacs-core = { path = "crates/pacs-core" }
+pacs-deid = { path = "crates/pacs-deid" }
 pacs-dicomweb = { path = "crates/pacs-dicomweb" }
 pacs-dimse = { path = "crates/pacs-dimse" }
 pacs-index = { path = "crates/pacs-index" }
@@ -44,6 +46,7 @@ reqwest = { version = "0.13.5", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha1 = "0.11.0"
+sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["any", "macros", "migrate", "postgres", "runtime-tokio", "sqlite"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
