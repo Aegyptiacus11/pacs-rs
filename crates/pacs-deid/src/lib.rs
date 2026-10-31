@@ -9,6 +9,9 @@
 //! uses it, and so can any other tool.
 
 pub mod action;
+pub mod dates;
+pub mod keys;
 pub mod table;
 
 pub use action::Action;
+pub use keys::Keys;
