@@ -136,6 +136,31 @@ async fn the_list_is_filtered_sorted_and_paged_in_the_index() {
             ["CT ABDOMEN 100%", "CT CHEST", "MR LIVER", "XR HAND"]
         );
 
+        // the age at the study (born 1970-01-01): 55 in 2025, 56 in 2026; ranges open or closed
+        let q = WorklistQuery {
+            ages: vec![(None, Some(55))],
+            ..all()
+        };
+        assert_eq!(
+            descriptions(&index.worklist(&q).await.unwrap().0),
+            ["XR HAND"]
+        );
+        let q = WorklistQuery {
+            ages: vec![(Some(56), None)],
+            ..all()
+        };
+        assert_eq!(index.worklist(&q).await.unwrap().1, 3);
+        let q = WorklistQuery {
+            ages: vec![(Some(0), Some(17)), (Some(56), Some(56))],
+            ..all()
+        };
+        assert_eq!(index.worklist(&q).await.unwrap().1, 3);
+        let q = WorklistQuery {
+            ages: vec![(Some(0), Some(17))],
+            ..all()
+        };
+        assert_eq!(index.worklist(&q).await.unwrap().1, 0);
+
         // the totals of a filtered list
         let q = WorklistQuery {
             from: Some("20260101".into()),
@@ -175,6 +200,7 @@ async fn the_list_is_filtered_sorted_and_paged_in_the_index() {
             ]
         );
         assert_eq!(facets.dates.len(), 4);
+        assert_eq!(facets.ages, [("55".to_owned(), 1), ("56".to_owned(), 3)]);
         assert_eq!(
             index.worklist_facets(Some(&patient)).await.unwrap().dates,
             [("20250701".to_owned(), 1)]
