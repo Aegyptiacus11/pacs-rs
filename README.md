@@ -115,7 +115,8 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Studies**: a worklist and, beside it, the chosen study. Over the table, under the search: date presets with counts
   (today, 7 days, 30 days, 1 year) and a range of one's own (shortcuts such as last week or last year, two
   months to click the first and last day on, with the days that have studies dotted, or both
-  ends typed), search, modality (every DICOM imaging modality) and sex filters,
+  ends typed), a filter box beside the modality (every DICOM imaging modality), sex and age (at the study:
+  0–17, 18–39, 40–64, 65+) filters,
   sortable columns (date first, then patient, study, modality, series, images). A click on a row shows the
   study in the pane: the patient, its series as thumbnails (a click opens one), the patient's
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
@@ -179,7 +180,8 @@ received in the index's `ui_protocols` table.
 
 The study list is at `/ui/api/studies`: `q` (words, each found in the patient's name or ID,
 the accession number, the description, the referring physician or the date), `from` and `to`
-(`YYYYMMDD`, included), `modality` and `sex` (comma-separated; `O` for other), `patient` (a
+(`YYYYMMDD`, included), `modality` and `sex` (comma-separated; `O` for other), `age` (the age at the study, ranges of
+years: `0-17,65-`), `patient` (a
 public ID), `sort` (`patient`, `description`, `modality`, `date`, `series`, `images`,
 `received`), `order` (`asc`, `desc`), `offset`, `limit` (at most 1000) and `summary=true` (the
 whole list's totals and its last received studies). It answers `{"Total", "Studies",
