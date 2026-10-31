@@ -580,6 +580,14 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(span);
   const today = new Date();
+  const thisMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  // each end its own calendar, each on its own month: January on the left, October on the right
+  const monthOf = (isoDate: string, fallback: Date) => {
+    const d = fromIso(isoDate);
+    return d ? new Date(d.getFullYear(), d.getMonth(), 1) : fallback;
+  };
+  const [fromMonth, setFromMonth] = useState(() => monthOf(span.from, new Date(today.getFullYear(), today.getMonth() - 1, 1)));
+  const [toMonth, setToMonth] = useState(() => monthOf(span.to, thisMonth));
   const active = !!(span.from || span.to);
   // the ends in order, whichever was typed first
   const ordered = draft.from && draft.to && draft.from > draft.to ? { from: draft.to, to: draft.from } : draft;
@@ -595,7 +603,11 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (o) setDraft(span);
+        if (o) {
+          setDraft(span);
+          setFromMonth(monthOf(span.from, new Date(today.getFullYear(), today.getMonth() - 1, 1)));
+          setToMonth(monthOf(span.to, thisMonth));
+        }
       }}
     >
       <PopoverTrigger asChild>
@@ -646,39 +658,54 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
               ))}
             </div>
             <div>
-              <Calendar
-                mode="range"
-                numberOfMonths={2}
-                captionLayout="dropdown"
-                showOutsideDays={false}
-                defaultMonth={fromIso(ordered.from) ?? new Date(today.getFullYear(), today.getMonth() - 1, 1)}
-                startMonth={new Date(Math.min(first?.getFullYear() ?? today.getFullYear(), today.getFullYear() - 10), 0, 1)}
-                endMonth={today}
-                disabled={{ after: today }}
-                selected={{ from: fromIso(ordered.from), to: fromIso(ordered.to) }}
-                onSelect={(r) => setDraft({ from: r?.from ? iso(r.from) : "", to: r?.to ? iso(r.to) : "" })}
-                modifiers={{ studies: studyDays }}
-                modifiersClassNames={{ studies: "has-studies" }}
-                className="p-3"
-              />
-              <div className="flex items-end gap-2 border-t p-3">
-                {(["from", "to"] as const).map((end) => (
-                  <label key={end} className="grid gap-1 text-xs text-muted-foreground">
-                    {end === "from" ? "From" : "To"}
-                    <Input
-                      type="date"
-                      max={iso(today)}
-                      value={draft[end]}
-                      onChange={(e) => setDraft((d) => ({ ...d, [end]: e.target.value }))}
-                      className="h-8 w-36 text-sm text-foreground"
-                    />
-                  </label>
-                ))}
-                <div className="mb-2 ml-1 min-w-0 flex-1 text-xs text-muted-foreground">
+              <div className="flex divide-x">
+                {(["from", "to"] as const).map((end) => {
+                  const other = end === "from" ? ordered.to : ordered.from;
+                  return (
+                    <div key={end} className="flex flex-col">
+                      <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">{end === "from" ? "From" : "To"}</div>
+                      <Calendar
+                        mode="range"
+                        captionLayout="dropdown"
+                        showOutsideDays={false}
+                        month={end === "from" ? fromMonth : toMonth}
+                        onMonthChange={end === "from" ? setFromMonth : setToMonth}
+                        startMonth={new Date(Math.min(first?.getFullYear() ?? today.getFullYear(), today.getFullYear() - 10), 0, 1)}
+                        endMonth={today}
+                        // a start after the end, or an end before the start, can't be picked
+                        disabled={[{ after: today }, ...(other ? [end === "from" ? { after: fromIso(other)! } : { before: fromIso(other)! }] : [])]}
+                        selected={{ from: fromIso(ordered.from), to: fromIso(ordered.to) }}
+                        onSelect={(_, day) => setDraft((d) => ({ ...d, [end]: iso(day) }))}
+                        modifiers={{ studies: studyDays }}
+                        modifiersClassNames={{ studies: "has-studies" }}
+                        className="px-3 pt-1 pb-3"
+                      />
+                      <div className="border-t px-3 py-3">
+                        <Input
+                          type="date"
+                          aria-label={end === "from" ? "From" : "To"}
+                          max={iso(today)}
+                          value={draft[end]}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setDraft((d) => ({ ...d, [end]: v }));
+                            if (fromIso(v)) (end === "from" ? setFromMonth : setToMonth)(monthOf(v, thisMonth));
+                          }}
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2 border-t px-3 py-2.5">
+                <div className="min-w-0 flex-1 text-xs text-muted-foreground">
                   {ordered.from || ordered.to ? (
-                    <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span>
+                    <>
+                      <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span> {spanLabel(ordered).replace(/^From /, "since ").replace(/^Until /, "until ")}
+                    </>
                   ) : (
-                    "Click the first day, then the last"
+                    "Pick the first day on the left, the last on the right; either can stay open"
                   )}
                 </div>
                 <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
