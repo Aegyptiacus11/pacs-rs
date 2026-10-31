@@ -9,9 +9,15 @@
 //! uses it, and so can any other tool.
 
 pub mod action;
+mod clean;
 pub mod dates;
+mod engine;
 pub mod keys;
+pub mod profile;
+mod quarantine;
 pub mod table;
 
 pub use action::Action;
+pub use engine::{Outcome, deidentify, explain};
 pub use keys::Keys;
+pub use profile::{Opt, Override, Profile, ProfileError, Quarantine, TagPattern};
