@@ -14,7 +14,7 @@ use dicom_ul::pdu::{
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::command::{field, tag};
 use pacs_dimse::message::Incoming;
-use pacs_dimse::{AeTitle, Status, VERIFICATION};
+use pacs_dimse::{AeTitle, RemoteAe, Status, VERIFICATION};
 
 fn rejection(result: Result<Client, UlError>) -> AssociationRJ {
     match result {
@@ -41,6 +41,56 @@ async fn c_echo_is_answered_success() {
     assert_eq!(rsp.command_field(), Ok(field::C_ECHO_RSP));
     assert_eq!(rsp.status(), Ok(Status::SUCCESS));
     client.release().await;
+}
+
+/// pacs-rs's own SCU against its SCP: one C-ECHO, released.
+#[tokio::test]
+async fn the_echo_scu_reaches_an_scp() {
+    let addr = start(config(), archive().await).await;
+    let remote: RemoteAe = format!("self=PACSRS@127.0.0.1:{}", addr.port())
+        .parse()
+        .unwrap();
+    let calling = AeTitle::new("TESTSCU").unwrap();
+    pacs_dimse::echo(&remote, &calling, Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
+/// The SCU reports a refused association, not a hang.
+#[tokio::test]
+async fn the_echo_scu_reports_a_rejection() {
+    let addr = start(config(), archive().await).await;
+    let remote: RemoteAe = format!("x=SOMEONE_ELSE@127.0.0.1:{}", addr.port())
+        .parse()
+        .unwrap();
+    let error = pacs_dimse::echo(&remote, &AeTitle::new("T").unwrap(), Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, pacs_dimse::EchoError::Association { .. }),
+        "{error}"
+    );
+}
+
+/// The SCU gives up after its timeout on a peer that never answers.
+#[tokio::test]
+async fn the_echo_scu_times_out() {
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = silent.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _held = silent.accept().await;
+        std::future::pending::<()>().await;
+    });
+    let remote: RemoteAe = format!("x=X@127.0.0.1:{port}").parse().unwrap();
+    let started = std::time::Instant::now();
+    let result = pacs_dimse::echo(
+        &remote,
+        &AeTitle::new("T").unwrap(),
+        Duration::from_millis(500),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 /// PS3.8 Table 9-21, reason 7: a called AE title pacs-rs does not have is refused.

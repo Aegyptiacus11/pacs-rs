@@ -11,11 +11,13 @@ pub mod ae;
 pub mod command;
 pub mod message;
 pub mod scp;
+pub mod scu;
 pub mod sop_classes;
 pub mod status;
 
 pub use ae::{AeError, AeTitle, RemoteAe};
 pub use scp::{Destination, Scp};
+pub use scu::{EchoError, echo};
 pub use status::{Status, StatusClass};
 
 /// The Verification SOP Class (PS3.4 A.4).
