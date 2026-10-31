@@ -188,6 +188,64 @@ export function useStudy(id: string | null, known: Study | undefined) {
   });
 }
 
+/** A patient of `/ui/api/patients`. */
+export type Patient = {
+  id: string;
+  name: string;
+  patientId: string;
+  sex: string;
+  birth: string;
+  studies: number;
+  instances: number;
+  modalities: string[];
+  first: string;
+  last: string;
+};
+export type PatientQuery = { q: string; sort: "name" | "last" | "studies"; desc: boolean; offset: number; limit: number };
+
+function patientFrom(p: any): Patient {
+  const t = p.MainDicomTags ?? {};
+  return {
+    id: p.ID,
+    name: t.PatientName || "",
+    patientId: t.PatientID || "",
+    sex: t.PatientSex || "",
+    birth: t.PatientBirthDate || "",
+    studies: Number(p.Studies ?? 0),
+    instances: Number(p.Instances ?? 0),
+    modalities: p.Modalities ?? [],
+    first: p.FirstStudy || "",
+    last: p.LastStudy || "",
+  };
+}
+
+async function patients(query: Partial<PatientQuery>) {
+  const url = new URL("api/patients", location.href);
+  url.hash = "";
+  if (query.q?.trim()) url.searchParams.set("q", query.q.trim());
+  if (query.sort) url.searchParams.set("sort", query.sort);
+  if (query.desc !== undefined) url.searchParams.set("order", query.desc ? "desc" : "asc");
+  if (query.offset) url.searchParams.set("offset", String(query.offset));
+  if (query.limit) url.searchParams.set("limit", String(query.limit));
+  const body = await get(url);
+  return { total: Number(body.Total), patients: (body.Patients as any[]).map(patientFrom) };
+}
+
+/** One page of patients, and how many the whole list has. */
+export function usePatientPage(query: PatientQuery) {
+  return useQuery({ queryKey: ["studies", "patients", query], queryFn: () => patients(query), placeholderData: keepPreviousData });
+}
+
+/** The first patients whose name or ID has the words, as they are typed. */
+export function usePatientSuggestions(q: string) {
+  return useQuery({
+    queryKey: ["studies", "suggest", q],
+    enabled: q.trim().length > 0,
+    queryFn: async () => (await patients({ q, sort: "last", desc: true, limit: 6 })).patients,
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useRefreshStudies() {
   const client = useQueryClient();
   return () => client.invalidateQueries({ queryKey: ["studies"] });
