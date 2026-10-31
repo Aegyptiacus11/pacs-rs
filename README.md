@@ -116,9 +116,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   a filter box (`/`), the date, the modality (every DICOM imaging modality), the sex and the age
   at the study (0–17, 18–39, 40–64, 65+), each with how many studies it holds. The date opens
   one panel: shortcuts with their counts (today, yesterday, the last 7 or 30 days or 12 months,
-  this week, this or last month, this or last year), a From calendar and a To calendar, each on its own month (January
-  beside October), with the days that have studies dotted, and both ends typed (in the
-  browser's day, month, year order, or year first). Sortable columns (date first, then patient, study,
+  this week, this or last month, this or last year), and From and To fields, typed (in the browser's day, month, year
+  order, or year first) or picked on a small calendar under each (the days with studies
+  dotted). Sortable columns (date first, then patient, study,
   modality, series, images). A click on a row shows the
   study in the pane: the patient, its series as thumbnails (a click opens one), the patient's
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
