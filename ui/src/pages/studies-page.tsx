@@ -297,7 +297,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const visible = table.getRowModel().rows;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   // what the summary covers: the date range, and whether other filters narrow it
-  const scope = (dated ? spanName(span) : "All time") + (q || modalities.length || sexes.length || ages.length ? ", filtered" : "");
+  const narrowed = !!(q || modalities.length || sexes.length || ages.length);
+  const scope = dated ? spanName(span) + (narrowed ? ", filtered" : "") : narrowed ? "The studies filtered" : "Every study";
 
   // a page reached by ↑ or ↓: its first or last row
   useEffect(() => {
@@ -561,6 +562,7 @@ function shortcuts(): [string, Span][] {
     ["Yesterday", { from: day(y, m, d - 1), to: day(y, m, d - 1) }],
     ["This week", { from: day(y, m, monday), to: iso(t) }],
     ["This month", { from: day(y, m, 1), to: iso(t) }],
+    ["This year", { from: day(y, 0, 1), to: iso(t) }],
   ];
 }
 
@@ -680,7 +682,7 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
     onApply(s);
     setOpen(false);
   };
-  const picked = active ? shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] : "Any time";
+  const picked = active ? shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] : undefined;
   return (
     <Popover
       open={open}
@@ -713,7 +715,7 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[22rem] p-2">
+      <PopoverContent align="start" className="w-[26rem] p-2">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -721,12 +723,13 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
           }}
         >
           {/* the usual few, side by side, each with its studies */}
-          <div className="grid grid-cols-4 gap-1">
+          <div className="grid grid-cols-5 gap-1">
             {shortcuts().map(([label, s]) => (
               <button
                 key={label}
                 type="button"
-                onClick={() => apply(s)}
+                // the one chosen, clicked again, lets go: no date then
+                onClick={() => apply(picked === label ? { from: "", to: "" } : s)}
                 className={cn(
                   "flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-xs transition-colors hover:bg-accent",
                   picked === label && "border-selection/40 bg-selection-soft text-selection hover:bg-selection-soft",
@@ -968,7 +971,7 @@ function ArchiveSummary({ summary, scope, total, onPick }: { summary: StudySumma
       <div className="px-5 pt-5 pb-4">
         <div className="font-semibold">{scope}</div>
         <div className="text-xs text-muted-foreground">
-          {summary.studies === total ? `Every study in the archive` : `${plural(summary.studies, "study", "studies")} of ${total.toLocaleString()} in the archive`}
+          {summary.studies === total ? `${plural(total, "study", "studies")} in the archive` : `${plural(summary.studies, "study", "studies")} of ${total.toLocaleString()} in the archive`}
         </div>
       </div>
       <section className="grid grid-cols-2 gap-px border-t bg-border">
