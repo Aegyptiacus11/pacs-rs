@@ -1773,6 +1773,7 @@ dependencies = [
  "dicom-ul",
  "pacs-archive",
  "pacs-core",
+ "pacs-deid",
  "pacs-index",
  "pacs-store",
  "serde_json",

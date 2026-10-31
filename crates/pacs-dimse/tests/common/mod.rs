@@ -44,6 +44,14 @@ pub async fn start(config: Config, archive: Archive) -> SocketAddr {
     addr
 }
 
+/// Serve `scp` on 127.0.0.1, on a port of the system's choosing.
+pub async fn start_scp(scp: Scp) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(Arc::new(scp).serve(listener, std::future::pending()));
+    addr
+}
+
 /// The data set of a Part 10 file: what follows the preamble, "DICM" and group 0002.
 pub fn data_set(file: &[u8]) -> Vec<u8> {
     assert_eq!(&file[128..132], b"DICM");

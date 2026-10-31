@@ -62,6 +62,11 @@ impl Status {
     /// Error: Cannot understand (Cxxx): the UIDs contradict what the archive holds (an
     /// instance or series already stored under another series or study).
     pub const CANNOT_UNDERSTAND_CONFLICT: Status = Status(0xC002);
+    /// Error: Cannot understand (Cxxx): sent to a project whose profile quarantines it (it may
+    /// carry identification that cannot be removed), with no quarantine to keep it in.
+    pub const CANNOT_UNDERSTAND_QUARANTINED: Status = Status(0xC003);
+    /// Error: Cannot understand (Cxxx): the project could not de-identify it.
+    pub const CANNOT_UNDERSTAND_DEIDENTIFICATION: Status = Status(0xC004);
 
     /// The class this code is in, by the convention of PS3.7 Annex C.
     pub fn class(self) -> StatusClass {

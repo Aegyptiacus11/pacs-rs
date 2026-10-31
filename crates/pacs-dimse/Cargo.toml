@@ -1,6 +1,6 @@
 [package]
 name = "pacs-dimse"
-description = "DIMSE for pacs-rs: C-ECHO and C-STORE over the DICOM Upper Layer"
+description = "DIMSE for pacs-rs: C-ECHO, C-STORE, C-FIND and C-MOVE over the DICOM Upper Layer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,8 @@ dicom-json.workspace = true
 dicom-transfer-syntax-registry.workspace = true
 dicom-ul.workspace = true
 pacs-archive.workspace = true
+pacs-deid.workspace = true
+pacs-store.workspace = true
 thiserror.workspace = true
 pacs-core.workspace = true
 serde_json.workspace = true
@@ -26,5 +28,4 @@ tracing.workspace = true
 [dev-dependencies]
 pacs-core = { workspace = true, features = ["synthetic"] }
 pacs-index.workspace = true
-pacs-store.workspace = true
 tempfile.workspace = true

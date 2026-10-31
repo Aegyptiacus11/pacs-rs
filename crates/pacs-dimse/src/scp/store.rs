@@ -2,12 +2,15 @@
 //! against its request, and handed to its [`Destination`] with the statuses of PS3.4 Table
 //! B.2-1.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use pacs_archive::{Archive, IngestError};
 
 use super::Request;
 use crate::command::{Command, tag};
 use crate::message::DataSet;
+use crate::project::{Project, ProjectError};
 use crate::status::Status;
 use crate::{IMPLEMENTATION_CLASS_UID, IMPLEMENTATION_VERSION_NAME};
 
@@ -17,14 +20,30 @@ pub enum Destination {
     /// Into the archive, exactly as a REST or STOW-RS upload: compressed, stored, indexed;
     /// an instance sent again is kept as first stored unless overwriting is on.
     Archive(Archive),
-    // Research mode (docs/interop.md, step 5) adds a staging destination here: instances
-    // kept apart, never indexed or served, de-identified, and only then ingested.
+    /// De-identified by a project's profile first ([`Project`]); only the result is
+    /// archived.
+    Project(Arc<Project>),
+}
+
+/// Why a destination did not take an instance.
+enum Refusal {
+    Ingest(IngestError),
+    Project(ProjectError),
 }
 
 impl Destination {
-    async fn store(&self, file: Bytes) -> Result<(), IngestError> {
+    async fn store(&self, file: Bytes) -> Result<(), Refusal> {
         match self {
-            Destination::Archive(archive) => archive.ingest(file).await.map(|_| ()),
+            Destination::Archive(archive) => archive
+                .ingest(file)
+                .await
+                .map(|_| ())
+                .map_err(Refusal::Ingest),
+            Destination::Project(project) => match project.receive(file).await {
+                Ok(_) => Ok(()),
+                Err(ProjectError::Ingest(e)) => Err(Refusal::Ingest(e)),
+                Err(e) => Err(Refusal::Project(e)),
+            },
         }
     }
 }
@@ -83,26 +102,43 @@ pub(super) async fn store(
     }
     match destination.store(Bytes::from(file)).await {
         // PS3.4 B.2.2: Success means the instance is stored. One sent again is: the copy
-        // kept is the first (or the new one, with overwriting on), as for a REST upload.
+        // kept is the first (or the new one, with overwriting on), as for a REST upload. An
+        // instance a project quarantines is stored too, in its quarantine.
         Ok(()) => (Status::SUCCESS, None),
-        Err(IngestError::Invalid(e)) => (Status::CANNOT_UNDERSTAND, Some(e.to_string())),
-        Err(e @ (IngestError::Conflict(_) | IngestError::WrongStudy { .. })) => {
+        Err(Refusal::Ingest(IngestError::Invalid(e))) => {
+            (Status::CANNOT_UNDERSTAND, Some(e.to_string()))
+        }
+        Err(Refusal::Ingest(e @ (IngestError::Conflict(_) | IngestError::WrongStudy { .. }))) => {
             (Status::CANNOT_UNDERSTAND_CONFLICT, Some(e.to_string()))
         }
-        Err(IngestError::Store(e)) => {
+        Err(Refusal::Ingest(IngestError::Store(e))) => {
             tracing::error!(error = %e, sop_instance, "C-STORE: the store refused the file");
             (
                 Status::OUT_OF_RESOURCES_STORE,
                 Some("the store refused the file".into()),
             )
         }
-        Err(IngestError::Index(e)) => {
+        Err(Refusal::Ingest(IngestError::Index(e))) => {
             tracing::error!(error = %e, sop_instance, "C-STORE: the index refused the instance");
             (
                 Status::OUT_OF_RESOURCES_INDEX,
                 Some("the index refused the instance".into()),
             )
         }
+        Err(Refusal::Project(e @ ProjectError::Refused(_))) => {
+            (Status::CANNOT_UNDERSTAND_QUARANTINED, Some(e.to_string()))
+        }
+        Err(Refusal::Project(e @ ProjectError::Quarantine(_))) => {
+            tracing::error!(error = %e, sop_instance, "C-STORE: the quarantine refused the file");
+            (
+                Status::OUT_OF_RESOURCES_STORE,
+                Some("the quarantine store refused the file".into()),
+            )
+        }
+        Err(Refusal::Project(e)) => (
+            Status::CANNOT_UNDERSTAND_DEIDENTIFICATION,
+            Some(e.to_string()),
+        ),
     }
 }
 

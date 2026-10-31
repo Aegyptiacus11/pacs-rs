@@ -35,6 +35,8 @@ use crate::{Config, VERIFICATION};
 pub struct Scp {
     config: Config,
     destination: Destination,
+    /// Further called AE titles with destinations of their own (projects).
+    routes: Vec<(AeTitle, Destination)>,
     slots: Arc<Semaphore>,
 }
 
@@ -44,18 +46,29 @@ impl Scp {
         Scp {
             config,
             destination,
+            routes: Vec::new(),
             slots,
         }
+    }
+
+    /// Accept `ae_title` too, its instances going to `destination`.
+    pub fn with_route(mut self, ae_title: AeTitle, destination: Destination) -> Self {
+        self.routes.push((ae_title, destination));
+        self
     }
 
     pub fn config(&self) -> &Config {
         &self.config
     }
 
-    /// Where instances sent to `called_ae_title` go. Every accepted title goes to the same
-    /// destination today; research and clinical mode will split them here.
-    pub fn destination(&self, _called_ae_title: &str) -> &Destination {
-        &self.destination
+    /// Where instances sent to `called_ae_title` go: its route's destination, else the
+    /// default one, for pacs-rs's own AE title and the extra ones.
+    pub fn destination(&self, called_ae_title: &str) -> &Destination {
+        self.routes
+            .iter()
+            .find(|(title, _)| title.matches(called_ae_title))
+            .map(|(_, d)| d)
+            .unwrap_or(&self.destination)
     }
 
     fn options(
@@ -64,6 +77,7 @@ impl Scp {
     {
         let mut accepted = vec![self.config.ae_title.clone()];
         accepted.extend(self.config.extra_ae_titles.iter().cloned());
+        accepted.extend(self.routes.iter().map(|(title, _)| title.clone()));
         let callers = self.config.known_callers_only.then(|| {
             self.config
                 .remotes
