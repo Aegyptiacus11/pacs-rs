@@ -115,7 +115,8 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:
   a filter box (`/`), the date, the modality (every DICOM imaging modality), the sex and the age
   at the study (0–17, 18–39, 40–64, 65+), each with how many studies it holds. The date opens
-  a small panel: today, yesterday, this week and this month, each with its studies, and From
+  a small panel: today, yesterday, this week, this month and this year, each with its studies
+  (clicked again, it lets go), and From
   and To fields, typed (in the browser's day, month, year order, or year first) or picked on a
   small calendar under each (the days with studies dotted). Sortable columns (date first, then patient, study,
   modality, series, images). A click on a row shows the
@@ -124,7 +125,7 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
   study or the patient. A double click or Enter opens it; ↑ ↓
   move through the list. With no study chosen, the pane sums up what the list holds, for the
-  date range and filters chosen (patients, studies, series, images, studies by modality, the
+  dates and filters chosen (patients, studies, series, images, studies by modality, the
   last received). Fifty studies a page: the footer says how many the list holds (1–50
   of 1,234 studies) with Previous and Next, and ↑ ↓ go on to the next or previous page. The server filters, sorts, counts and pages the list
   (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
