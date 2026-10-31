@@ -109,10 +109,10 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a rail down the left side (Studies, Patients, Upload; light or dark at the
+- **Layout**: a rail down the left side (Studies, Patients; light or dark at the
   bottom, and a warning when the server doesn't answer), the page beside it.
-- **Studies**: a worklist and, beside it, the chosen study. Date presets with counts (today, 7
-  days, 30 days, 12 months) and a range of one's own (shortcuts such as last week or last year, two
+- **Studies**: a worklist and, beside it, the chosen study. Over the table, under the search: date presets with counts
+  (today, 7 days, 30 days, 1 year) and a range of one's own (shortcuts such as last week or last year, two
   months to click the first and last day on, with the days that have studies dotted, or both
   ends typed), search, modality (every DICOM imaging modality) and sex filters,
   sortable columns (patient, study, modality, date, series, images). A click on a row shows the
