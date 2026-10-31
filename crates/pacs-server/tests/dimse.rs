@@ -1,5 +1,5 @@
-//! The DIMSE side as pacs-server runs it: its settings, and an instance received by C-STORE
-//! showing in the REST API and the web interface's list.
+//! The DIMSE side as pacs-server runs it: its settings, the `/modalities` routes, and an
+//! instance received by C-STORE showing in the REST API and the web interface's list.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -14,7 +14,7 @@ use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::command::{Command, PRIORITY_MEDIUM, field, tag};
 use pacs_dimse::message::{self, Incoming};
 use pacs_server::{Settings, app, dimse_config, open_archive, serve_dimse};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const CT: &str = "1.2.840.10008.5.1.4.1.1.2";
@@ -107,6 +107,68 @@ fn dimse_settings_are_read_and_checked() {
     assert!(dimse_config(&twice).is_err());
     let none = parse(&["--dimse-max-associations", "0"]).unwrap();
     assert!(dimse_config(&none).is_err());
+}
+
+#[tokio::test]
+async fn modalities_lists_the_remote_aes() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            "hospital=HOSP_PACS@10.0.0.5:104,ws=WS1@ws.local:11112",
+        ],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    assert_eq!(
+        get(&app, "/modalities").await,
+        (StatusCode::OK, json!(["hospital", "ws"]))
+    );
+    let (status, expanded) = get(&app, "/modalities?expand").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        expanded["hospital"],
+        json!({"AET": "HOSP_PACS", "Host": "10.0.0.5", "Port": 104})
+    );
+}
+
+/// `POST /modalities/{id}/echo`: 200 when the remote AE answers, 502 when it cannot be
+/// reached, 404 for an id that is not configured.
+#[tokio::test]
+async fn echo_tests_the_link_to_a_remote_ae() {
+    let dir = tempfile::tempdir().unwrap();
+    let peer = start_dimse(&settings_in(dir.path(), &["--dimse-ae-title", "PEER"])).await;
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let remotes = format!(
+        "peer=PEER@127.0.0.1:{},gone=GONE@127.0.0.1:{}",
+        peer.port(),
+        closed.port()
+    );
+    let other = tempfile::tempdir().unwrap();
+    let settings = settings_in(
+        other.path(),
+        &["--dimse-remotes", &remotes, "--dimse-timeout", "2"],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let echo = |id: &str| {
+        Request::post(format!("/modalities/{id}/echo"))
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let (status, body) = send(&app, echo("peer")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["Status"], "Success");
+    assert_eq!(body["AET"], "PEER");
+
+    let (status, body) = send(&app, echo("gone")).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["Message"], "C-ECHO to gone failed");
+
+    assert_eq!(send(&app, echo("nobody")).await.0, StatusCode::NOT_FOUND);
 }
 
 /// C-STORE goes into the same archive the HTTP side serves: the study is in `/studies`

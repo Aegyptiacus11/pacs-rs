@@ -21,6 +21,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod annotations;
+mod modalities;
 mod protocols;
 mod ui;
 mod worklist;
@@ -328,7 +329,8 @@ pub fn without_password(url: &str) -> String {
     }
 }
 
-/// The whole HTTP application: `/healthz`, the REST API at `/`, DICOMweb under
+/// The whole HTTP application: `/healthz`, the REST API at `/` (with the remote AEs at
+/// `/modalities`), DICOMweb under
 /// `dicomweb_path` and, unless turned off, the web interface at `/ui/` with its shared
 /// hanging protocols at `/ui/api/protocols`, the viewer's measurements at
 /// `/ui/api/annotations` and the paged study list at `/ui/api/studies`.
@@ -337,7 +339,8 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     if path == "/" {
         bail!("the DICOMweb path cannot be /: the REST API is served there");
     }
-    let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes);
+    let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes)
+        .merge(modalities::router(dimse_config(settings)?));
     let index = archive.index().clone();
     let dicomweb = pacs_dicomweb::router(
         archive,
