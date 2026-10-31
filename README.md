@@ -90,7 +90,8 @@ DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gi
 | `GET /modalities[?expand]` | the remote AEs of `PACS_DIMSE_REMOTES`: their ids, or each one's `AET`, `Host` and `Port` |
 | `POST /modalities/{id}/echo` | a C-ECHO to that AE: 200 with `Status` and `ElapsedMs` when it answers Success, 502 with the reason when not |
 | `GET /modalities/{id}/studies?PatientID=&PatientName=&AccessionNumber=&StudyDate=&ModalitiesInStudy=&limit=` | that AE's studies, by C-FIND (see "DIMSE"), as a DICOM JSON array |
-| `POST /modalities/{id}/move` (`{"StudyInstanceUID": "..."}` or a list) | that AE sends the studies to pacs-rs by C-MOVE; the final status and counts |
+| `POST /modalities/{id}/move` (`{"StudyInstanceUID": "..."}` or a list) | that AE sends the studies to pacs-rs by C-MOVE; the final status and counts, or with `"Asynchronous": true` a job |
+| `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` | the moves running in the background: state, progress and counts as they come; cancel sends C-CANCEL |
 
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
 then the files, so the index never names a missing file. A file that cannot be removed is
@@ -131,7 +132,11 @@ hospital's PACS and de-identifies them on ingest:
   counts. 502 when the remote AE fails, saying when it does not know pacs-rs as a destination
   (status A801: register pacs-rs's AE title, host and port there); 409 when pacs-rs is not
   listening for DIMSE; a `Warning` header when the remote AE sent nothing, as it does for a
-  study it does not have.
+  study it does not have. With `"Asynchronous": true` it answers 202 at once with a job:
+  `GET /jobs/{id}` shows `State` (`Running`, `Success`, `Warning`, `Cancelled`, `Failure`),
+  `Progress` in percent and the Remaining, Completed, Failed and Warning counts of the latest
+  Pending response; `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ with the next one. Jobs are
+  kept in memory, the latest hundred finished ones with them; a restart forgets them.
 - **C-STORE SCP** for the 173 Storage SOP Classes of PS3.4 Table B.5-1 (DICOM 2026d), in any
   transfer syntax dicom-rs reads. Each data set is kept in the transfer syntax it came in, with
   file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
@@ -161,8 +166,8 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`) and pynetdicom 3.0.4,
 both ways (see "Building"); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`. Not yet:
-Patient Root, C-GET, de-identification on ingest, TLS, C-STORE SCU; a move answers only when it
-is over, without progress on the way. The order is in [docs/interop.md](docs/interop.md).
+Patient Root, C-GET, de-identification on ingest, TLS, C-STORE SCU. The order is in
+[docs/interop.md](docs/interop.md).
 
 ## Web interface
 
