@@ -67,7 +67,10 @@ async fn the_echo_scu_reports_a_rejection() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, pacs_dimse::EchoError::Association { .. }),
+        matches!(
+            error,
+            pacs_dimse::EchoError::Connect(pacs_dimse::ConnectError::Association { .. })
+        ),
         "{error}"
     );
 }

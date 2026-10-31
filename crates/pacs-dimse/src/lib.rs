@@ -17,8 +17,14 @@ pub mod status;
 
 pub use ae::{AeError, AeTitle, RemoteAe};
 pub use scp::{Destination, Scp};
-pub use scu::{EchoError, echo};
+pub use scu::{ConnectError, EchoError, echo};
 pub use status::{Status, StatusClass};
+
+/// Implicit VR Little Endian, the default transfer syntax every AE accepts (PS3.5 10.1).
+pub const IMPLICIT_VR_LE: &str = "1.2.840.10008.1.2";
+
+/// Explicit VR Little Endian (PS3.5 A.2).
+pub const EXPLICIT_VR_LE: &str = "1.2.840.10008.1.2.1";
 
 /// The Verification SOP Class (PS3.4 A.4).
 pub const VERIFICATION: &str = "1.2.840.10008.1.1";
