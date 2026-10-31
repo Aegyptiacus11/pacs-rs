@@ -410,7 +410,14 @@ async fn the_study_list_comes_a_page_at_a_time() {
     assert_eq!(json(body)["Total"], 0);
 
     let (_, _, body) = call(&app, get("/ui/api/studies/facets")).await;
-    assert_eq!(json(body)["Modalities"]["CT"], 3);
+    let facets = json(body);
+    assert_eq!(facets["Modalities"]["CT"], 3);
+    // synthetic patients, born 1970, scanned in 2026
+    assert_eq!(facets["Ages"]["56"], 3);
+    let (_, _, body) = call(&app, get("/ui/api/studies?age=40-64")).await;
+    assert_eq!(json(body)["Total"], 3);
+    let (_, _, body) = call(&app, get("/ui/api/studies?age=0-17,65-")).await;
+    assert_eq!(json(body)["Total"], 0);
 
     for bad in [
         "sort=size",
@@ -419,6 +426,8 @@ async fn the_study_list_comes_a_page_at_a_time() {
         "limit=1001",
         "offset=-1",
         "from=2026-01-01",
+        "age=old",
+        "age=a-b",
     ] {
         let (status, _, _) = call(&app, get(&format!("/ui/api/studies?{bad}"))).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
