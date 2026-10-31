@@ -5,6 +5,8 @@
 //!   study description, the referring physician or the date;
 //! - `from`, `to`: study dates, `YYYYMMDD`, both included;
 //! - `modality`, `sex`: comma-separated choices (`sex=O` for anything but F and M);
+//! - `age`: the patient's age at the study, comma-separated ranges of whole years, both ends
+//!   included, either left open (`0-17,65-`);
 //! - `patient`: one patient's studies, by public ID;
 //! - `sort`: `patient`, `description`, `modality`, `date` (the default), `series`, `images`
 //!   or `received`; `order`: `asc` or `desc` (the default);
@@ -14,7 +16,7 @@
 //! The answer: `{"Total", "Studies": [...], "Summary"?}`, each study with its ID, its
 //! patient's, its and its patient's main tags, modalities, series and image counts and when it
 //! last received an image. `/ui/api/studies/facets[?patient=]` gives what the filters can
-//! choose, with how many studies each has: `{"Modalities", "Sexes", "Dates"}`.
+//! choose, with how many studies each has: `{"Modalities", "Sexes", "Dates", "Ages"}`.
 //!
 //! `/ui/api/patients` lists the patients the same way: `q` (words in the name or Patient ID),
 //! `sort` (`name`, `last`: the latest study, the default, or `studies`), `order`, `offset`,
@@ -46,6 +48,7 @@ struct Params {
     to: Option<String>,
     modality: String,
     sex: String,
+    age: String,
     patient: Option<String>,
     sort: Option<String>,
     order: Option<String>,
@@ -59,6 +62,31 @@ fn list(text: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
+        .collect()
+}
+
+/// Ranges of years, both ends included, either open.
+type AgeRanges = Vec<(Option<i64>, Option<i64>)>;
+
+/// `0-17,18-39,65-`: ranges of years, either end open.
+fn ages(text: &str) -> Result<AgeRanges, &'static str> {
+    let end = |t: &str| -> Result<Option<i64>, &'static str> {
+        match t.trim() {
+            "" => Ok(None),
+            n => n
+                .parse::<i64>()
+                .map(Some)
+                .map_err(|_| "age is ranges of years: 0-17,65-"),
+        }
+    };
+    list(text)
+        .iter()
+        .map(|range| {
+            let (from, to) = range
+                .split_once('-')
+                .ok_or("age is ranges of years: 0-17,65-")?;
+            Ok((end(from)?, end(to)?))
+        })
         .collect()
 }
 
@@ -100,6 +128,7 @@ fn query(p: Params) -> Result<(WorklistQuery, bool), &'static str> {
             to: date(p.to)?,
             modalities: list(&p.modality),
             sexes: list(&p.sex),
+            ages: ages(&p.age)?,
             patient: p.patient.filter(|s| !s.is_empty()),
             sort,
             descending,
@@ -195,6 +224,7 @@ async fn facets(State(index): State<Index>, Query(p): Query<FacetParams>) -> Res
                 "Modalities": counts(f.modalities),
                 "Sexes": counts(f.sexes),
                 "Dates": counts(f.dates),
+                "Ages": counts(f.ages),
             })),
         )
             .into_response(),
