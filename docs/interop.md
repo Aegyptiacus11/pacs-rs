@@ -1,79 +1,99 @@
 # Hospital interfaces: the plan
 
-Not built yet. pacs-rs speaks DICOMweb and its REST API today; this is what a PACS needs besides
-them in a hospital, and the rule each part follows.
+Not built yet. pacs-rs speaks DICOMweb and its REST API today. Next to Quorum it is a **research PACS**
+beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies them when the project
+asks for it, and serves Quorum. It does not replace the clinical PACS.
 
-Sources, checked on 2026-10-31: DICOM 2026d (PS3.2, PS3.4, PS3.7, PS3.15) and the IHE Radiology
-Technical Framework, Revision 23.0 (8 August 2025), with its supplements. Behaviour is tested
-against DCMTK, dcm4che and pynetdicom. Other Rust code, such as
-[segganeadel/dicom-rs-net](https://github.com/segganeadel/dicom-rs-net), is an example to read,
-never a source for behaviour.
+Sources, checked on 2026-10-31: DICOM 2026d (PS3.2, PS3.4, PS3.7, PS3.15) and the IHE Radiology Technical
+Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK, dcm4che and pynetdicom. Other
+Rust code, such as [segganeadel/dicom-rs-net](https://github.com/segganeadel/dicom-rs-net), is an example
+to read, never a source for behaviour.
 
-## What the standards require
+## The role
 
-IHE Scheduled Workflow.b (RAD TF-1: 34) gives the Image Manager/Image Archive these required
-transactions:
+```
+hospital PACS --C-FIND / C-MOVE--> pacs-rs staging --de-identify--> pacs-rs archive --> Quorum
+(read-only source)                 (identified, never served)       (what readers see)
+```
 
-| Transaction | How | In pacs-rs |
-|---|---|---|
-| Modality Images Stored [RAD-8], Creator Images Stored [RAD-18] | DICOM C-STORE SCP | STOW-RS and REST upload only |
-| Query Images [RAD-14], Images Availability Query [RAD-11] | C-FIND SCP | QIDO-RS only |
-| Retrieve Images [RAD-16] | C-MOVE SCP | WADO-RS only |
-| Storage Commitment [RAD-10] | N-ACTION, N-EVENT-REPORT (PS3.4 J.3) | no |
-| Modality and Creator Procedure Step [RAD-6, -7, -20, -21] | MPPS: N-CREATE, N-SET (PS3.4 F.7) | no |
-| Procedure Scheduled [RAD-4], Procedure Update [RAD-13] | HL7 v2 orders over MLLP | no |
-| Patient Update [RAD-12] | HL7 v2 ADT over MLLP (A08 update, A40 merge) | no |
+- **Research mode** (the default): every study is de-identified on ingest; only the de-identified copy is
+  stored and served.
+- **Clinical mode**: identified studies inside the hospital; results may go back to the hospital PACS.
 
-Optional there: Instance Availability Notification [RAD-49] (PS3.4 Annex R), Performed Work
-Status Update [RAD-42].
+The hospital PACS stays read-only for pacs-rs, except for a clinical-mode write-back to a destination the
+hospital names.
 
-So **HL7 v2 is required**: it is how the archive learns the orders (accession numbers) and the
-patient corrections and merges, which it must apply to what it already stores.
+## Build order
 
-**FHIR is not required** by Scheduled Workflow.b. It appears in Trial Implementation supplements:
-MADO builds its manifest on the FHIR R4 ImagingStudy resource, and Results Distribution and
-Encounter-Based Imaging Workflow use FHIR in part. ImagingStudy is trial-use in FHIR R5. pacs-rs
-offers a read-only ImagingStudy endpoint whose Endpoint points at its DICOMweb, and no more until
-a site asks.
+1. **C-ECHO**, SCU and SCP (PS3.7 9.1.5): test the link both ways.
+2. **C-STORE SCP** (PS3.4 Annex B; statuses B.2.3): receives what a C-MOVE sends, and what a workstation
+   pushes. Ingest goes through `pacs-archive` like a REST upload, into staging in research mode.
+3. **C-FIND SCU** (PS3.4 C.4.1.2): Study Root first, then Patient Root; by Patient ID, Accession Number,
+   Study Date range and Modality; the pending responses fill a result list as they arrive; C-CANCEL when
+   the user stops.
+4. **C-MOVE SCU** (PS3.4 C.4.2.2) with pacs-rs's own AE title as the destination; progress from the
+   pending responses' Remaining, Completed, Failed and Warning counts. **C-GET SCU** (PS3.4 C.4.3.2) where
+   the hospital supports it, with SCP/SCU Role Selection for the storage SOP classes (PS3.7 D.3.3.4). When
+   the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP.
+5. **De-identification on ingest** (research mode), below.
+6. **TLS** on associations, and the configuration of remote AEs (title, host, port) and pacs-rs's own,
+   following PS3.15 H.1.
+7. **Write-back** (clinical mode only): Quorum's masks as DICOM Segmentation and measurements as Structured
+   Reports, sent by C-STORE SCU to the hospital's destination. Never in research mode: the de-identified
+   UIDs no longer match the hospital's.
+8. **Later**: the SCP side of query/retrieve, so viewers and workstations can query pacs-rs (rules below);
+   then the Conformance Statement (PS3.2), kept current from the first DIMSE release.
 
-Deletion and rejection of stored instances follow the IOCM supplement (rejection notes), which
-the current REST deletion does not yet.
+Patient lists from the hospital's records system (HL7 v2 or FHIR Patient and ImagingStudy) are optional, for
+a site that wants them pushed; a C-FIND by Accession Number or Patient ID covers the usual request.
 
-## DIMSE rules
+## De-identification
 
-- **C-FIND** (PS3.4 C.4.1.3.1): one Pending response per match, each with a single match's
-  values; a C-CANCEL interrupts the matching and ends with status Cancel. Matches stream from
-  an index cursor, never collected first.
-- **Matching** (PS3.4 C.2.2.2): single value, list of UID, universal, wildcard, range, sequence,
-  empty value and multiple value matching. One matcher serves C-FIND, QIDO-RS and `/tools/find`.
+- The Basic Application Level Confidentiality Profile (PS3.15 E.2), with the options a project's approval
+  allows, chosen per project and recorded with it: Retain Longitudinal Temporal Information With Modified
+  Dates (E.3.6, dates shifted per patient so intervals survive), Clean Descriptors (E.3.5), Retain Patient
+  Characteristics (E.3.7, such as sex and age), Retain Device Identity (E.3.8, such as scanner model).
+- UIDs replaced consistently, so series and studies stay linked; one pseudonym per patient per project.
+- Patient Identity Removed (0012,0062) set to YES and the De-identification Method Code Sequence
+  (0012,0064) filled with the profile and options used (E.1.1).
+- Clean Pixel Data (E.3.1): instances that may carry burned-in text (Burned In Annotation YES, secondary
+  captures, dose screens) are refused unless cleaned.
+- The re-identification key (E.1.2) is either kept encrypted and readable by one honest-broker role, or not
+  kept at all. The project's ethics approval decides which.
+- Staging is deleted once a study is de-identified; the identified copy is never indexed or served.
+- Tested on the MIDI-B challenge's validation data (Data in Support of the MIDI-B Challenge,
+  doi:10.7937/cf2p-aw56), whose answer key scores every required action, and against the action codes of
+  PS3.15 Table E.1-1.
+
+## Rules for the SCP side (step 8)
+
+- **C-FIND** (PS3.4 C.4.1.3.1): one Pending response per match, each with a single match's values; a
+  C-CANCEL interrupts the matching and ends with status Cancel. Matches stream from an index cursor.
+- **Matching** (PS3.4 C.2.2.2): single value, list of UID, universal, wildcard, range, sequence, empty value
+  and multiple value matching. One matcher serves C-FIND, QIDO-RS and `/tools/find`.
 - **Information models** (PS3.4 C.6): Patient Root and Study Root; Patient/Study Only is retired.
-- **C-MOVE** (PS3.4 C.4.2.3.1): Pending responses during the C-STORE sub-operations carry the
-  Remaining, Completed, Failed and Warning counts; the final one is Success, Warning or Failure.
-- **C-GET** (PS3.4 C.4.3.3.1): the C-STORE sub-operations run on the same association; the
-  storage SOP classes are negotiated with SCP/SCU Role Selection (PS3.7 D.3.3.4).
-- **C-STORE** statuses and conformance: PS3.4 B.2.3 and B.4.
-- **Configuration**: devices, network AEs and connections as in PS3.15 H.1.
-- **Conformance Statement** (PS3.2) once the first DIMSE service ships.
+- **C-MOVE** (PS3.4 C.4.2.3.1): Pending responses carry the Remaining, Completed, Failed and Warning counts;
+  the final one is Success, Warning or Failure.
+- **C-GET** (PS3.4 C.4.3.3.1): the C-STORE sub-operations run on the same association; role selection as
+  above.
 
 ## What dicom-ul 0.10 already gives
 
-Async and TLS associations (features `async`, `async-tls`), a custom `AccessControl`, the called
-AE title of an established association, SCP/SCU role selection, and custom negotiation. Several
-AE titles on one port therefore work when they share one set of presentation contexts: accept
-the configured titles, then route by called AE title. Separate capabilities per AE would need
-the A-ASSOCIATE-RQ before negotiation, which dicom-ul 0.10 does not offer; nothing here needs it.
+Async and TLS associations (features `async`, `async-tls`), client and server; a custom `AccessControl`;
+the called AE title of an established association; SCP/SCU role selection; custom negotiation. Several AE
+titles on one port work when they share one set of presentation contexts; separate capabilities per AE
+would need the A-ASSOCIATE-RQ before negotiation, which dicom-ul 0.10 does not offer and nothing here needs.
 
-## Order
+## What a site has to do
 
-1. C-ECHO and C-STORE SCP, through `pacs-archive` ingest like a REST upload.
-2. The shared matcher, then the C-FIND SCP.
-3. C-MOVE SCP with configured destinations, then C-GET.
-4. Storage Commitment.
-5. HL7 v2 over MLLP: ADT updates and merges applied to the index and stored headers; orders
-   giving accession numbers.
-6. MPPS.
-7. FHIR ImagingStudy, read-only.
-8. The Conformance Statement, kept current from then on.
+- Register pacs-rs's AE title, host and port on its PACS as a C-MOVE destination, and open the firewall
+  between them.
+- Agree the mode and, for research mode, the de-identification options and whether a key is kept, in the
+  project's ethics or data-protection approval.
 
-Each rule above gets a test, and each service an interop test against DCMTK, dcm4che and
-pynetdicom.
+## Not planned: replacing a clinical PACS
+
+A hospital's own archive is IHE Scheduled Workflow.b's Image Manager/Image Archive (RAD TF-1: 34). That would
+add HL7 v2 orders and patient updates over MLLP [RAD-4, -12, -13], Modality Performed Procedure Step
+[RAD-6, -7] (PS3.4 F.7), Storage Commitment [RAD-10] (PS3.4 J.3), Instance Availability Notification
+[RAD-49] (PS3.4 Annex R) and rejection notes for deletions (IOCM). None of it is needed beside Quorum.
