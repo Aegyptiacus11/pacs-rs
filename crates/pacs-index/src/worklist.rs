@@ -373,3 +373,123 @@ fn worklist_study(row: AnyRow) -> Result<WorklistStudy, Error> {
         last_ms: row.try_get("last_ms")?,
     })
 }
+
+/// The patients' list: words in the name or Patient ID, a page at a time.
+#[derive(Debug, Clone, Default)]
+pub struct PatientQuery {
+    pub words: Vec<String>,
+    pub sort: PatientSort,
+    pub descending: bool,
+    pub offset: i64,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PatientSort {
+    Name,
+    /// The date of the latest study.
+    #[default]
+    LastStudy,
+    Studies,
+}
+
+/// One patient of the list: their main tags (as a study of theirs brought them), how many
+/// studies and images, the modalities, the first and last study dates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorklistPatient {
+    pub public_id: String,
+    pub main_tags: Value,
+    pub studies: i64,
+    pub instances: i64,
+    pub modalities: Vec<String>,
+    pub first_study: Option<String>,
+    pub last_study: Option<String>,
+}
+
+impl Index {
+    fn patient_where(&self, query: &PatientQuery, sql: &mut Sql) -> String {
+        let mut and = vec!["st.public_id IS NOT NULL".to_owned()];
+        for word in query.words.iter().filter(|w| !w.is_empty()) {
+            let pattern = sql.text(like_escape(word));
+            and.push(format!(
+                "(lower(coalesce(st.patient_name, '')) LIKE {pattern} ESCAPE '\\'
+                  OR lower(coalesce(st.patient_id, '')) LIKE {pattern} ESCAPE '\\')"
+            ));
+        }
+        and.join(" AND ")
+    }
+
+    /// One page of patients, and how many patients the whole list has.
+    pub async fn worklist_patients(
+        &self,
+        query: &PatientQuery,
+    ) -> Result<(Vec<WorklistPatient>, i64), Error> {
+        let mut count = Sql::default();
+        let filter = self.patient_where(query, &mut count);
+        count.text = format!(
+            "SELECT count(DISTINCT st.patient_public_id) AS n FROM studies st WHERE {filter}"
+        );
+        let total: i64 = count.query().fetch_one(&self.pool).await?.try_get("n")?;
+
+        let mut sql = Sql::default();
+        let filter = self.patient_where(query, &mut sql);
+        let direction = if query.descending { "DESC" } else { "ASC" };
+        let key = match query.sort {
+            PatientSort::Name => "lower(max(st.patient_name))",
+            PatientSort::LastStudy => "last_study",
+            PatientSort::Studies => "studies",
+        };
+        let modalities = match self.dialect {
+            Dialect::Sqlite => {
+                "(SELECT group_concat(modality, char(92)) FROM
+                   (SELECT DISTINCT se.modality FROM series se
+                      JOIN studies s2 ON s2.study_instance_uid = se.study_instance_uid
+                     WHERE s2.patient_public_id = st.patient_public_id
+                       AND se.modality IS NOT NULL ORDER BY se.modality))"
+            }
+            Dialect::Postgres => {
+                "(SELECT string_agg(DISTINCT se.modality, chr(92) ORDER BY se.modality)
+                    FROM series se JOIN studies s2 ON s2.study_instance_uid = se.study_instance_uid
+                   WHERE s2.patient_public_id = st.patient_public_id)"
+            }
+        };
+        let limit = sql.arg(Arg::Int(query.limit.clamp(1, 1000)));
+        let offset = sql.arg(Arg::Int(query.offset.max(0)));
+        sql.text = format!(
+            "SELECT st.patient_public_id AS id, max(st.patient_main_tags) AS tags,
+                    count(*) AS studies,
+                    min(nullif(st.study_date, '')) AS first_study,
+                    max(nullif(st.study_date, '')) AS last_study,
+                    (SELECT count(*) FROM instances i JOIN series se USING (series_instance_uid)
+                       JOIN studies s2 ON s2.study_instance_uid = se.study_instance_uid
+                      WHERE s2.patient_public_id = st.patient_public_id) AS instances,
+                    {modalities} AS modalities
+               FROM studies st
+              WHERE {filter}
+              GROUP BY st.patient_public_id
+              ORDER BY {key} {direction} NULLS LAST, st.patient_public_id
+              LIMIT {limit} OFFSET {offset}"
+        );
+        let patients = sql
+            .query()
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let modalities: Option<String> = row.try_get("modalities")?;
+                Ok(WorklistPatient {
+                    public_id: row.try_get("id")?,
+                    main_tags: parse(row.try_get("tags")?)?,
+                    studies: row.try_get("studies")?,
+                    instances: row.try_get("instances")?,
+                    modalities: modalities
+                        .map(|m| m.split('\\').map(str::to_owned).collect())
+                        .unwrap_or_default(),
+                    first_study: row.try_get("first_study")?,
+                    last_study: row.try_get("last_study")?,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok((patients, total))
+    }
+}
