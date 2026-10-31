@@ -1,16 +1,16 @@
 // The frame around the pages. Down the left, the rail: the name and the two lists, icons over
-// their names like the viewer's toolbar. Along the top, the bar: the search (Ctrl K, ⌘K on a
-// Mac, or /) of the list shown, light or dark, and a warning when the server doesn't answer.
+// their names like the viewer's toolbar. Along the top, the bar: the search that finds a
+// patient or a study anywhere (Ctrl K, ⌘K on a Mac), light or dark, and a warning when the
+// server doesn't answer. / goes to the list's own filter.
 
 import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FileStack, Moon, Sun, Users, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { SearchBar } from "@/components/search-bar";
+import { GlobalSearch } from "@/components/search-bar";
 import { ROOT } from "@/lib/api";
-import { go, href, type Route } from "@/lib/route";
-import { setSearch, useSearch } from "@/lib/search";
+import { href, type Route } from "@/lib/route";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -99,13 +99,13 @@ export function AppRail({ route }: { route: Route }) {
 }
 
 export function AppHeader({ route }: { route: Route }) {
-  const page = route.page === "patients" ? "patients" : "studies";
-  const text = useSearch(page);
-  // Ctrl K (⌘K) or /: the search
+  // Ctrl K (⌘K): the bar's search; /: the list's filter
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || (e.key === "/" && !(e.target as HTMLElement).closest("input, textarea, [contenteditable]"))) {
-        const box = document.querySelector<HTMLInputElement>("[data-search]");
+      const k = e.key === "k" && (e.metaKey || e.ctrlKey);
+      const slash = e.key === "/" && !(e.target as HTMLElement).closest("input, textarea, [contenteditable]");
+      if (k || slash) {
+        const box = document.querySelector<HTMLInputElement>(k ? "[data-search]" : "[data-filter]") ?? document.querySelector<HTMLInputElement>("[data-search]");
         if (!box) return;
         e.preventDefault();
         box.focus();
@@ -118,15 +118,7 @@ export function AppHeader({ route }: { route: Route }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-card px-5">
       <span className="w-24 shrink-0 font-semibold tracking-tight">pacs-rs</span>
-      <SearchBar
-        key={page}
-        value={text}
-        onChange={(v) => setSearch(page, v)}
-        placeholder={page === "studies" ? "Search studies and patients: name, ID, accession, description…" : "Search patients: name or patient ID…"}
-        suggest={page === "studies"}
-        onPatient={(p) => go(href.patients(p.id))}
-        className="mx-auto w-full max-w-xl"
-      />
+      <GlobalSearch page={route.page === "patients" ? "patients" : "studies"} className="mx-auto w-full max-w-xl" />
       <div className="flex w-24 shrink-0 items-center justify-end gap-2">
         <ServerStatus />
         <ThemeToggle />
