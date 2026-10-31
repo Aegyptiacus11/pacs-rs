@@ -424,12 +424,30 @@ async fn the_study_list_comes_a_page_at_a_time() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 
+    // the patients, a page at a time
+    let (_, _, body) = call(&app, get("/ui/api/patients?limit=2&sort=name&order=asc")).await;
+    let patients = json(body);
+    assert_eq!(patients["Total"], 3);
+    assert_eq!(patients["Patients"].as_array().unwrap().len(), 2);
+    assert_eq!(patients["Patients"][0]["Studies"], 1);
+    assert_eq!(patients["Patients"][0]["Modalities"][0], "CT");
+    let (_, _, body) = call(&app, get("/ui/api/patients?q=syn85")).await;
+    assert_eq!(
+        json(body)["Patients"][0]["MainDicomTags"]["PatientID"],
+        "SYN85"
+    );
+    let (status, _, _) = call(&app, get("/ui/api/patients?sort=age")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     let settings = settings_in(dir.path(), &["--ui", "false"]);
     let without = app_again(&settings).await;
-    assert_eq!(
-        call(&without, get("/ui/api/studies")).await.0,
-        StatusCode::NOT_FOUND
-    );
+    for uri in ["/ui/api/studies", "/ui/api/patients"] {
+        assert_eq!(
+            call(&without, get(uri)).await.0,
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
 }
 
 async fn app_again(settings: &Settings) -> Router {
