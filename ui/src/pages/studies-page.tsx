@@ -61,14 +61,6 @@ import {
 } from "@/lib/studies";
 import { cn } from "@/lib/utils";
 
-const RANGES = [
-  ["any", "All", null],
-  ["today", "Today", 0],
-  ["7d", "7 days", 7],
-  ["30d", "30 days", 30],
-  ["1y", "1 year", 365],
-] as const;
-type Range = (typeof RANGES)[number][0];
 /** A custom range: ISO dates (yyyy-mm-dd) from the date fields, either end open. */
 type Span = { from: string; to: string };
 const key = (iso: string) => iso.replaceAll("-", "");
@@ -81,7 +73,6 @@ function spanLabel({ from, to }: Span) {
   if (from && to) return from === to ? formatDate(key(from)) : `${formatDate(key(from))} – ${formatDate(key(to))}`;
   return from ? `From ${formatDate(key(from))}` : `Until ${formatDate(key(to))}`;
 }
-const RANGE_NAMES: Record<Range, string> = { any: "All time", today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", "1y": "Last 12 months" };
 
 // age at the study, in whole years: the bands the filter offers
 const AGES: [string, string, string, number, number][] = [
@@ -91,15 +82,6 @@ const AGES: [string, string, string, number, number][] = [
   ["65-", "65+", "", 65, Infinity],
 ];
 const SEXES: Record<string, string> = { F: "Female", M: "Male", O: "Other" };
-
-function sinceFor(range: Range) {
-  const days = RANGES.find(([k]) => k === range)?.[2];
-  if (days == null) return null;
-  const since = new Date();
-  since.setHours(0, 0, 0, 0);
-  since.setDate(since.getDate() - days);
-  return since;
-}
 
 // a study opens as its hanging protocol lays it out; a series, on its own
 function openStudy(id: string, seriesId?: string) {
@@ -128,11 +110,9 @@ function SortHeader({ column, children, className }: { column: any; children: Re
 const SORT_KEYS: Record<string, StudyQuery["sort"]> = { name: "patient", description: "description", modality: "modality", date: "date", series: "series", instances: "images" };
 const ymd = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 
-/** The dates a range keeps, `YYYYMMDD`, either end open. */
-function rangeDates(range: Range | "custom", span: Span): { from: string | null; to: string | null } {
-  if (range === "custom") return { from: span.from ? key(span.from) : null, to: span.to ? key(span.to) : null };
-  const since = sinceFor(range);
-  return { from: since ? ymd(since) : null, to: null };
+/** The dates a span keeps, `YYYYMMDD`, either end open. */
+function spanDates(span: Span): { from: string | null; to: string | null } {
+  return { from: span.from ? key(span.from) : null, to: span.to ? key(span.to) : null };
 }
 
 export function StudiesPage({ patient, open }: { patient: string | null; open: string | null }) {
@@ -141,7 +121,6 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [typed, setTyped] = useState("");
   const [q, setQ] = useState("");
   const [modalities, setModalities] = useState<string[]>([]);
-  const [range, setRange] = useState<Range | "custom">("any");
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
   const [sexes, setSexes] = useState<string[]>([]);
   const [ages, setAges] = useState<string[]>([]);
@@ -176,7 +155,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     return () => clearTimeout(t);
   }, [typed]);
 
-  const filters: StudyFilters = { q, ...rangeDates(range, span), modalities, sexes, ages, patient };
+  const filters: StudyFilters = { q, ...spanDates(span), modalities, sexes, ages, patient };
   const filterKey = JSON.stringify(filters);
   const sort = sorting[0] ?? { id: "date", desc: true };
   // other filters or another order: back to the first page
@@ -206,12 +185,6 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
       all,
       // every imaging modality, then whatever else the archive holds (SEG, SR, ...)
       modalities: [...IMAGING_MODALITIES, ...extra.map((m) => [m, ""] as [string, string])].map(([m, name]) => ({ value: m, label: m, hint: name, count: f.modalities[m] ?? 0 })),
-      ranges: Object.fromEntries(
-        RANGES.map(([value]) => {
-          const since = sinceFor(value);
-          return [value, since ? dates.filter(([d]) => d >= ymd(since)).reduce((n, [, c]) => n + c, 0) : all];
-        }),
-      ) as Record<Range, number>,
       sexes: Object.entries(f.sexes).map(([x, n]) => ({ value: x, label: SEXES[x] ?? x, count: n })),
       ages: AGES.map(([value, label, hint, lo, hi]) => ({
         value,
@@ -319,11 +292,12 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   });
 
   const selected = Object.keys(selection).filter((id) => selection[id]).map((id) => known.get(id)).filter((x): x is Study => !!x);
-  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || ages.length > 0 || range !== "any";
+  const dated = !!(span.from || span.to);
+  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || ages.length > 0 || dated;
   const visible = table.getRowModel().rows;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   // what the summary covers: the date range, and whether other filters narrow it
-  const scope = (range === "custom" ? spanLabel(span) : RANGE_NAMES[range]) + (q || modalities.length || sexes.length || ages.length ? ", filtered" : "");
+  const scope = (dated ? spanName(span) : "All time") + (q || modalities.length || sexes.length || ages.length ? ", filtered" : "");
 
   // a page reached by ↑ or ↓: its first or last row
   useEffect(() => {
@@ -390,42 +364,13 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           </Button>
         </div>
 
-        {/* what and who: the words, the modality, the sex, beside each other */}
-        <div className="flex items-center gap-2 px-6 pb-2.5">
-          <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-80 min-w-0" />
+        {/* the filters in one row, right above what they filter: words, when, what, who */}
+        <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
+          <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-72 min-w-0" />
+          <DateFilter span={span} dates={facets.dates} count={facets.count} total={facets.all} onApply={setSpan} />
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
           <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
           <FacetedFilter title="Age" options={facets.ages} selected={ages} onChange={setAges} searchable={false} />
-        </div>
-
-        {/* when, right above the table; what narrows the list, and a way back */}
-        <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            value={range === "custom" ? "" : range}
-            onValueChange={(v) => v && setRange(v as Range)}
-            aria-label="Study date"
-            className="bg-card"
-          >
-            {RANGES.map(([value, label]) => (
-              <ToggleGroupItem key={value} value={value} className="h-8 gap-1.5 px-2.5 text-xs data-[state=on]:bg-selection-soft data-[state=on]:text-selection">
-                {label}
-                <span className="tabular text-[11px] opacity-60">{facets.ranges[value]}</span>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <CustomRange
-            active={range === "custom"}
-            span={span}
-            dates={facets.dates}
-            count={facets.count}
-            onApply={(s) => {
-              setSpan(s);
-              setRange(s.from || s.to ? "custom" : "any");
-            }}
-          />
           {owner && (
             <Badge variant="secondary" className="h-8 gap-1.5 rounded-md pr-1 pl-2.5 text-sm font-normal">
               <User className="size-3.5" />
@@ -439,7 +384,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             <Button
               variant="ghost"
               size="sm"
-              className="ml-auto h-8 px-2 text-muted-foreground"
+              className="h-8 px-2 text-muted-foreground"
               title="Clear the filter, the dates, the modality, the sex and the age"
               onClick={() => {
                 setTyped("");
@@ -447,11 +392,10 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                 setModalities([]);
                 setSexes([]);
                 setAges([]);
-                setRange("any");
                 setSpan({ from: "", to: "" });
               }}
             >
-              Reset all <X />
+              Reset <X />
             </Button>
           )}
         </div>
@@ -612,21 +556,31 @@ function shortcuts(): [string, Span][] {
   const [y, m, d] = [t.getFullYear(), t.getMonth(), t.getDate()];
   const monday = d - ((t.getDay() + 6) % 7);
   return [
+    // counted back from today
+    ["Today", { from: iso(t), to: iso(t) }],
     ["Yesterday", { from: day(y, m, d - 1), to: day(y, m, d - 1) }],
+    ["Last 7 days", { from: day(y, m, d - 6), to: iso(t) }],
+    ["Last 30 days", { from: day(y, m, d - 29), to: iso(t) }],
+    ["Last 12 months", { from: day(y - 1, m, d + 1), to: iso(t) }],
+    // calendar periods
     ["This week", { from: day(y, m, monday), to: iso(t) }],
-    ["Last week", { from: day(y, m, monday - 7), to: day(y, m, monday - 1) }],
     ["This month", { from: day(y, m, 1), to: iso(t) }],
     ["Last month", { from: day(y, m - 1, 1), to: day(y, m, 0) }],
-    ["Last 3 months", { from: day(y, m - 3, d), to: iso(t) }],
     ["This year", { from: day(y, 0, 1), to: iso(t) }],
     ["Last year", { from: day(y - 1, 0, 1), to: day(y - 1, 11, 31) }],
   ];
 }
 
-function CustomRange({ active, span, dates, count, onApply }: { active: boolean; span: Span; dates: string[]; count: (s: Span) => number; onApply: (s: Span) => void }) {
+/** What a span is called: the shortcut it is, or its dates. */
+function spanName(span: Span) {
+  return shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] ?? spanLabel(span);
+}
+
+function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates: string[]; count: (s: Span) => number; total: number; onApply: (s: Span) => void }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(span);
   const today = new Date();
+  const active = !!(span.from || span.to);
   // the ends in order, whichever was typed first
   const ordered = draft.from && draft.to && draft.from > draft.to ? { from: draft.to, to: draft.from } : draft;
   const studyDays = useMemo(() => dates.map((d) => parseDate(d)).filter((d): d is Date => !!d), [dates]);
@@ -635,7 +589,7 @@ function CustomRange({ active, span, dates, count, onApply }: { active: boolean;
     onApply(s);
     setOpen(false);
   };
-  const picked = shortcuts().find(([, s]) => s.from === ordered.from && s.to === ordered.to)?.[0];
+  const picked = active ? shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] : "Any time";
   return (
     <Popover
       open={open}
@@ -645,30 +599,29 @@ function CustomRange({ active, span, dates, count, onApply }: { active: boolean;
       }}
     >
       <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          aria-label="Custom date range"
-          className={cn("h-8 gap-1.5 bg-card px-3 text-xs font-medium", active && "border-selection/40 bg-selection-soft text-selection hover:bg-selection-soft hover:text-selection")}
-        >
-          <CalendarRange className="size-3.5" />
-          {active ? spanLabel(span) : "Custom…"}
+        <Button variant="outline" size="sm" aria-label="Study date" className={cn("h-8 gap-1.5 bg-card", !active && "border-dashed")}>
+          <CalendarRange />
+          Date
           {active && (
-            <span
-              role="button"
-              aria-label="Clear the date range"
-              className="-mr-1.5 ml-0.5 grid size-5 place-items-center rounded hover:bg-selection/15"
-              onClick={(e) => {
-                e.stopPropagation();
-                onApply({ from: "", to: "" });
-              }}
-            >
-              <X className="size-3" />
-            </span>
+            <>
+              <Separator orientation="vertical" className="mx-0.5 h-4" />
+              <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-xs font-normal">{spanName(span)}</span>
+              <span
+                role="button"
+                aria-label="Any date"
+                className="-mr-1 grid size-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onApply({ from: "", to: "" });
+                }}
+              >
+                <X className="size-3" />
+              </span>
+            </>
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-auto p-0">
+      <PopoverContent align="start" className="w-auto p-0">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -676,63 +629,63 @@ function CustomRange({ active, span, dates, count, onApply }: { active: boolean;
           }}
         >
           <div className="flex">
-            <div className="flex w-36 flex-col gap-0.5 border-r p-2">
-              {shortcuts().map(([label, s]) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => apply(s)}
-                  className={cn("rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent", picked === label && "bg-selection-soft text-selection")}
-                >
-                  {label}
-                </button>
+            <div className="flex w-48 flex-col gap-0.5 border-r p-2">
+              {([["Any time", { from: "", to: "" }], ...shortcuts()] as [string, Span][]).map(([label, s], i) => (
+                <Fragment key={label}>
+                  {/* any time; counted back from today; calendar periods */}
+                  {(i === 1 || i === 6) && <div className="my-1 border-t" />}
+                  <button
+                    type="button"
+                    onClick={() => apply(s)}
+                    className={cn("flex items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent", picked === label && "bg-selection-soft text-selection hover:bg-selection-soft")}
+                  >
+                    {label}
+                    <span className="tabular text-xs text-muted-foreground">{i === 0 ? total : count(s)}</span>
+                  </button>
+                </Fragment>
               ))}
             </div>
-            <Calendar
-              mode="range"
-              numberOfMonths={2}
-              captionLayout="dropdown"
-              showOutsideDays={false}
-              defaultMonth={fromIso(ordered.from) ?? new Date(today.getFullYear(), today.getMonth() - 1, 1)}
-              startMonth={new Date(Math.min(first?.getFullYear() ?? today.getFullYear(), today.getFullYear() - 10), 0, 1)}
-              endMonth={today}
-              disabled={{ after: today }}
-              selected={{ from: fromIso(ordered.from), to: fromIso(ordered.to) }}
-              onSelect={(r) => setDraft({ from: r?.from ? iso(r.from) : "", to: r?.to ? iso(r.to) : "" })}
-              modifiers={{ studies: studyDays }}
-              modifiersClassNames={{ studies: "has-studies" }}
-              className="p-3"
-            />
-          </div>
-          <div className="flex items-end gap-3 border-t p-3">
-            {(["from", "to"] as const).map((end) => (
-              <label key={end} className="grid gap-1 text-xs text-muted-foreground">
-                {end === "from" ? "From" : "To"}
-                <Input
-                  type="date"
-                  max={iso(today)}
-                  value={draft[end]}
-                  onChange={(e) => setDraft((d) => ({ ...d, [end]: e.target.value }))}
-                  className="h-8 w-36 text-sm text-foreground"
-                />
-              </label>
-            ))}
-            <div className="mb-2 ml-1 min-w-0 flex-1 text-xs text-muted-foreground">
-              {ordered.from || ordered.to ? (
-                <>
-                  <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span>
-                  {ordered.from && ordered.to ? "" : ordered.from ? " since then" : " until then"}
-                </>
-              ) : (
-                "Click the first day, then the last."
-              )}
+            <div>
+              <Calendar
+                mode="range"
+                numberOfMonths={2}
+                captionLayout="dropdown"
+                showOutsideDays={false}
+                defaultMonth={fromIso(ordered.from) ?? new Date(today.getFullYear(), today.getMonth() - 1, 1)}
+                startMonth={new Date(Math.min(first?.getFullYear() ?? today.getFullYear(), today.getFullYear() - 10), 0, 1)}
+                endMonth={today}
+                disabled={{ after: today }}
+                selected={{ from: fromIso(ordered.from), to: fromIso(ordered.to) }}
+                onSelect={(r) => setDraft({ from: r?.from ? iso(r.from) : "", to: r?.to ? iso(r.to) : "" })}
+                modifiers={{ studies: studyDays }}
+                modifiersClassNames={{ studies: "has-studies" }}
+                className="p-3"
+              />
+              <div className="flex items-end gap-2 border-t p-3">
+                {(["from", "to"] as const).map((end) => (
+                  <label key={end} className="grid gap-1 text-xs text-muted-foreground">
+                    {end === "from" ? "From" : "To"}
+                    <Input
+                      type="date"
+                      max={iso(today)}
+                      value={draft[end]}
+                      onChange={(e) => setDraft((d) => ({ ...d, [end]: e.target.value }))}
+                      className="h-8 w-36 text-sm text-foreground"
+                    />
+                  </label>
+                ))}
+                <div className="mb-2 ml-1 min-w-0 flex-1 text-xs text-muted-foreground">
+                  {ordered.from || ordered.to ? (
+                    <span className="font-medium text-foreground tabular">{plural(count(ordered), "study", "studies")}</span>
+                  ) : (
+                    "Click the first day, then the last"
+                  )}
+                </div>
+                <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
+                  Apply
+                </Button>
+              </div>
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={() => apply({ from: "", to: "" })}>
-              Clear
-            </Button>
-            <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
-              Apply
-            </Button>
           </div>
         </form>
       </PopoverContent>
