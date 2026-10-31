@@ -23,6 +23,9 @@ pub struct WorklistQuery {
     pub modalities: Vec<String>,
     /// Patient sex, `O` standing for anything but `F` and `M` (and for none); empty for any.
     pub sexes: Vec<String>,
+    /// The patient's age at the study, in whole years: any of these ranges, both ends
+    /// included, either open; empty for any. Studies without both dates match none.
+    pub ages: Vec<(Option<i64>, Option<i64>)>,
     /// One patient's studies, by the patient's public ID.
     pub patient: Option<String>,
     pub sort: WorklistSort,
@@ -71,12 +74,14 @@ pub struct WorklistSummary {
 }
 
 /// The choices the filters offer, with how many studies each has, over every study (or one
-/// patient's): modalities, sexes (as in [`WorklistQuery::sexes`]) and study dates.
+/// patient's): modalities, sexes (as in [`WorklistQuery::sexes`]), study dates and the
+/// patients' ages at the study (whole years, as text).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WorklistFacets {
     pub modalities: Vec<(String, i64)>,
     pub sexes: Vec<(String, i64)>,
     pub dates: Vec<(String, i64)>,
+    pub ages: Vec<(String, i64)>,
 }
 
 enum Arg {
@@ -141,6 +146,29 @@ impl Index {
         )
     }
 
+    /// The patient's age at the study in whole years, NULL unless both dates are YYYYMMDD:
+    /// the dates as numbers, one subtracted from the other, in ten thousands.
+    fn age(&self) -> String {
+        let birth = self.main_tag("st.patient_main_tags", "PatientBirthDate");
+        let (study, born) = match self.dialect {
+            Dialect::Sqlite => {
+                let digits = "'[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'";
+                (
+                    format!("st.study_date GLOB {digits}"),
+                    format!("{birth} GLOB {digits}"),
+                )
+            }
+            Dialect::Postgres => (
+                "st.study_date ~ '^[0-9]{8}$'".to_owned(),
+                format!("{birth} ~ '^[0-9]{{8}}$'"),
+            ),
+        };
+        format!(
+            "(CASE WHEN {study} AND {born}
+                   THEN (CAST(st.study_date AS INTEGER) - CAST({birth} AS INTEGER)) / 10000 END)"
+        )
+    }
+
     fn modalities_of_study(&self) -> &'static str {
         match self.dialect {
             Dialect::Sqlite => {
@@ -191,6 +219,24 @@ impl Index {
                     String::new()
                 }
             ));
+        }
+        if !query.ages.is_empty() {
+            let age = self.age();
+            let any: Vec<String> = query
+                .ages
+                .iter()
+                .map(|&(from, to)| {
+                    let mut both = vec![format!("{age} IS NOT NULL")];
+                    if let Some(from) = from {
+                        both.push(format!("{age} >= {}", sql.arg(Arg::Int(from))));
+                    }
+                    if let Some(to) = to {
+                        both.push(format!("{age} <= {}", sql.arg(Arg::Int(to))));
+                    }
+                    format!("({})", both.join(" AND "))
+                })
+                .collect();
+            and.push(format!("({})", any.join(" OR ")));
         }
         let fields = [
             "coalesce(st.patient_name, '')".to_owned(),
@@ -343,10 +389,19 @@ impl Index {
               WHERE {filter} AND st.study_date IS NOT NULL AND st.study_date <> ''
               GROUP BY st.study_date ORDER BY st.study_date"
         );
+        let mut ages = Sql::default();
+        let filter = scope(&mut ages);
+        ages.text = format!(
+            "SELECT CAST(a.age AS TEXT) AS value, count(*) AS n
+               FROM (SELECT {age} AS age FROM studies st WHERE {filter}) a
+              WHERE a.age IS NOT NULL GROUP BY a.age ORDER BY a.age",
+            age = self.age()
+        );
         Ok(WorklistFacets {
             modalities: counts(modalities.query().fetch_all(&self.pool).await?)?,
             sexes: counts(sexes.query().fetch_all(&self.pool).await?)?,
             dates: counts(dates.query().fetch_all(&self.pool).await?)?,
+            ages: counts(ages.query().fetch_all(&self.pool).await?)?,
         })
     }
 }
