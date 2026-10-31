@@ -123,7 +123,8 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   study or the patient. A double click or Enter opens it; ↑ ↓
   move through the list. With no study chosen, the pane sums up what the list holds, for the
   date range and filters chosen (patients, studies, series, images, studies by modality, the
-  last received). Pages of 25, 50, 100 or 200 studies (kept in the browser), numbered, with ↑ ↓
+  last received). Pages of 25, 50, 100 or 200 studies (kept in the browser), numbered, a page number typed in to
+  jump there, with ↑ ↓
   going on to the next or previous page. The server filters, sorts, counts and pages the list
   (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
