@@ -7,7 +7,6 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use pacs_dimse::Config;
 use pacs_rest::RestError;
 use serde_json::Value;
 
@@ -23,11 +22,11 @@ const MAX_LIMIT: usize = 1000;
 /// ended early. 400 for a query that breaks the matching rules, 502 when the remote AE
 /// cannot be reached or answers with a failure, 404 for an unknown id.
 pub(super) async fn studies(
-    State(config): State<Arc<Config>>,
+    State(remotes): State<Arc<super::Remotes>>,
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let Some(remote) = config.remote(&id) else {
+    let Some(remote) = remotes.config.remote(&id) else {
         return RestError::NotFound.into_response();
     };
     let (query, limit) = match study_query(params) {
@@ -36,14 +35,20 @@ pub(super) async fn studies(
     };
     let mut found = Vec::new();
     let mut more = false;
-    let result = pacs_dimse::find_studies(remote, &config.ae_title, &query, config.timeout, |m| {
-        if found.len() == limit {
-            more = true;
-            return std::ops::ControlFlow::Break(());
-        }
-        found.push(pacs_dimse::query::to_json(&m));
-        std::ops::ControlFlow::Continue(())
-    })
+    let result = pacs_dimse::find_studies(
+        remote,
+        &remotes.config.ae_title,
+        &query,
+        remotes.config.timeout,
+        |m| {
+            if found.len() == limit {
+                more = true;
+                return std::ops::ControlFlow::Break(());
+            }
+            found.push(pacs_dimse::query::to_json(&m));
+            std::ops::ControlFlow::Continue(())
+        },
+    )
     .await;
     let outcome = match result {
         Ok(outcome) => outcome,

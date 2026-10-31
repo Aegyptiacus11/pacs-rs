@@ -115,6 +115,11 @@ pub struct Settings {
     /// Seconds to wait for a remote AE: to connect, for its next message, for an answer.
     #[arg(long, env = "PACS_DIMSE_TIMEOUT", default_value_t = 30)]
     pub dimse_timeout: u64,
+
+    /// Seconds to wait between two C-MOVE responses: a remote AE may send none while it sends
+    /// a large study to pacs-rs.
+    #[arg(long, env = "PACS_DIMSE_MOVE_TIMEOUT", default_value_t = 600)]
+    pub dimse_move_timeout: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -249,6 +254,7 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
     }
     config.max_associations = settings.dimse_max_associations;
     config.timeout = std::time::Duration::from_secs(settings.dimse_timeout.max(1));
+    config.move_timeout = std::time::Duration::from_secs(settings.dimse_move_timeout.max(1));
     config.max_data_set_bytes = settings.max_upload_bytes;
     Ok(config)
 }
@@ -339,8 +345,9 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     if path == "/" {
         bail!("the DICOMweb path cannot be /: the REST API is served there");
     }
-    let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes)
-        .merge(modalities::router(dimse_config(settings)?));
+    let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes).merge(
+        modalities::router(dimse_config(settings)?, settings.dimse_listen.is_some()),
+    );
     let index = archive.index().clone();
     let dicomweb = pacs_dicomweb::router(
         archive,

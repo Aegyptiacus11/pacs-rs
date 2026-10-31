@@ -412,3 +412,176 @@ async fn studies_refuses_bad_queries_and_reports_unreachable_archives() {
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["Message"], "C-FIND to gone failed");
 }
+
+/// A move SCP for `/modalities/{id}/move`: answers one C-MOVE with `status` and these
+/// Completed and Failed counts, and returns the Move Destination it was given.
+async fn move_scp(
+    status: u16,
+    completed: u16,
+    failed: u16,
+) -> (u16, tokio::task::JoinHandle<String>) {
+    use dicom_ul::ServerAssociationOptions;
+    use pacs_dimse::scu::retrieve::STUDY_ROOT_MOVE;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut association = ServerAssociationOptions::new()
+            .ae_title("QRSCP")
+            .with_abstract_syntax(STUDY_ROOT_MOVE)
+            .establish_async(socket)
+            .await
+            .unwrap();
+        let context = association.presentation_contexts()[0].id;
+        let Incoming::Message(rq) = message::receive(&mut association, 1 << 20).await.unwrap()
+        else {
+            panic!("no C-MOVE-RQ");
+        };
+        let destination = rq.command.text(tag::MOVE_DESTINATION).unwrap().to_owned();
+        let rsp = Command::new()
+            .with_ui(tag::AFFECTED_SOP_CLASS_UID, STUDY_ROOT_MOVE)
+            .with_us(tag::COMMAND_FIELD, field::C_MOVE_RSP)
+            .with_us(
+                tag::MESSAGE_ID_BEING_RESPONDED_TO,
+                rq.command.message_id().unwrap(),
+            )
+            .with_us(tag::COMMAND_DATA_SET_TYPE, 0x0101)
+            .with_us(tag::STATUS, status)
+            .with_us(tag::NUMBER_OF_COMPLETED_SUB_OPERATIONS, completed)
+            .with_us(tag::NUMBER_OF_FAILED_SUB_OPERATIONS, failed)
+            .with_us(tag::NUMBER_OF_WARNING_SUB_OPERATIONS, 0);
+        message::send(&mut association, context, &rsp, None)
+            .await
+            .unwrap();
+        let _ = message::receive(&mut association, 0).await;
+        destination
+    });
+    (port, task)
+}
+
+fn move_request(id: &str, body: &str) -> Request<Body> {
+    Request::post(format!("/modalities/{id}/move"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_owned()))
+        .unwrap()
+}
+
+/// `POST /modalities/{id}/move`: the remote AE is asked to send the study to pacs-rs's own
+/// AE title; the final status and counts come back.
+#[tokio::test]
+async fn move_pulls_a_study_to_pacs_rs() {
+    let (port, scp) = move_scp(0x0000, 3, 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-listen",
+            "127.0.0.1:0",
+            "--dimse-ae-title",
+            "RESEARCH",
+        ],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, body) = send(
+        &app,
+        move_request("qr", r#"{"StudyInstanceUID": "2.25.1"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["Status"], "Success");
+    assert_eq!(
+        (body["Completed"].as_u64(), body["Failed"].as_u64()),
+        (Some(3), Some(0))
+    );
+    assert_eq!(scp.await.unwrap(), "RESEARCH");
+}
+
+/// A study the archive does not have: Success with nothing sent, and a Warning header says
+/// so rather than leave a client to believe the study arrived.
+#[tokio::test]
+async fn move_of_a_study_the_archive_lacks_warns() {
+    let (port, _scp) = move_scp(0x0000, 0, 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &["--dimse-remotes", &remotes, "--dimse-listen", "127.0.0.1:0"],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let response = app
+        .oneshot(move_request("qr", r#"{"StudyInstanceUID": "2.25.404"}"#))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let warning = response.headers()["warning"].to_str().unwrap();
+    assert!(warning.contains("sent nothing"), "{warning}");
+}
+
+/// Table C.4-2 A801: the hospital does not know pacs-rs; 502 says it has to be registered.
+#[tokio::test]
+async fn move_to_an_archive_that_does_not_know_pacs_rs_is_502() {
+    let (port, _scp) = move_scp(0xA801, 0, 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &["--dimse-remotes", &remotes, "--dimse-listen", "127.0.0.1:0"],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, body) = send(
+        &app,
+        move_request("qr", r#"{"StudyInstanceUID": ["2.25.1"]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(
+        body["Details"].as_str().unwrap().contains("registered"),
+        "{body}"
+    );
+}
+
+/// Without a DIMSE port nothing moved could arrive: 409, before any association. A body
+/// without valid UIDs is 400, an unknown id 404.
+#[tokio::test]
+async fn move_refuses_what_cannot_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(dir.path(), &["--dimse-remotes", "qr=QRSCP@127.0.0.1:9"]);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, body) = send(
+        &app,
+        move_request("qr", r#"{"StudyInstanceUID": "2.25.1"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        send(&app, move_request("nobody", "{}")).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let listening = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            "qr=QRSCP@127.0.0.1:9",
+            "--dimse-listen",
+            "127.0.0.1:0",
+        ],
+    );
+    let app = pacs_server::app(open_archive(&listening).await.unwrap(), &listening).unwrap();
+    for bad in [
+        "{}",
+        r#"{"StudyInstanceUID": 7}"#,
+        r#"{"StudyInstanceUID": "not a uid"}"#,
+        r#"{"StudyInstanceUID": []}"#,
+    ] {
+        assert_eq!(
+            send(&app, move_request("qr", bad)).await.0,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+}

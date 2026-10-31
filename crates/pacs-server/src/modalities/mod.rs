@@ -1,7 +1,8 @@
 //! The remote AEs pacs-rs can call: `GET /modalities[?expand]`, a C-ECHO to test the link
 //! to one (`POST /modalities/{id}/echo`), and the operations on its studies, one module
-//! each: [`studies`] (C-FIND).
+//! each: [`studies`] (C-FIND), [`retrieve`] (C-MOVE).
 
+mod retrieve;
 mod studies;
 
 use std::collections::HashMap;
@@ -16,12 +17,20 @@ use pacs_dimse::{Config, RemoteAe};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
 
-pub(crate) fn router(config: Config) -> Router {
+/// What the routes share: the DIMSE configuration, and whether pacs-rs listens for DIMSE,
+/// without which nothing moved to it can arrive.
+pub(crate) struct Remotes {
+    pub config: Config,
+    pub receiving: bool,
+}
+
+pub(crate) fn router(config: Config, receiving: bool) -> Router {
     Router::new()
         .route("/modalities", get(list))
         .route("/modalities/{id}/echo", post(echo))
         .route("/modalities/{id}/studies", get(studies::studies))
-        .with_state(Arc::new(config))
+        .route("/modalities/{id}/move", post(retrieve::move_studies))
+        .with_state(Arc::new(Remotes { config, receiving }))
 }
 
 fn describe(remote: &RemoteAe) -> Value {
@@ -34,11 +43,12 @@ fn describe(remote: &RemoteAe) -> Value {
 
 /// The ids, or with `expand` each id's AE title, host and port.
 async fn list(
-    State(config): State<Arc<Config>>,
+    State(remotes): State<Arc<Remotes>>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Json<Value> {
     if query.contains_key("expand") {
-        let all: serde_json::Map<String, Value> = config
+        let all: serde_json::Map<String, Value> = remotes
+            .config
             .remotes
             .iter()
             .map(|r| (r.id.clone(), describe(r)))
@@ -46,18 +56,23 @@ async fn list(
         Json(Value::Object(all))
     } else {
         Json(json!(
-            config.remotes.iter().map(|r| &r.id).collect::<Vec<_>>()
+            remotes
+                .config
+                .remotes
+                .iter()
+                .map(|r| &r.id)
+                .collect::<Vec<_>>()
         ))
     }
 }
 
 /// One C-ECHO from pacs-rs's AE title: 200 with the round trip when the remote AE answers
 /// Success, 502 with the reason when it does not, 404 for an unknown id.
-async fn echo(State(config): State<Arc<Config>>, Path(id): Path<String>) -> Response {
-    let Some(remote) = config.remote(&id) else {
+async fn echo(State(remotes): State<Arc<Remotes>>, Path(id): Path<String>) -> Response {
+    let Some(remote) = remotes.config.remote(&id) else {
         return RestError::NotFound.into_response();
     };
-    match pacs_dimse::echo(remote, &config.ae_title, config.timeout).await {
+    match pacs_dimse::echo(remote, &remotes.config.ae_title, remotes.config.timeout).await {
         Ok(echo) => Json(json!({
             "Status": "Success",
             "AET": remote.ae_title.as_str(),
