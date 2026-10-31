@@ -101,8 +101,8 @@ order.
 
 Not yet: labels, metadata, modifications, wildcard and range searches in `/tools/find`.
 
-DIMSE services, HL7 v2 and FHIR come after; the plan, with the standard behind each part, is in
-[docs/interop.md](docs/interop.md).
+DIMSE services come after: pacs-rs as a research PACS that pulls studies from a hospital's PACS and
+de-identifies them on ingest. The plan, with the standard behind each part, is in [docs/interop.md](docs/interop.md).
 
 ## Web interface
 
