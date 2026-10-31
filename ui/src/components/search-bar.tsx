@@ -27,7 +27,7 @@ export function FilterBox({ value, onChange, placeholder, className }: { value: 
         onKeyDown={(e) => e.key === "Escape" && value && (e.preventDefault(), onChange(""))}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="h-9 bg-card pr-10 pl-9"
+        className="h-8 bg-card pr-10 pl-9"
       />
       {value ? (
         <button

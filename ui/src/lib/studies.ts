@@ -32,6 +32,8 @@ export type StudyQuery = {
   to: string | null;
   modalities: string[];
   sexes: string[];
+  /** age at the study: ranges such as "0-17" or "65-" */
+  ages: string[];
   patient: string | null;
   sort: "patient" | "description" | "modality" | "date" | "series" | "images" | "received";
   desc: boolean;
@@ -49,7 +51,7 @@ export type StudySummary = {
   recent: Study[];
 };
 
-export type StudyFacets = { modalities: Record<string, number>; sexes: Record<string, number>; dates: Record<string, number> };
+export type StudyFacets = { modalities: Record<string, number>; sexes: Record<string, number>; dates: Record<string, number>; ages: Record<string, number> };
 
 /** A study as `/ui/api/studies` gives it (or the REST API, with the counts added). */
 function fromList(s: any): Study {
@@ -84,6 +86,7 @@ function search(query: Partial<StudyQuery>, extra: Record<string, string> = {}) 
   set("to", query.to);
   set("modality", query.modalities?.join(","));
   set("sex", query.sexes?.join(","));
+  set("age", query.ages?.join(","));
   set("patient", query.patient);
   set("sort", query.sort);
   if (query.desc !== undefined) set("order", query.desc ? "desc" : "asc");
@@ -146,7 +149,7 @@ export function useStudyFacets(patient: string | null) {
       url.hash = "";
       if (patient) url.searchParams.set("patient", patient);
       const f = await get(url);
-      return { modalities: f.Modalities, sexes: f.Sexes, dates: f.Dates };
+      return { modalities: f.Modalities, sexes: f.Sexes, dates: f.Dates, ages: f.Ages ?? {} };
     },
   });
 }

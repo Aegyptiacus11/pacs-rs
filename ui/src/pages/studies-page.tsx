@@ -83,6 +83,13 @@ function spanLabel({ from, to }: Span) {
 }
 const RANGE_NAMES: Record<Range, string> = { any: "All time", today: "Today", "7d": "Last 7 days", "30d": "Last 30 days", "1y": "Last 12 months" };
 
+// age at the study, in whole years: the bands the filter offers
+const AGES: [string, string, string, number, number][] = [
+  ["0-17", "0–17", "children", 0, 17],
+  ["18-39", "18–39", "", 18, 39],
+  ["40-64", "40–64", "", 40, 64],
+  ["65-", "65+", "", 65, Infinity],
+];
 const SEXES: Record<string, string> = { F: "Female", M: "Male", O: "Other" };
 
 function sinceFor(range: Range) {
@@ -137,6 +144,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [range, setRange] = useState<Range | "custom">("any");
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
   const [sexes, setSexes] = useState<string[]>([]);
+  const [ages, setAges] = useState<string[]>([]);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
@@ -168,7 +176,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     return () => clearTimeout(t);
   }, [typed]);
 
-  const filters: StudyFilters = { q, ...rangeDates(range, span), modalities, sexes, patient };
+  const filters: StudyFilters = { q, ...rangeDates(range, span), modalities, sexes, ages, patient };
   const filterKey = JSON.stringify(filters);
   const sort = sorting[0] ?? { id: "date", desc: true };
   // other filters or another order: back to the first page
@@ -190,7 +198,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
   // what each filter can pick, with how many studies have it (over every study, or the patient's)
   const facets = useMemo(() => {
-    const f = choices.data ?? { modalities: {}, sexes: {}, dates: {} };
+    const f = choices.data ?? { modalities: {}, sexes: {}, dates: {}, ages: {} };
     const dates = Object.entries(f.dates);
     const all = Object.values(f.sexes).reduce((n, c) => n + c, 0);
     const extra = Object.keys(f.modalities).filter((m) => !IMAGING_MODALITIES.some(([c]) => c === m)).sort();
@@ -205,6 +213,12 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         }),
       ) as Record<Range, number>,
       sexes: Object.entries(f.sexes).map(([x, n]) => ({ value: x, label: SEXES[x] ?? x, count: n })),
+      ages: AGES.map(([value, label, hint, lo, hi]) => ({
+        value,
+        label,
+        hint,
+        count: Object.entries(f.ages).reduce((n, [age, c]) => (Number(age) >= lo && Number(age) <= hi ? n + c : n), 0),
+      })),
       dates: dates.map(([d]) => d),
       count: (s: Span) => dates.filter(([d]) => inSpan(d, s)).reduce((n, [, c]) => n + c, 0),
     };
@@ -305,11 +319,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   });
 
   const selected = Object.keys(selection).filter((id) => selection[id]).map((id) => known.get(id)).filter((x): x is Study => !!x);
-  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || range !== "any";
+  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || ages.length > 0 || range !== "any";
   const visible = table.getRowModel().rows;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   // what the summary covers: the date range, and whether other filters narrow it
-  const scope = (range === "custom" ? spanLabel(span) : RANGE_NAMES[range]) + (q || modalities.length || sexes.length ? ", filtered" : "");
+  const scope = (range === "custom" ? spanLabel(span) : RANGE_NAMES[range]) + (q || modalities.length || sexes.length || ages.length ? ", filtered" : "");
 
   // a page reached by ↑ or ↓: its first or last row
   useEffect(() => {
@@ -376,11 +390,15 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           </Button>
         </div>
 
-        <div className="px-6 pb-3">
-          <FilterBox value={typed} onChange={setTyped} placeholder="Filter the studies: name, ID, accession, description, referring…" className="w-full" />
+        {/* what and who: the words, the modality, the sex, beside each other */}
+        <div className="flex items-center gap-2 px-6 pb-2.5">
+          <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-80 min-w-0" />
+          <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
+          <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
+          <FacetedFilter title="Age" options={facets.ages} selected={ages} onChange={setAges} searchable={false} />
         </div>
 
-        {/* the filters, right above what they filter: when, then what and who */}
+        {/* when, right above the table; what narrows the list, and a way back */}
         <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
           <ToggleGroup
             type="single"
@@ -408,9 +426,6 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               setRange(s.from || s.to ? "custom" : "any");
             }}
           />
-          <Separator orientation="vertical" className="mx-1 !h-5" />
-          <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
-          <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
           {owner && (
             <Badge variant="secondary" className="h-8 gap-1.5 rounded-md pr-1 pl-2.5 text-sm font-normal">
               <User className="size-3.5" />
@@ -424,18 +439,19 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 px-2 text-muted-foreground"
-              title="Clear the search and every filter"
+              className="ml-auto h-8 px-2 text-muted-foreground"
+              title="Clear the filter, the dates, the modality, the sex and the age"
               onClick={() => {
                 setTyped("");
                 setQ("");
                 setModalities([]);
                 setSexes([]);
+                setAges([]);
                 setRange("any");
                 setSpan({ from: "", to: "" });
               }}
             >
-              Reset <X />
+              Reset all <X />
             </Button>
           )}
         </div>
