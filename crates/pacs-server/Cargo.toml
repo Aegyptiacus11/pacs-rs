@@ -18,6 +18,7 @@ clap.workspace = true
 mimalloc.workspace = true
 pacs-archive.workspace = true
 pacs-dicomweb.workspace = true
+pacs-dimse.workspace = true
 pacs-index.workspace = true
 pacs-rest.workspace = true
 pacs-store.workspace = true
@@ -30,6 +31,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+dicom-ul.workspace = true
 http-body-util.workspace = true
 pacs-core = { workspace = true, features = ["synthetic"] }
 reqwest.workspace = true

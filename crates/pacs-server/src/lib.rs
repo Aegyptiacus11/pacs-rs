@@ -13,6 +13,7 @@ use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::routing::get;
 use clap::Parser;
 use pacs_archive::{Archive, Compression};
+use pacs_dimse::{AeTitle, RemoteAe};
 use pacs_index::Index;
 use pacs_store::{S3Config, Store};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -83,6 +84,36 @@ pub struct Settings {
     /// whoever reaches it can delete, as with the REST API.
     #[arg(long, env = "PACS_UI", default_value_t = true, action = clap::ArgAction::Set)]
     pub ui: bool,
+
+    /// Address DIMSE (C-ECHO, C-STORE) listens on, e.g. `0.0.0.0:11112`. None by default:
+    /// no DIMSE port is opened.
+    #[arg(long, env = "PACS_DIMSE_LISTEN")]
+    pub dimse_listen: Option<SocketAddr>,
+
+    /// pacs-rs's AE title: what remote AEs call it, and what it calls them as.
+    #[arg(long, env = "PACS_DIMSE_AE_TITLE", default_value = "PACSRS")]
+    pub dimse_ae_title: AeTitle,
+
+    /// Further AE titles accepted on the same port, comma-separated.
+    #[arg(long, env = "PACS_DIMSE_EXTRA_AE_TITLES", value_delimiter = ',')]
+    pub dimse_extra_ae_titles: Vec<AeTitle>,
+
+    /// The AEs pacs-rs can call, comma-separated, each `id=AE_TITLE@host:port`; the id names
+    /// it in the REST API (`/modalities/{id}`).
+    #[arg(long, env = "PACS_DIMSE_REMOTES", value_delimiter = ',')]
+    pub dimse_remotes: Vec<RemoteAe>,
+
+    /// Accept associations only from the AE titles of PACS_DIMSE_REMOTES.
+    #[arg(long, env = "PACS_DIMSE_KNOWN_CALLERS_ONLY", default_value_t = false)]
+    pub dimse_known_callers_only: bool,
+
+    /// Associations served at once; further ones are rejected as busy, to be retried.
+    #[arg(long, env = "PACS_DIMSE_MAX_ASSOCIATIONS", default_value_t = 16)]
+    pub dimse_max_associations: usize,
+
+    /// Seconds to wait for a remote AE: to connect, for its next message, for an answer.
+    #[arg(long, env = "PACS_DIMSE_TIMEOUT", default_value_t = 30)]
+    pub dimse_timeout: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -196,6 +227,44 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     Ok(Archive::new(store, index)
         .with_overwrite(settings.overwrite_instances)
         .with_compression(settings.compression.into()))
+}
+
+/// The DIMSE side's configuration, from the settings. A remote AE named twice is an error.
+pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
+    let mut config = pacs_dimse::Config::new(settings.dimse_ae_title.clone());
+    config.extra_ae_titles = settings.dimse_extra_ae_titles.clone();
+    for remote in &settings.dimse_remotes {
+        if config.remote(&remote.id).is_some() {
+            bail!(
+                "remote AE {} is named twice in PACS_DIMSE_REMOTES",
+                remote.id
+            );
+        }
+        config.remotes.push(remote.clone());
+    }
+    config.known_callers_only = settings.dimse_known_callers_only;
+    if settings.dimse_max_associations == 0 {
+        bail!("PACS_DIMSE_MAX_ASSOCIATIONS must be at least 1");
+    }
+    config.max_associations = settings.dimse_max_associations;
+    config.timeout = std::time::Duration::from_secs(settings.dimse_timeout.max(1));
+    config.max_data_set_bytes = settings.max_upload_bytes;
+    Ok(config)
+}
+
+/// Serve DIMSE on `listener` until `shutdown` completes: C-ECHO, and C-STORE into
+/// `archive` exactly as a REST upload.
+pub async fn serve_dimse(
+    listener: tokio::net::TcpListener,
+    archive: Archive,
+    config: pacs_dimse::Config,
+    shutdown: impl Future<Output = ()> + Send,
+) {
+    let scp = std::sync::Arc::new(pacs_dimse::Scp::new(
+        config,
+        pacs_dimse::Destination::Archive(archive),
+    ));
+    scp.serve(listener, shutdown).await;
 }
 
 /// Where the index is, parsed from `--index`.
