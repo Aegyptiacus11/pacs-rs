@@ -195,7 +195,8 @@ function ToolMenu({ children, menuLabel, ...tb }: Tb & { children: ReactNode; me
 
 const Sep = () => <Separator orientation="vertical" className="mx-0.5 !h-9" />;
 
-export function ViewerPage({ study: studyId, series: seriesId }: { study: string; series: string | null }) {
+/** `compare`: another study, shown beside this one (each its largest series, scrolling together). */
+export function ViewerPage({ study: studyId, series: seriesId, compare }: { study: string; series: string | null; compare?: string | null }) {
   const data = useQuery({
     queryKey: ["viewer", studyId],
     queryFn: async () => {
@@ -249,7 +250,16 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
       const fits = plans(c, saved);
       setProtocols(fits);
       const first = autoApply() ? fits[0] : fits.find((p) => p.protocol.id === "builtin:single");
-      if (seriesId || !first) {
+      if (compare) {
+        // each study's largest series, side by side, linked
+        const largest = (id: string) =>
+          api<any[]>(`studies/${id}/series`).then((list) => list.reduce((a, b) => ((b.Instances?.length ?? 0) > (a?.Instances?.length ?? -1) ? b : a), null)?.ID ?? null);
+        Promise.all([largest(studyId), largest(compare)]).then(([a, b]) => {
+          if (viewer.current !== v) return;
+          if (a && b) v.hang(LAYOUTS.findIndex((l) => l.cols === 2 && l.rows === 1), [a, b], true);
+          else v.start(a ?? c.series[0]?.ID);
+        });
+      } else if (seriesId || !first) {
         v.start(seriesId ?? first?.series.find(Boolean) ?? c.series[0]?.ID);
       } else {
         setProtocol(first.protocol.id);
@@ -277,7 +287,8 @@ export function ViewerPage({ study: studyId, series: seriesId }: { study: string
   const activeCell = state?.cells[state.active];
   // (while a protocol lays the study out, the URL names the study alone, so a reload hangs it again)
   useEffect(() => {
-    if (activeCell?.seriesId && activeCell.studyId) {
+    // a comparison keeps its URL, so a reload compares again
+    if (activeCell?.seriesId && activeCell.studyId && !compare) {
       const to = protocol ? href.view(studyId) : href.view(activeCell.studyId, activeCell.seriesId);
       if (location.hash !== to) history.replaceState(null, "", to);
     }
