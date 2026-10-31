@@ -40,7 +40,7 @@ import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { SeriesThumb } from "@/components/series-thumb";
 import { useUpload } from "@/components/upload";
 import { Modalities } from "@/components/modalities";
-import { PAGE_KEY, Pager, savedPageSize } from "@/components/pager";
+import { PAGE_SIZE, Pager } from "@/components/pager";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
@@ -140,7 +140,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [sexes, setSexes] = useState<string[]>([]);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: savedPageSize() });
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [current, setCurrent] = useState<string | null>(open);
   const [pending, setPending] = useState<PendingDelete | null>(null);
   // after ↑ or ↓ past the page's end: the row to choose once the next page is in
@@ -517,18 +517,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <Pager
             total={total}
             pageIndex={pageIndex}
-            pageSize={pageSize}
+            noun={["study", "studies"]}
             loading={page.isPlaceholderData}
             onPage={(i) => {
               setPagination((p) => ({ ...p, pageIndex: i }));
               list.current?.scrollTo({ top: 0 });
-            }}
-            onPageSize={(n) => {
-              try {
-                localStorage.setItem(PAGE_KEY, String(n));
-              } catch {}
-              // the first row shown stays on the page shown
-              setPagination({ pageSize: n, pageIndex: Math.floor((pageIndex * pageSize) / n) });
             }}
           />
         )}

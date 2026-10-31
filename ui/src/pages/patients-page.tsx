@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { Modalities } from "@/components/modalities";
-import { PAGE_KEY, Pager, savedPageSize } from "@/components/pager";
+import { PAGE_SIZE, Pager } from "@/components/pager";
 import { SeriesThumb } from "@/components/series-thumb";
 import { formatDate, formatTime, initials, isoDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
@@ -32,7 +32,7 @@ export function PatientsPage({ open }: { open: string | null }) {
   const typed = useSearch("patients");
   const [q, setQ] = useState(typed);
   const [sort, setSort] = useState(0);
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: savedPageSize() });
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [current, setCurrent] = useState<string | null>(open);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setCurrent(open), [open]);
@@ -135,18 +135,11 @@ export function PatientsPage({ open }: { open: string | null }) {
           <Pager
             total={total}
             pageIndex={pageIndex}
-            pageSize={pageSize}
+            noun={["patient", "patients"]}
             loading={page.isPlaceholderData}
-            compact
             onPage={(i) => {
               setPagination((p) => ({ ...p, pageIndex: i }));
               list.current?.scrollTo({ top: 0 });
-            }}
-            onPageSize={(n) => {
-              try {
-                localStorage.setItem(PAGE_KEY, String(n));
-              } catch {}
-              setPagination({ pageSize: n, pageIndex: Math.floor((pageIndex * pageSize) / n) });
             }}
           />
         )}
