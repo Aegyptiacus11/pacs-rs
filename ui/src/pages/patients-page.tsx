@@ -13,10 +13,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { Modalities } from "@/components/modalities";
 import { PAGE_KEY, Pager, savedPageSize } from "@/components/pager";
-import { SearchBar } from "@/components/search-bar";
 import { SeriesThumb } from "@/components/series-thumb";
 import { formatDate, formatTime, initials, isoDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
+import { useSearch } from "@/lib/search";
 import { deleteStudies, usePatientPage, usePatientStudies, useRefreshStudies, useStudySeries, type Patient, type PatientQuery, type Study } from "@/lib/studies";
 import { cn } from "@/lib/utils";
 
@@ -28,8 +28,9 @@ const SORTS: [PatientQuery["sort"], boolean, string][] = [
 
 export function PatientsPage({ open }: { open: string | null }) {
   const refresh = useRefreshStudies();
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
+  // the top bar's search
+  const typed = useSearch("patients");
+  const [q, setQ] = useState(typed);
   const [sort, setSort] = useState(0);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: savedPageSize() });
   const [current, setCurrent] = useState<string | null>(open);
@@ -90,7 +91,6 @@ export function PatientsPage({ open }: { open: string | null }) {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <SearchBar value={typed} onChange={setTyped} placeholder="Name or patient ID…" suggest={false} className="mt-3" />
         </div>
         <div ref={list} tabIndex={0} onKeyDown={onListKey} aria-label="Patients" className="min-h-0 flex-1 overflow-y-auto border-t outline-none">
           {page.isPending &&

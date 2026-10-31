@@ -40,11 +40,11 @@ import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { SeriesThumb } from "@/components/series-thumb";
 import { useUpload } from "@/components/upload";
 import { Modalities } from "@/components/modalities";
-import { SearchBar } from "@/components/search-bar";
 import { PAGE_KEY, Pager, savedPageSize } from "@/components/pager";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge, url } from "@/lib/api";
 import { go, href } from "@/lib/route";
+import { setSearch, useSearch } from "@/lib/search";
 import {
   deleteStudies,
   usePatientStudies,
@@ -131,8 +131,9 @@ function rangeDates(range: Range | "custom", span: Span): { from: string | null;
 export function StudiesPage({ patient, open }: { patient: string | null; open: string | null }) {
   const refresh = useRefreshStudies();
   const upload = useUpload();
-  const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
+  // the top bar's search
+  const typed = useSearch("studies");
+  const [q, setQ] = useState(typed);
   const [modalities, setModalities] = useState<string[]>([]);
   const [range, setRange] = useState<Range | "custom">("any");
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
@@ -216,6 +217,17 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         enableSorting: false,
       },
       {
+        id: "date",
+        accessorFn: (s) => s.date + s.time,
+        header: ({ column }) => <SortHeader column={column}>Date</SortHeader>,
+        cell: ({ row: { original: s } }) => (
+          <div className="tabular leading-tight whitespace-nowrap">
+            <div>{formatDate(s.date)}</div>
+            <div className="text-xs text-muted-foreground">{formatTime(s.time) || " "}</div>
+          </div>
+        ),
+      },
+      {
         id: "name",
         accessorFn: (s) => personName(s.name),
         header: ({ column }) => <SortHeader column={column}>Patient</SortHeader>,
@@ -242,17 +254,6 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         accessorFn: (s) => s.modalities.join(" "),
         header: ({ column }) => <SortHeader column={column}>Modality</SortHeader>,
         cell: ({ row: { original: s } }) => <Modalities list={s.modalities} className="flex-nowrap overflow-hidden" />,
-      },
-      {
-        id: "date",
-        accessorFn: (s) => s.date + s.time,
-        header: ({ column }) => <SortHeader column={column}>Date</SortHeader>,
-        cell: ({ row: { original: s } }) => (
-          <div className="tabular leading-tight whitespace-nowrap">
-            <div>{formatDate(s.date)}</div>
-            <div className="text-xs text-muted-foreground">{formatTime(s.time) || " "}</div>
-          </div>
-        ),
       },
       {
         id: "series",
@@ -365,16 +366,6 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           </Button>
         </div>
 
-        <div className="px-6 pb-3">
-          <SearchBar
-            value={typed}
-            onChange={setTyped}
-            placeholder="Search patients and studies: name, ID, accession, description…"
-            onPatient={(p) => go(href.patients(p.id))}
-            className="w-full"
-          />
-        </div>
-
         {/* the filters, right above what they filter: when, then what and who */}
         <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
           <ToggleGroup
@@ -422,7 +413,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               className="h-8 px-2 text-muted-foreground"
               title="Clear the search and every filter"
               onClick={() => {
-                setTyped("");
+                setSearch("studies", "");
                 setQ("");
                 setModalities([]);
                 setSexes([]);
@@ -439,10 +430,10 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <Table className="table-fixed">
             <colgroup>
               <col className="w-11" />
+              <col className="w-32" />
               <col className="w-[26%]" />
               <col />
               <col className="w-24" />
-              <col className="w-28" />
               <col className="w-16" />
               <col className="w-20" />
             </colgroup>
