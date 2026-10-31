@@ -555,19 +555,12 @@ function shortcuts(): [string, Span][] {
   const day = (y: number, m: number, d: number) => iso(new Date(y, m, d));
   const [y, m, d] = [t.getFullYear(), t.getMonth(), t.getDate()];
   const monday = d - ((t.getDay() + 6) % 7);
+  // the usual few; any other range is From and To
   return [
-    // counted back from today
     ["Today", { from: iso(t), to: iso(t) }],
     ["Yesterday", { from: day(y, m, d - 1), to: day(y, m, d - 1) }],
-    ["Last 7 days", { from: day(y, m, d - 6), to: iso(t) }],
-    ["Last 30 days", { from: day(y, m, d - 29), to: iso(t) }],
-    ["Last 12 months", { from: day(y - 1, m, d + 1), to: iso(t) }],
-    // calendar periods
     ["This week", { from: day(y, m, monday), to: iso(t) }],
     ["This month", { from: day(y, m, 1), to: iso(t) }],
-    ["Last month", { from: day(y, m - 1, 1), to: day(y, m, 0) }],
-    ["This year", { from: day(y, 0, 1), to: iso(t) }],
-    ["Last year", { from: day(y - 1, 0, 1), to: day(y - 1, 11, 31) }],
   ];
 }
 
@@ -688,17 +681,6 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
     setOpen(false);
   };
   const picked = active ? shortcuts().find(([, s]) => s.from === span.from && s.to === span.to)?.[0] : "Any time";
-  const item = (label: string, s: Span, n: number) => (
-    <button
-      key={label}
-      type="button"
-      onClick={() => apply(s)}
-      className={cn("flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent", picked === label && "bg-selection-soft text-selection hover:bg-selection-soft")}
-    >
-      <span className="truncate">{label}</span>
-      <span className="tabular text-xs text-muted-foreground">{n}</span>
-    </button>
-  );
   return (
     <Popover
       open={open}
@@ -738,11 +720,24 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
             apply(ordered);
           }}
         >
-          {item("Any time", { from: "", to: "" }, total)}
-          <div className="my-1 border-t" />
-          {/* counted back from today, then calendar periods */}
-          <div className="grid grid-cols-2 gap-x-1">{shortcuts().map(([label, s]) => item(label, s, count(s)))}</div>
-          <div className="mt-1 border-t px-1 pt-2.5 pb-1">
+          {/* the usual few, side by side, each with its studies */}
+          <div className="grid grid-cols-4 gap-1">
+            {shortcuts().map(([label, s]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => apply(s)}
+                className={cn(
+                  "flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-xs transition-colors hover:bg-accent",
+                  picked === label && "border-selection/40 bg-selection-soft text-selection hover:bg-selection-soft",
+                )}
+              >
+                <span className="font-medium whitespace-nowrap">{label}</span>
+                <span className="tabular text-[11px] text-muted-foreground">{count(s)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 border-t px-1 pt-2.5 pb-1">
             <div className="mb-2 text-xs font-medium text-muted-foreground">Between</div>
             <div className="grid grid-cols-[2.5rem_1fr] items-center gap-x-2 gap-y-2 text-sm">
               <span className="text-muted-foreground">From</span>
@@ -760,6 +755,11 @@ function DateFilter({ span, dates, count, total, onApply }: { span: Span; dates:
                   "Either end can stay open"
                 )}
               </span>
+              {active && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => apply({ from: "", to: "" })}>
+                  Clear
+                </Button>
+              )}
               <Button type="submit" size="sm" disabled={!ordered.from && !ordered.to}>
                 Apply
               </Button>
