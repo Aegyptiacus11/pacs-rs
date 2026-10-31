@@ -127,9 +127,10 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   of 1,234 studies) with Previous and Next, and ↑ ↓ go on to the next or previous page. The server filters, sorts, counts and pages the list
   (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
-- **Search**: one box, in the top bar (`Ctrl K`, `⌘K` on a Mac, or `/` from anywhere). It
-  searches the list shown: on the studies it filters them as words are typed and suggests the
-  patients whose name or ID has them (↓ ↑ and Enter open one); on the patients, it filters them.
+- **Search**: two, with two jobs. The top bar's (`Ctrl K`, `⌘K` on a Mac) finds a patient or a
+  study anywhere in the archive and shows it on the page already open: on the studies, the
+  patient's studies or the study itself; on the patients, the patient's record. Each list has
+  its own box (`/`) that filters that list as words are typed and never leaves the page.
 - **Patients**: a list (latest study first, by name or by number of studies, a page at a time
   from `/ui/api/patients`) and the chosen patient's record: who they are, their totals
   (studies, series, images, first study, modalities), and a timeline of their studies, newest
