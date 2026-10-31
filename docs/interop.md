@@ -38,8 +38,8 @@ hospital names.
    pending responses' Remaining, Completed, Failed and Warning counts. **C-GET SCU** (PS3.4 C.4.3.2) where
    the hospital supports it, with SCP/SCU Role Selection for the storage SOP classes (PS3.7 D.3.3.4). When
    the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP. *C-MOVE done for Study
-   Root (`POST /modalities/{id}/move`); the REST route answers when the move is over, so its progress
-   is not shown yet. C-GET not yet.*
+   Root (`POST /modalities/{id}/move`), synchronous or as a job with its progress (`/jobs/{id}`). C-GET
+   not yet.*
 5. **De-identification on ingest** (research mode), below.
 6. **TLS** on associations, following PS3.15 H.1. Remote AEs (title, host, port) and pacs-rs's own are
    configured already (`PACS_DIMSE_*`).
