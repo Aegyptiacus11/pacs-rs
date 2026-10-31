@@ -8,6 +8,7 @@
 pub mod ae;
 pub mod command;
 pub mod message;
+pub mod sop_classes;
 pub mod status;
 
 pub use ae::{AeError, AeTitle, RemoteAe};
