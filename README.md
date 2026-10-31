@@ -101,8 +101,8 @@ order.
 
 Not yet: labels, metadata, modifications, wildcard and range searches in `/tools/find`.
 
-DIMSE services (C-ECHO, C-STORE, C-FIND, C-MOVE over dicom-ul) come after; the plan is in
-[docs/dimse.md](docs/dimse.md).
+DIMSE services, HL7 v2 and FHIR come after; the plan, with the standard behind each part, is in
+[docs/interop.md](docs/interop.md).
 
 ## Web interface
 
