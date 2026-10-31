@@ -4,7 +4,7 @@ use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use pacs_core::Instance;
 use pacs_core::public_ids;
 use pacs_core::synthetic::SyntheticSeries;
-use pacs_index::{Index, NewInstance, WorklistQuery, WorklistSort};
+use pacs_index::{Index, NewInstance, PatientQuery, PatientSort, WorklistQuery, WorklistSort};
 
 /// A one-slice study of its own patient: this date, description, sex and modality.
 async fn study(index: &Index, seed: u32, date: &str, description: &str, sex: &str, modality: &str) {
@@ -179,5 +179,83 @@ async fn the_list_is_filtered_sorted_and_paged_in_the_index() {
             index.worklist_facets(Some(&patient)).await.unwrap().dates,
             [("20250701".to_owned(), 1)]
         );
+    }
+}
+
+/// A one-slice study of patient `patient` (SYN<patient>), on `date`, of `modality`.
+async fn study_of(index: &Index, seed: u32, patient: u32, date: &str, modality: &str) {
+    let series = SyntheticSeries::new(seed, 1).for_patient(patient);
+    let bytes = series.slice_bytes(0);
+    let mut instance = Instance::from_bytes(&bytes).unwrap();
+    instance.object.put(DataElement::new(
+        Tag(0x0008, 0x0020),
+        VR::DA,
+        PrimitiveValue::from(date),
+    ));
+    instance.object.put(DataElement::new(
+        Tag(0x0008, 0x0060),
+        VR::CS,
+        PrimitiveValue::from(modality),
+    ));
+    let new = NewInstance::new(&instance, series.instance_uid(0), bytes.len()).unwrap();
+    index.record(&new).await.unwrap();
+}
+
+#[tokio::test]
+async fn patients_come_a_page_at_a_time_with_their_totals() {
+    for index in common::indexes().await {
+        study_of(&index, 101, 7, "20250105", "CT").await;
+        study_of(&index, 102, 7, "20260310", "MR").await;
+        study_of(&index, 103, 8, "20260101", "CT").await;
+        study_of(&index, 104, 9, "20240601", "CR").await;
+        let all = PatientQuery {
+            limit: 100,
+            descending: true,
+            ..PatientQuery::default()
+        };
+
+        // the latest study first
+        let (list, total) = index.worklist_patients(&all).await.unwrap();
+        assert_eq!(total, 3);
+        let ids: Vec<_> = list
+            .iter()
+            .map(|p| p.main_tags["PatientID"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["SYN7", "SYN8", "SYN9"]);
+        let seven = &list[0];
+        assert_eq!((seven.studies, seven.instances), (2, 2));
+        assert_eq!(seven.modalities, ["CT", "MR"]);
+        assert_eq!(
+            (seven.first_study.as_deref(), seven.last_study.as_deref()),
+            (Some("20250105"), Some("20260310"))
+        );
+        assert_eq!(seven.public_id, public_ids::patient("SYN7"));
+
+        // by number of studies, a page of one, a word
+        let q = PatientQuery {
+            sort: PatientSort::Studies,
+            limit: 1,
+            ..all.clone()
+        };
+        let (page, total) = index.worklist_patients(&q).await.unwrap();
+        assert_eq!(
+            (page[0].main_tags["PatientID"].as_str(), total),
+            (Some("SYN7"), 3)
+        );
+        let q = PatientQuery {
+            offset: 1,
+            limit: 1,
+            ..all.clone()
+        };
+        assert_eq!(
+            index.worklist_patients(&q).await.unwrap().0[0].main_tags["PatientID"],
+            "SYN8"
+        );
+        let q = PatientQuery {
+            words: vec!["syn9".into()],
+            ..all.clone()
+        };
+        let (found, total) = index.worklist_patients(&q).await.unwrap();
+        assert_eq!((found.len(), total), (1, 1));
     }
 }
