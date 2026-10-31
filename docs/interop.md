@@ -1,7 +1,7 @@
 # Hospital interfaces: the plan
 
-Steps 1 and 2 are built (`crates/pacs-dimse`, see the README's "DIMSE"); the rest is not yet.
-pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO and C-STORE today. Next to Quorum it is a **research PACS**
+Steps 1 to 3 are built (`crates/pacs-dimse`, see the README's "DIMSE"); the rest is not yet.
+pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE and C-FIND today. Next to Quorum it is a **research PACS**
 beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies them when the project
 asks for it, and serves Quorum. It does not replace the clinical PACS.
 
@@ -32,7 +32,8 @@ hospital names.
    without staging: `pacs_dimse::Destination` is where step 5 adds it.*
 3. **C-FIND SCU** (PS3.4 C.4.1.2): Study Root first, then Patient Root; by Patient ID, Accession Number,
    Study Date range and Modality; the pending responses fill a result list as they arrive; C-CANCEL when
-   the user stops.
+   the user stops. *Done for Study Root (`GET /modalities/{id}/studies`); Patient
+   Root not yet. The SCU hands each match over as it arrives; the REST route collects them.*
 4. **C-MOVE SCU** (PS3.4 C.4.2.2) with pacs-rs's own AE title as the destination; progress from the
    pending responses' Remaining, Completed, Failed and Warning counts. **C-GET SCU** (PS3.4 C.4.3.2) where
    the hospital supports it, with SCP/SCU Role Selection for the storage SOP classes (PS3.7 D.3.3.4). When
