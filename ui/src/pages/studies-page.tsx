@@ -147,6 +147,17 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [edge, setEdge] = useState<"first" | "last" | null>(null);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setCurrent(open), [open]);
+  // Esc lets the chosen one go, unless it is closing something else or being typed into
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if ((e.target as HTMLElement).closest("input, textarea, [role=dialog], [role=menu], [role=listbox]")) return;
+      if (document.querySelector("[role=dialog], [role=menu]")) return;
+      setCurrent(null);
+    };
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, []);
   // the URL names the study shown, so a reload or a link comes back to it
   useEffect(() => {
     const to = href.studies(patient, current);
@@ -472,7 +483,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                         "h-12 cursor-pointer",
                         row.id === current && "bg-selection-soft shadow-[inset_3px_0_0_var(--selection)] hover:bg-selection-soft data-[state=selected]:bg-selection-soft",
                       )}
-                      onClick={() => setCurrent(row.id)}
+                      // a second click on the chosen row lets it go
+                      onClick={() => setCurrent((c) => (c === row.id ? null : row.id))}
                       onDoubleClick={() => openStudy(row.id)}
                     >
                       {row.getVisibleCells().map((cell) => (
@@ -529,7 +541,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
       <aside aria-label="The chosen study" className="hidden w-[400px] shrink-0 overflow-y-auto border-l bg-card lg:block">
         {shown ? (
-          <StudyPane key={shown.id} study={shown} onPick={setCurrent} onDelete={setPending} />
+          <StudyPane key={shown.id} study={shown} onPick={setCurrent} onClose={() => setCurrent(null)} onDelete={setPending} />
         ) : (
           <ArchiveSummary summary={summary.data} scope={scope} total={facets.all} onPick={setCurrent} />
         )}
@@ -782,7 +794,7 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 }
 
 // the chosen study: who, what, its series, the patient's other studies, and what can be done
-function StudyPane({ study: s, onPick, onDelete }: { study: Study; onPick: (id: string) => void; onDelete: (p: PendingDelete) => void }) {
+function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPick: (id: string) => void; onClose: () => void; onDelete: (p: PendingDelete) => void }) {
   const details = useStudySeries(s.id);
   const others = (usePatientStudies(s.patient).data ?? []).filter((x) => x.id !== s.id);
   const facts: [string, ReactNode][] = [
@@ -803,6 +815,9 @@ function StudyPane({ study: s, onPick, onDelete }: { study: Study; onPick: (id: 
             {[s.patientId, sexAge(s.sex, s.birth, s.date), isoDate(s.birth) && `born ${formatDate(s.birth)}`].filter(Boolean).join(" · ")}
           </div>
         </div>
+        <Button variant="ghost" size="icon-sm" aria-label="Close the study" title="Close (Esc)" className="ml-auto self-start text-muted-foreground" onClick={onClose}>
+          <X />
+        </Button>
       </div>
 
       <div className="border-t px-5 py-4">

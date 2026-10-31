@@ -36,6 +36,17 @@ export function PatientsPage({ open }: { open: string | null }) {
   const [current, setCurrent] = useState<string | null>(open);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setCurrent(open), [open]);
+  // Esc lets the chosen one go, unless it is closing something else or being typed into
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if ((e.target as HTMLElement).closest("input, textarea, [role=dialog], [role=menu], [role=listbox]")) return;
+      if (document.querySelector("[role=dialog], [role=menu]")) return;
+      setCurrent(null);
+    };
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, []);
   useEffect(() => {
     const to = href.patients(current);
     if (location.hash !== to) history.replaceState(null, "", to);
@@ -105,7 +116,8 @@ export function PatientsPage({ open }: { open: string | null }) {
               key={p.id}
               data-row={p.id}
               aria-current={p.id === current ? "true" : undefined}
-              onClick={() => setCurrent(p.id)}
+              // a second click on the chosen patient lets them go
+              onClick={() => setCurrent((c) => (c === p.id ? null : p.id))}
               className={cn(
                 "flex w-full items-center gap-3 border-b px-5 py-2.5 text-left hover:bg-muted/50",
                 p.id === current && "bg-selection-soft shadow-[inset_3px_0_0_var(--selection)] hover:bg-selection-soft",
@@ -148,6 +160,7 @@ export function PatientsPage({ open }: { open: string | null }) {
       <main aria-label="The chosen patient" className="min-w-0 flex-1 overflow-y-auto">
         {current ? (
           <PatientRecord
+            onClose={() => setCurrent(null)}
             key={current}
             id={current}
             known={known.get(current)}
@@ -182,7 +195,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 
 // a patient's record: who, totals, the studies as a timeline
-function PatientRecord({ id, known, onDeleted }: { id: string; known: Patient | undefined; onDeleted: () => void }) {
+function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: Patient | undefined; onClose: () => void; onDeleted: () => void }) {
   const studies = usePatientStudies(id);
   const list = studies.data ?? [];
   const [compare, setCompare] = useState<string[]>([]);
@@ -236,6 +249,9 @@ function PatientRecord({ id, known, onDeleted }: { id: string; known: Patient | 
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <Button variant="ghost" size="icon-sm" aria-label="Close the patient" title="Close (Esc)" className="text-muted-foreground" onClick={onClose}>
+          <X />
+        </Button>
       </header>
 
       <section className="grid grid-cols-2 divide-x border-b bg-card sm:grid-cols-5">
