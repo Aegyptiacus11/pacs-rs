@@ -4,8 +4,8 @@ An open-source PACS written in Rust, built on the [dicom-rs](https://github.com/
 crates. Its index is SQLite or Postgres; its files are on disk or in S3-compatible storage.
 
 Status: early development. `pacs-server` serves DICOMweb over HTTP, with files on disk or in
-S3 and a SQLite index, and speaks DIMSE: C-ECHO, C-STORE into the archive, and C-FIND to search
-another archive's studies.
+S3 and a SQLite index, and speaks DIMSE: C-ECHO, C-STORE into the archive, and C-FIND and
+C-MOVE to search another archive's studies and pull them in.
 
 ## Crates
 
@@ -17,7 +17,7 @@ another archive's studies.
 | `pacs-archive` | ingest (compress, store, then index, undone if the index refuses) and deletion (index then files) |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
-| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND SCU |
+| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND and C-MOVE SCU |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |
 
 `ui/` is the web interface, a Vite project built into the binary (see "Web interface").
@@ -90,6 +90,7 @@ DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gi
 | `GET /modalities[?expand]` | the remote AEs of `PACS_DIMSE_REMOTES`: their ids, or each one's `AET`, `Host` and `Port` |
 | `POST /modalities/{id}/echo` | a C-ECHO to that AE: 200 with `Status` and `ElapsedMs` when it answers Success, 502 with the reason when not |
 | `GET /modalities/{id}/studies?PatientID=&PatientName=&AccessionNumber=&StudyDate=&ModalitiesInStudy=&limit=` | that AE's studies, by C-FIND (see "DIMSE"), as a DICOM JSON array |
+| `POST /modalities/{id}/move` (`{"StudyInstanceUID": "..."}` or a list) | that AE sends the studies to pacs-rs by C-MOVE; the final status and counts |
 
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
 then the files, so the index never names a missing file. A file that cannot be removed is
@@ -108,7 +109,7 @@ Not yet: labels, metadata, modifications, wildcard and range searches in `/tools
 
 ## DIMSE
 
-Off unless `PACS_DIMSE_LISTEN` names an address. What works now, steps 1 to 3 of
+Off unless `PACS_DIMSE_LISTEN` names an address. What works now, steps 1 to 4 of
 [docs/interop.md](docs/interop.md), the plan for a research PACS that pulls studies from a
 hospital's PACS and de-identifies them on ingest:
 
@@ -123,6 +124,14 @@ hospital's PACS and de-identifies them on ingest:
   search with C-CANCEL and a `Warning` header says more studies match; one also says when the
   archive did not support a key or ended the search early. A query that breaks the matching
   rules of PS3.4 C.2.2.2 (two values, a malformed date, an unknown parameter) is 400.
+- **C-MOVE SCU**, Study Root at study level, through `POST /modalities/{id}/move`: the remote AE
+  is asked to send one or more studies to pacs-rs's own AE title, never elsewhere, and they arrive
+  through the C-STORE SCP below. The answer, once the move is over, has the final status
+  (`Success`, or `Warning` with the failed instances named) and the Completed, Failed and Warning
+  counts. 502 when the remote AE fails, saying when it does not know pacs-rs as a destination
+  (status A801: register pacs-rs's AE title, host and port there); 409 when pacs-rs is not
+  listening for DIMSE; a `Warning` header when the remote AE sent nothing, as it does for a
+  study it does not have.
 - **C-STORE SCP** for the 173 Storage SOP Classes of PS3.4 Table B.5-1 (DICOM 2026d), in any
   transfer syntax dicom-rs reads. Each data set is kept in the transfer syntax it came in, with
   file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
@@ -151,8 +160,9 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 | `0211` Unrecognized operation | an operation pacs-rs does not provide (C-FIND, C-MOVE, C-GET for now) |
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`) and pynetdicom 3.0.4,
-both ways (see "Building"). Not yet: Patient Root queries, C-MOVE, de-identification on ingest,
-TLS, C-STORE SCU; the order is in [docs/interop.md](docs/interop.md).
+both ways (see "Building"); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`. Not yet:
+Patient Root, C-GET, de-identification on ingest, TLS, C-STORE SCU; a move answers only when it
+is over, without progress on the way. The order is in [docs/interop.md](docs/interop.md).
 
 ## Web interface
 
@@ -283,6 +293,7 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_DIMSE_KNOWN_CALLERS_ONLY` | `false` | accept associations only from the remotes' AE titles |
 | `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
 | `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |
+| `PACS_DIMSE_MOVE_TIMEOUT` | `600` | seconds to wait between two C-MOVE responses, while a large study is sent |
 | `RUST_LOG` | `info` | log filter |
 
 In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
