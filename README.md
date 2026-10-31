@@ -112,12 +112,13 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Layout**: a rail down the left side to go places (Studies, Patients), a bar along the top
   for the tools (the search, light or dark, a warning when the server doesn't answer), the page
   in between.
-- **Studies**: a worklist and, beside it, the chosen study. Over the table, under the search: date presets with counts
-  (today, 7 days, 30 days, 1 year) and a range of one's own (shortcuts such as last week or last year, two
-  months to click the first and last day on, with the days that have studies dotted, or both
-  ends typed), a filter box beside the modality (every DICOM imaging modality), sex and age (at the study:
-  0–17, 18–39, 40–64, 65+) filters,
-  sortable columns (date first, then patient, study, modality, series, images). A click on a row shows the
+- **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:
+  a filter box (`/`), the date, the modality (every DICOM imaging modality), the sex and the age
+  at the study (0–17, 18–39, 40–64, 65+), each with how many studies it holds. The date opens
+  one panel: shortcuts with their counts (today, yesterday, the last 7 or 30 days or 12 months,
+  this or last week, month, year), two months to click the first and last day on (the days with
+  studies dotted), and both ends typed. Sortable columns (date first, then patient, study,
+  modality, series, images). A click on a row shows the
   study in the pane: the patient, its series as thumbnails (a click opens one), the patient's
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
   ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
