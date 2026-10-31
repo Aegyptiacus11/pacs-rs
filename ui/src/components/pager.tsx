@@ -1,8 +1,10 @@
 // The footer of a paged list: where we are, rows per page (kept in this browser), first,
-// previous, numbered pages around this one, next, last.
+// previous, numbered pages around this one, next, last, and a page typed in (Enter goes).
 
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
@@ -75,8 +77,8 @@ export function Pager({
             <ChevronLeft />
           </Button>
           {compact ? (
-            <span className="tabular px-1 text-xs">
-              {pageIndex + 1} / {pages}
+            <span className="tabular flex items-center gap-1 px-1 text-xs">
+              <GoTo pageIndex={pageIndex} pages={pages} onPage={onPage} /> / {pages}
             </span>
           ) : (
             items.map((i, k) =>
@@ -103,8 +105,38 @@ export function Pager({
           <Button variant="ghost" size="icon-sm" aria-label="Last page" disabled={pageIndex >= pages - 1} onClick={() => onPage(pages - 1)}>
             <ChevronsRight />
           </Button>
+          {!compact && pages > 5 && (
+            <label className="ml-2 flex items-center gap-1.5 text-xs">
+              Page <GoTo pageIndex={pageIndex} pages={pages} onPage={onPage} /> of {pages.toLocaleString()}
+            </label>
+          )}
         </nav>
       )}
     </div>
+  );
+}
+
+// a page number typed in: Enter (or leaving the field) goes there, kept within 1 and the last
+function GoTo({ pageIndex, pages, onPage }: { pageIndex: number; pages: number; onPage: (i: number) => void }) {
+  const [text, setText] = useState(String(pageIndex + 1));
+  useEffect(() => setText(String(pageIndex + 1)), [pageIndex]);
+  const go = () => {
+    const n = Math.round(Number(text));
+    if (!Number.isFinite(n) || n < 1) return setText(String(pageIndex + 1));
+    const to = Math.min(pages, n) - 1;
+    setText(String(to + 1));
+    if (to !== pageIndex) onPage(to);
+  };
+  return (
+    <Input
+      inputMode="numeric"
+      aria-label="Go to page"
+      value={text}
+      onChange={(e) => setText(e.target.value.replace(/\D/g, ""))}
+      onKeyDown={(e) => e.key === "Enter" && go()}
+      onBlur={go}
+      onFocus={(e) => e.target.select()}
+      className="tabular h-7 w-14 px-2 text-center text-xs"
+    />
   );
 }
