@@ -1,7 +1,7 @@
 # Hospital interfaces: the plan
 
-Steps 1 to 3 are built (`crates/pacs-dimse`, see the README's "DIMSE"); the rest is not yet.
-pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE and C-FIND today. Next to Quorum it is a **research PACS**
+Steps 1 to 4 are built (`crates/pacs-dimse`, see the README's "DIMSE"), C-GET aside; the rest is
+not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today. Next to Quorum it is a **research PACS**
 beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies them when the project
 asks for it, and serves Quorum. It does not replace the clinical PACS.
 
@@ -37,7 +37,9 @@ hospital names.
 4. **C-MOVE SCU** (PS3.4 C.4.2.2) with pacs-rs's own AE title as the destination; progress from the
    pending responses' Remaining, Completed, Failed and Warning counts. **C-GET SCU** (PS3.4 C.4.3.2) where
    the hospital supports it, with SCP/SCU Role Selection for the storage SOP classes (PS3.7 D.3.3.4). When
-   the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP.
+   the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP. *C-MOVE done for Study
+   Root (`POST /modalities/{id}/move`); the REST route answers when the move is over, so its progress
+   is not shown yet. C-GET not yet.*
 5. **De-identification on ingest** (research mode), below.
 6. **TLS** on associations, following PS3.15 H.1. Remote AEs (title, host, port) and pacs-rs's own are
    configured already (`PACS_DIMSE_*`).
