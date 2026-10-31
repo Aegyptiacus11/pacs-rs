@@ -585,3 +585,185 @@ async fn move_refuses_what_cannot_work() {
         );
     }
 }
+
+/// A slow move SCP for the jobs: `total` Pending responses, `gap_ms` apart, each one more
+/// completed; a C-CANCEL in a gap ends it with Cancel (FE00), else Success. Returns whether
+/// a C-CANCEL came.
+async fn slow_move_scp(total: u16, gap_ms: u64) -> (u16, tokio::task::JoinHandle<bool>) {
+    use dicom_ul::ServerAssociationOptions;
+    use pacs_dimse::scu::retrieve::STUDY_ROOT_MOVE;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut association = ServerAssociationOptions::new()
+            .ae_title("QRSCP")
+            .with_abstract_syntax(STUDY_ROOT_MOVE)
+            .establish_async(socket)
+            .await
+            .unwrap();
+        let context = association.presentation_contexts()[0].id;
+        let Incoming::Message(rq) = message::receive(&mut association, 1 << 20).await.unwrap()
+        else {
+            panic!("no C-MOVE-RQ");
+        };
+        let rsp = |status: u16, remaining: u16, completed: u16| {
+            Command::new()
+                .with_ui(tag::AFFECTED_SOP_CLASS_UID, STUDY_ROOT_MOVE)
+                .with_us(tag::COMMAND_FIELD, field::C_MOVE_RSP)
+                .with_us(
+                    tag::MESSAGE_ID_BEING_RESPONDED_TO,
+                    rq.command.message_id().unwrap(),
+                )
+                .with_us(tag::COMMAND_DATA_SET_TYPE, 0x0101)
+                .with_us(tag::STATUS, status)
+                .with_us(tag::NUMBER_OF_REMAINING_SUB_OPERATIONS, remaining)
+                .with_us(tag::NUMBER_OF_COMPLETED_SUB_OPERATIONS, completed)
+                .with_us(tag::NUMBER_OF_FAILED_SUB_OPERATIONS, 0)
+                .with_us(tag::NUMBER_OF_WARNING_SUB_OPERATIONS, 0)
+        };
+        let mut cancelled = false;
+        let mut completed = 0;
+        for i in 1..=total {
+            completed = i;
+            message::send(&mut association, context, &rsp(0xFF00, total - i, i), None)
+                .await
+                .unwrap();
+            if let Ok(Ok(Incoming::Message(m))) = tokio::time::timeout(
+                std::time::Duration::from_millis(gap_ms),
+                message::receive(&mut association, 0),
+            )
+            .await
+            {
+                cancelled = m.command.command_field() == Ok(field::C_CANCEL_RQ);
+                break;
+            }
+        }
+        let last = if cancelled {
+            rsp(0xFE00, total - completed, completed)
+        } else {
+            rsp(0x0000, 0, completed)
+        };
+        message::send(&mut association, context, &last, None)
+            .await
+            .unwrap();
+        let _ = message::receive(&mut association, 0).await;
+        cancelled
+    });
+    (port, task)
+}
+
+/// Poll `GET /jobs/{id}` until the job is over (or 5 s).
+async fn job_over(app: &Router, path: &str) -> Value {
+    for _ in 0..100 {
+        let (_, job) = get(app, path).await;
+        if job["State"] != "Running" {
+            return job;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the job is still running");
+}
+
+async fn app_with_remote(dir: &Path, port: u16) -> Router {
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir,
+        &["--dimse-remotes", &remotes, "--dimse-listen", "127.0.0.1:0"],
+    );
+    app(open_archive(&settings).await.unwrap(), &settings).unwrap()
+}
+
+/// `"Asynchronous": true`: 202 with the job's ID and path at once; `GET /jobs/{id}` shows the
+/// Pending counts as they come (C.4.2.1.6-9), then the final state.
+#[tokio::test]
+async fn an_asynchronous_move_is_a_job_with_progress() {
+    let (port, _scp) = slow_move_scp(4, 150).await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_remote(dir.path(), port).await;
+    let (status, started) = send(
+        &app,
+        move_request(
+            "qr",
+            r#"{"StudyInstanceUID": "2.25.1", "Asynchronous": true}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let path = started["Path"].as_str().unwrap().to_owned();
+    assert_eq!(path, format!("/jobs/{}", started["ID"].as_str().unwrap()));
+    assert_eq!(get(&app, "/jobs").await.1, json!([started["ID"]]));
+    let mut seen_running = false;
+    for _ in 0..40 {
+        let (_, job) = get(&app, &path).await;
+        if job["State"] == "Running" && job["Completed"].as_u64().is_some_and(|c| c >= 1) {
+            seen_running = true;
+            assert!(job["Progress"].as_u64().unwrap() < 100, "{job}");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(seen_running, "progress is visible while the move runs");
+    let job = job_over(&app, &path).await;
+    assert_eq!(job["State"], "Success");
+    assert_eq!(
+        (job["Completed"].as_u64(), job["Progress"].as_u64()),
+        (Some(4), Some(100))
+    );
+    assert_eq!(job["Type"], "C-MOVE");
+    assert_eq!(job["StudyInstanceUIDs"], json!(["2.25.1"]));
+}
+
+/// `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ; the job ends Cancelled with the counts
+/// of the Cancel response (C.4.2.2.1). A job over cannot be cancelled: 409.
+#[tokio::test]
+async fn a_running_move_can_be_cancelled() {
+    let (port, scp) = slow_move_scp(50, 200).await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_remote(dir.path(), port).await;
+    let (_, started) = send(
+        &app,
+        move_request(
+            "qr",
+            r#"{"StudyInstanceUID": "2.25.1", "Asynchronous": true}"#,
+        ),
+    )
+    .await;
+    let path = started["Path"].as_str().unwrap().to_owned();
+    let cancel = || {
+        Request::post(format!("{path}/cancel"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(send(&app, cancel()).await.0, StatusCode::ACCEPTED);
+    let job = job_over(&app, &path).await;
+    assert_eq!(job["State"], "Cancelled", "{job}");
+    assert!(job["Remaining"].as_u64().unwrap() > 0, "{job}");
+    assert!(scp.await.unwrap(), "the SCP got a C-CANCEL");
+    assert_eq!(send(&app, cancel()).await.0, StatusCode::CONFLICT);
+    assert_eq!(get(&app, "/jobs/999").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(get(&app, "/jobs/nonsense").await.0, StatusCode::NOT_FOUND);
+}
+
+/// A move that fails in the background ends Failure, with the reason in `Error`.
+#[tokio::test]
+async fn a_failed_asynchronous_move_says_why() {
+    let (port, _scp) = move_scp(0xA801, 0, 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = app_with_remote(dir.path(), port).await;
+    let (_, started) = send(
+        &app,
+        move_request(
+            "qr",
+            r#"{"StudyInstanceUID": "2.25.1", "Asynchronous": true}"#,
+        ),
+    )
+    .await;
+    let job = job_over(&app, started["Path"].as_str().unwrap()).await;
+    assert_eq!(job["State"], "Failure");
+    assert!(
+        job["Error"].as_str().unwrap().contains("registered"),
+        "{job}"
+    );
+}

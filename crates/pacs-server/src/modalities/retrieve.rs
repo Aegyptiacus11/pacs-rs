@@ -16,12 +16,16 @@ use super::Remotes;
 
 /// The body names the studies: `{"StudyInstanceUID": "1.2.3"}` or a list of them. The
 /// destination is always pacs-rs's own AE title: this route pulls studies in, it does not
-/// send a hospital's studies anywhere else. Answers when the move is over: 200 with the
-/// final status (`Success`, `Warning` when some instances failed, named in
-/// `FailedSOPInstanceUIDs`) and the counts, and a `Warning` header when nothing was sent; 502 when the remote AE cannot be reached or
-/// fails, and says why (a destination it does not know means pacs-rs is not registered
-/// there); 409 when pacs-rs is not listening for DIMSE, so nothing could arrive; 400 for a
-/// body without valid UIDs; 404 for an unknown id.
+/// send a hospital's studies anywhere else.
+///
+/// With `"Asynchronous": true` the move runs as a job: 202 with its `ID` and `Path`, whose
+/// counts `GET /jobs/{id}` shows as they come. Otherwise the answer comes when the move is
+/// over: 200 with the final status (`Success`, `Warning` when some instances failed, named in
+/// `FailedSOPInstanceUIDs`) and the counts, and a `Warning` header when nothing was sent; 502
+/// when the remote AE cannot be reached or fails, and says why (a destination it does not
+/// know means pacs-rs is not registered there). Either way, 409 when pacs-rs is not
+/// listening for DIMSE, so nothing could arrive; 400 for a body without valid UIDs; 404 for
+/// an unknown id.
 pub(super) async fn move_studies(
     State(remotes): State<Arc<Remotes>>,
     Path(id): Path<String>,
@@ -52,6 +56,22 @@ pub(super) async fn move_studies(
             details: Some("set PACS_DIMSE_LISTEN so the remote AE can send the studies".into()),
         }
         .into_response();
+    }
+    if let Some(bad) = studies.iter().find(|u| !pacs_core::is_valid_uid(u)) {
+        return RestError::bad_request("Bad request", format!("{bad:?} is not a UID"))
+            .into_response();
+    }
+    if studies.is_empty() {
+        return RestError::bad_request("Bad request", "no Study Instance UID to move")
+            .into_response();
+    }
+    let asynchronous = body
+        .as_ref()
+        .and_then(|b| b.get("Asynchronous"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if asynchronous {
+        return super::jobs::spawn_move(remotes.clone(), id, studies);
     }
     let started = Instant::now();
     let result = pacs_dimse::move_studies(

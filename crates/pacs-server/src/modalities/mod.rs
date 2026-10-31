@@ -1,7 +1,9 @@
 //! The remote AEs pacs-rs can call: `GET /modalities[?expand]`, a C-ECHO to test the link
 //! to one (`POST /modalities/{id}/echo`), and the operations on its studies, one module
-//! each: [`studies`] (C-FIND), [`retrieve`] (C-MOVE).
+//! each: [`studies`] (C-FIND), [`retrieve`] (C-MOVE), with moves in the background as
+//! [`jobs`].
 
+mod jobs;
 mod retrieve;
 mod studies;
 
@@ -17,11 +19,12 @@ use pacs_dimse::{Config, RemoteAe};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
 
-/// What the routes share: the DIMSE configuration, and whether pacs-rs listens for DIMSE,
-/// without which nothing moved to it can arrive.
+/// What the routes share: the DIMSE configuration, whether pacs-rs listens for DIMSE
+/// (without which nothing moved to it can arrive), and the moves running in the background.
 pub(crate) struct Remotes {
     pub config: Config,
     pub receiving: bool,
+    jobs: jobs::Jobs,
 }
 
 pub(crate) fn router(config: Config, receiving: bool) -> Router {
@@ -30,7 +33,14 @@ pub(crate) fn router(config: Config, receiving: bool) -> Router {
         .route("/modalities/{id}/echo", post(echo))
         .route("/modalities/{id}/studies", get(studies::studies))
         .route("/modalities/{id}/move", post(retrieve::move_studies))
-        .with_state(Arc::new(Remotes { config, receiving }))
+        .route("/jobs", get(jobs::list))
+        .route("/jobs/{id}", get(jobs::get))
+        .route("/jobs/{id}/cancel", post(jobs::cancel))
+        .with_state(Arc::new(Remotes {
+            config,
+            receiving,
+            jobs: jobs::Jobs::default(),
+        }))
 }
 
 fn describe(remote: &RemoteAe) -> Value {
