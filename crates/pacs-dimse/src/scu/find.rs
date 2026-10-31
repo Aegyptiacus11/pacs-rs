@@ -10,11 +10,11 @@ use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::InMemDicomObject;
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 
+use super::{ConnectError, Connected, connect};
 use crate::ae::{AeTitle, RemoteAe};
 use crate::command::{Command, NO_DATA_SET, PRIORITY_MEDIUM, field, tag};
 use crate::message::{self, DataSet, Incoming, MessageError};
 use crate::query::{QueryError, STUDY_ROOT_FIND, StudyQuery};
-use crate::scu::{ConnectError, Connected, connect};
 use crate::status::{Status, StatusClass};
 use crate::{EXPLICIT_VR_LE, IMPLICIT_VR_LE};
 

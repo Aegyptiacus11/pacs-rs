@@ -2,15 +2,18 @@
 //! C-FIND as SCU.
 //!
 //! Behaviour follows DICOM 2026d: messages and statuses from PS3.7 (6.3, 9.1, 9.3, Annexes
-//! C and E), the Verification and Storage Service Classes from PS3.4 (Annexes A and B), the
-//! Upper Layer from PS3.8 and file meta information from PS3.10. `docs/interop.md` says what
-//! comes next.
+//! C and E), the Verification, Storage and Query/Retrieve Service Classes from PS3.4 (Annexes
+//! A, B and C), the Upper Layer from PS3.8 and file meta information from PS3.10.
+//! `docs/interop.md` says what comes next.
+//!
+//! Layers, lowest first: [`ae`], [`status`], [`command`] (Command Sets) and [`message`]
+//! (messages over an association) are DIMSE itself; [`sop_classes`] and [`query`] are what
+//! the services exchange; [`scp`] accepts associations, [`scu`] opens them.
 
 use std::time::Duration;
 
 pub mod ae;
 pub mod command;
-pub mod find;
 pub mod message;
 pub mod query;
 pub mod scp;
@@ -19,10 +22,11 @@ pub mod sop_classes;
 pub mod status;
 
 pub use ae::{AeError, AeTitle, RemoteAe};
-pub use find::{FindError, FindOutcome, find_studies};
 pub use query::{DateRange, QueryError, StudyQuery};
 pub use scp::{Destination, Scp};
-pub use scu::{ConnectError, EchoError, echo};
+pub use scu::ConnectError;
+pub use scu::echo::{EchoError, echo};
+pub use scu::find::{FindError, FindOutcome, find_studies};
 pub use status::{Status, StatusClass};
 
 /// Implicit VR Little Endian, the default transfer syntax every AE accepts (PS3.5 10.1).

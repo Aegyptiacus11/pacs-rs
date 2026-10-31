@@ -6,8 +6,8 @@ use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::InMemDicomObject;
 use pacs_dimse::command::{NO_DATA_SET, field, tag};
-use pacs_dimse::find::{c_cancel_rq, c_find_rq};
 use pacs_dimse::query::{STUDY_ROOT_FIND, wildcard_match};
+use pacs_dimse::scu::find::{c_cancel_rq, c_find_rq};
 use pacs_dimse::{DateRange, StudyQuery};
 
 fn text(object: &InMemDicomObject, tag: dicom_core::Tag) -> Option<String> {
