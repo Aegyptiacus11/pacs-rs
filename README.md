@@ -4,7 +4,7 @@ An open-source PACS written in Rust, built on the [dicom-rs](https://github.com/
 crates. Its index is SQLite or Postgres; its files are on disk or in S3-compatible storage.
 
 Status: early development. `pacs-server` serves DICOMweb over HTTP, with files on disk or in
-S3 and a SQLite index.
+S3 and a SQLite index, and receives DICOM over DIMSE (C-ECHO, C-STORE).
 
 ## Crates
 
@@ -16,6 +16,7 @@ S3 and a SQLite index.
 | `pacs-archive` | ingest (compress, store, then index, undone if the index refuses) and deletion (index then files) |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
+| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |
 
 `ui/` is the web interface, a Vite project built into the binary (see "Web interface").
@@ -85,6 +86,8 @@ DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gi
 | `DELETE /patients/{id}`, `/studies/{id}`, `/series/{id}`, `/instances/{id}` | the resource, everything under it and every ancestor left empty; `RemainingAncestor` names the closest one still there, or is `null` |
 | `GET /tools/create-archive?resources=a,b`, `POST /tools/create-archive` (`{"Resources": [...]}`) | patients, studies, series and instances in one ZIP, laid out as above, each file once; a series or instance keeps its number in the series |
 | `POST /tools/find` | `Level` Patient, Study, Series or Instance, exact matching on the UIDs, PatientID, AccessionNumber, StudyDate |
+| `GET /modalities[?expand]` | the remote AEs of `PACS_DIMSE_REMOTES`: their ids, or each one's `AET`, `Host` and `Port` |
+| `POST /modalities/{id}/echo` | a C-ECHO to that AE: 200 with `Status` and `ElapsedMs` when it answers Success, 502 with the reason when not |
 
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
 then the files, so the index never names a missing file. A file that cannot be removed is
@@ -101,8 +104,44 @@ order.
 
 Not yet: labels, metadata, modifications, wildcard and range searches in `/tools/find`.
 
-DIMSE services come after: pacs-rs as a research PACS that pulls studies from a hospital's PACS and
-de-identifies them on ingest. The plan, with the standard behind each part, is in [docs/interop.md](docs/interop.md).
+## DIMSE
+
+Off unless `PACS_DIMSE_LISTEN` names an address. What works now, steps 1 and 2 of
+[docs/interop.md](docs/interop.md), the plan for a research PACS that pulls studies from a
+hospital's PACS and de-identifies them on ingest:
+
+- **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the AEs of
+  `PACS_DIMSE_REMOTES`, through `POST /modalities/{id}/echo`, to test a hospital link.
+- **C-STORE SCP** for the 173 Storage SOP Classes of PS3.4 Table B.5-1 (DICOM 2026d), in any
+  transfer syntax dicom-rs reads. Each data set is kept in the transfer syntax it came in, with
+  file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
+  goes through the same ingest as `POST /instances`: compressed as `PACS_COMPRESSION` says,
+  stored, indexed; an instance sent again is kept as first stored unless
+  `PACS_OVERWRITE_INSTANCES` is set, and answered Success either way.
+- **AE titles**: `PACS_DIMSE_AE_TITLE` and any `PACS_DIMSE_EXTRA_AE_TITLES` are accepted on one
+  port with one set of presentation contexts; another called AE title is rejected (PS3.8 reason
+  7), and with `PACS_DIMSE_KNOWN_CALLERS_ONLY` so is a calling AE title not among the remotes
+  (reason 3). Over `PACS_DIMSE_MAX_ASSOCIATIONS`, an association is rejected as transient,
+  local limit exceeded, for the sender to retry.
+
+C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Comment:
+
+| Status | When |
+|---|---|
+| `0000` Success | stored, or already stored |
+| `A700`, `A701` Refused: Out of resources | the store, or the index, did not take it |
+| `A702` Refused: Out of resources | the data set is larger than `PACS_MAX_UPLOAD_BYTES` |
+| `A900` Data Set does not match SOP Class | SOP Class UID is not the Affected SOP Class UID |
+| `C000` Cannot understand | the data set cannot be read, or lacks a UID an instance needs |
+| `C001` Cannot understand | SOP Instance UID is not the Affected SOP Instance UID |
+| `C002` Cannot understand | the UIDs contradict the archive (an instance already in another series) |
+| `0122` SOP Class not supported | a SOP class pacs-rs does not have |
+| `0212` Mistyped argument | a SOP class not the one agreed for the presentation context |
+| `0211` Unrecognized operation | an operation pacs-rs does not provide (C-FIND, C-MOVE, C-GET for now) |
+
+Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`) and pynetdicom 3.0.4, both ways
+(see "Building"). Not yet: C-FIND and C-MOVE as SCU, de-identification on ingest, TLS, C-STORE
+SCU; the order is in [docs/interop.md](docs/interop.md).
 
 ## Web interface
 
@@ -226,12 +265,20 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
 | `PACS_UI` | `true` | serve the web interface at `/ui/` |
+| `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
+| `PACS_DIMSE_AE_TITLE` | `PACSRS` | pacs-rs's AE title, called and calling |
+| `PACS_DIMSE_EXTRA_AE_TITLES` | none | further called AE titles accepted, comma-separated |
+| `PACS_DIMSE_REMOTES` | none | remote AEs, comma-separated, each `id=AE_TITLE@host:port` |
+| `PACS_DIMSE_KNOWN_CALLERS_ONLY` | `false` | accept associations only from the remotes' AE titles |
+| `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
+| `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |
 | `RUST_LOG` | `info` | log filter |
 
 In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
 an unprivileged user (uid 10001). It listens on `0.0.0.0:8080` and keeps the index and files in
 the `/data` volume unless `PACS_STORAGE` says otherwise. With no shell or curl inside, health
-checks call `/healthz` from outside.
+checks call `/healthz` from outside. For DIMSE, set `PACS_DIMSE_LISTEN=0.0.0.0:11112` and publish
+that port.
 
 A synthetic series to try it with:
 
@@ -310,6 +357,13 @@ docker run -d --rm --name pacs-rs-test-s3 -p 127.0.0.1:18333:8333 chrislusf/seaw
 curl -X PUT http://127.0.0.1:18333/pacs-test
 PACS_TEST_S3_ENDPOINT=http://127.0.0.1:18333 cargo test --workspace
 docker stop pacs-rs-test-s3
+```
+
+The interoperability tests of DIMSE are ignored unless asked for; they need DCMTK (on `PATH`, or
+in `PACS_TEST_DCMTK_BIN`) and a Python with pynetdicom (`PACS_TEST_PYTHON`, default `python3`):
+
+```bash
+cargo test -p pacs-dimse --test interop -- --ignored
 ```
 
 ## Comparing with a reference server
