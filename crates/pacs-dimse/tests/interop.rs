@@ -1,5 +1,5 @@
-//! pacs-rs against other implementations: DCMTK's echoscu, storescu, storescp and
-//! dcmqrscp, and pynetdicom. Ignored by default; with the tools installed:
+//! pacs-rs against other implementations: DCMTK's echoscu, storescu, storescp and dcmqrscp
+//! (C-FIND and C-MOVE), and pynetdicom. Ignored by default; with the tools installed:
 //!
 //! ```text
 //! cargo test -p pacs-dimse --test interop -- --ignored
@@ -312,8 +312,11 @@ fn study_file(seed: u32, patient_id: &str, name: &str, date: &str) -> (Vec<u8>, 
 }
 
 /// DCMTK's dcmqrscp, called QRSCP, holding three studies and `extra` more, indexed with
-/// dcmqridx.
-async fn dcmqrscp(extra: u32) -> (Killed, RemoteAe, tempfile::TempDir, Vec<String>) {
+/// dcmqridx; with `pacs_rs_port`, it knows PACSRS at that port as a move destination.
+async fn dcmqrscp(
+    extra: u32,
+    pacs_rs_port: Option<u16>,
+) -> (Killed, RemoteAe, tempfile::TempDir, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("QRSCP");
     std::fs::create_dir(&storage).unwrap();
@@ -353,8 +356,11 @@ async fn dcmqrscp(extra: u32) -> (Killed, RemoteAe, tempfile::TempDir, Vec<Strin
         &config,
         format!(
             "NetworkTCPPort = {port}\nMaxPDUSize = 16384\nMaxAssociations = 16\n\
-             HostTable BEGIN\nHostTable END\nVendorTable BEGIN\nVendorTable END\n\
+             HostTable BEGIN\n{}HostTable END\nVendorTable BEGIN\nVendorTable END\n\
              AETable BEGIN\nQRSCP {} RW (10, 64mb) ANY\nAETable END\n",
+            pacs_rs_port
+                .map(|p| format!("pacsrs = (PACSRS, 127.0.0.1, {p})\n"))
+                .unwrap_or_default(),
             storage.display()
         ),
     )
@@ -404,7 +410,7 @@ async fn find_uids(
 #[tokio::test]
 #[ignore = "needs DCMTK"]
 async fn pacs_rs_c_find_against_dcmtk_dcmqrscp() {
-    let (_scp, remote, _dir, uids) = dcmqrscp(0).await;
+    let (_scp, remote, _dir, uids) = dcmqrscp(0, None).await;
     let by_id = StudyQuery {
         patient_id: Some("P2".into()),
         ..Default::default()
@@ -443,7 +449,7 @@ async fn pacs_rs_c_find_against_dcmtk_dcmqrscp() {
 #[tokio::test]
 #[ignore = "needs DCMTK"]
 async fn pacs_rs_c_cancel_against_dcmtk_dcmqrscp() {
-    let (_scp, remote, _dir, _) = dcmqrscp(100).await;
+    let (_scp, remote, _dir, _) = dcmqrscp(100, None).await;
     let (outcome, found) = find_uids(&remote, StudyQuery::default(), Some(1)).await;
     assert_eq!(found.len(), 1);
     assert!(outcome.cancelled && !outcome.complete(), "{outcome:?}");
@@ -514,4 +520,149 @@ async fn pacs_rs_c_find_against_pynetdicom() {
     assert_eq!(found.len(), 1);
     assert!(outcome.cancelled, "{outcome:?}");
     assert_eq!(outcome.status, pacs_dimse::Status::CANCEL);
+}
+
+async fn move_to(
+    remote: &RemoteAe,
+    studies: &[String],
+    destination: &str,
+) -> Result<pacs_dimse::MoveOutcome, pacs_dimse::MoveError> {
+    pacs_dimse::move_studies(
+        remote,
+        &AeTitle::new("PACSRS").unwrap(),
+        studies,
+        &AeTitle::new(destination).unwrap(),
+        Duration::from_secs(5),
+        Duration::from_secs(30),
+        |_| std::ops::ControlFlow::Continue(()),
+    )
+    .await
+}
+
+/// The whole pull: pacs-rs asks dcmqrscp by C-MOVE to send a study to PACSRS, dcmqrscp
+/// stores it into pacs-rs's C-STORE SCP, and the study is in the archive.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn pacs_rs_pulls_a_study_from_dcmtk_dcmqrscp() {
+    let archive = archive().await;
+    let addr = start(config(), archive.clone()).await;
+    let (_scp, remote, _dir, uids) = dcmqrscp(0, Some(addr.port())).await;
+    let outcome = move_to(&remote, &[uids[1].clone()], "PACSRS")
+        .await
+        .unwrap();
+    assert_eq!(outcome.status, pacs_dimse::Status::SUCCESS, "{outcome:?}");
+    assert_eq!(outcome.progress.completed, Some(1));
+    let study = |patient: &str, uid: &str| pacs_core::public_ids::study(patient, uid);
+    let index = archive.index();
+    assert!(
+        index
+            .rest_study(&study("P2", &uids[1]))
+            .await
+            .unwrap()
+            .is_some(),
+        "moved"
+    );
+    assert!(
+        index
+            .rest_study(&study("P1", &uids[0]))
+            .await
+            .unwrap()
+            .is_none(),
+        "not asked for"
+    );
+}
+
+/// A move destination dcmqrscp does not know: Refused, Move Destination unknown (A801).
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_dcmqrscp_refuses_an_unknown_move_destination() {
+    let (_scp, remote, _dir, uids) = dcmqrscp(0, None).await;
+    match move_to(&remote, &[uids[0].clone()], "PACSRS").await {
+        Err(pacs_dimse::MoveError::Failed { status, .. }) => {
+            assert_eq!(status, pacs_dimse::Status::MOVE_DESTINATION_UNKNOWN)
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+const PYNETDICOM_MOVE: &str = r#"
+import sys
+from pydicom import dcmread
+from pynetdicom import AE, evt, StoragePresentationContexts
+from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelMove
+port, destination_port, files = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3:]
+def handle(event):
+    destination = event.move_destination
+    if isinstance(destination, bytes):
+        destination = destination.decode()
+    if destination.strip() != "PACSRS":
+        yield (None, None)
+        return
+    yield ("127.0.0.1", destination_port)
+    yield len(files)
+    for f in files:
+        if event.is_cancelled:
+            yield (0xFE00, None)
+            return
+        yield (0xFF00, dcmread(f))
+ae = AE(ae_title="PYQR")
+ae.add_supported_context(StudyRootQueryRetrieveInformationModelMove)
+ae.requested_contexts = StoragePresentationContexts
+ae.start_server(("127.0.0.1", port), block=True, evt_handlers=[(evt.EVT_C_MOVE, handle)])
+"#;
+
+/// A pynetdicom move SCP sends two instances to pacs-rs's C-STORE SCP; pacs-rs counts them
+/// as they go and finds them in the archive. To a destination it does not know, A801.
+#[tokio::test]
+#[ignore = "needs pynetdicom"]
+async fn pacs_rs_pulls_from_pynetdicom() {
+    let archive = archive().await;
+    let addr = start(config(), archive.clone()).await;
+    let (_files_dir, paths, series) = files(74, 2);
+    let port = free_port();
+    let mut py = python();
+    py.args([
+        "-c",
+        PYNETDICOM_MOVE,
+        &port.to_string(),
+        &addr.port().to_string(),
+    ])
+    .args(&paths);
+    let _scp = Killed(py.spawn().expect("python could not start"));
+    listening(port).await;
+    let remote: RemoteAe = format!("py=PYQR@127.0.0.1:{port}").parse().unwrap();
+    let mut pendings = 0;
+    let outcome = pacs_dimse::move_studies(
+        &remote,
+        &AeTitle::new("PACSRS").unwrap(),
+        &[series.study_uid()],
+        &AeTitle::new("PACSRS").unwrap(),
+        Duration::from_secs(5),
+        Duration::from_secs(30),
+        |_| {
+            pendings += 1;
+            std::ops::ControlFlow::Continue(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.status, pacs_dimse::Status::SUCCESS, "{outcome:?}");
+    assert_eq!(outcome.progress.completed, Some(2));
+    assert!(pendings >= 1);
+    for slice in 0..2 {
+        assert!(
+            archive
+                .index()
+                .rest_instance_by_uid(&series.instance_uid(slice))
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    match move_to(&remote, &[series.study_uid()], "ELSEWHERE").await {
+        Err(pacs_dimse::MoveError::Failed { status, .. }) => {
+            assert_eq!(status, pacs_dimse::Status::MOVE_DESTINATION_UNKNOWN)
+        }
+        other => panic!("{other:?}"),
+    }
 }
