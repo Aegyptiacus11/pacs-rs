@@ -53,6 +53,7 @@ async fn start_dimse(settings: &Settings) -> SocketAddr {
         listener,
         archive,
         config,
+        Vec::new(),
         std::future::pending(),
     ));
     addr
@@ -766,4 +767,50 @@ async fn a_failed_asynchronous_move_says_why() {
         job["Error"].as_str().unwrap().contains("registered"),
         "{job}"
     );
+}
+
+/// `"Project": "<name>"` moves the studies to that project's AE title, so they are
+/// de-identified on the way in; an unknown project is 400, before any association.
+#[tokio::test]
+async fn a_move_may_name_a_project() {
+    let (port, scp) = move_scp(0x0000, 1, 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let projects = dir.path().join("projects.json");
+    std::fs::write(
+        &projects,
+        r#"[{"ae_title": "LIVER_2026", "profile": {"name": "liver-2026"}}]"#,
+    )
+    .unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-listen",
+            "127.0.0.1:0",
+            "--projects",
+            projects.to_str().unwrap(),
+        ],
+    );
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, _) = send(
+        &app,
+        move_request(
+            "qr",
+            r#"{"StudyInstanceUID": "2.25.1", "Project": "nobody"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, body) = send(
+        &app,
+        move_request(
+            "qr",
+            r#"{"StudyInstanceUID": "2.25.1", "Project": "liver-2026"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(scp.await.unwrap(), "LIVER_2026");
 }

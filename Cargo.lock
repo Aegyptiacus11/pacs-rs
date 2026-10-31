@@ -1834,6 +1834,7 @@ dependencies = [
  "mimalloc",
  "pacs-archive",
  "pacs-core",
+ "pacs-deid",
  "pacs-dicomweb",
  "pacs-dimse",
  "pacs-index",

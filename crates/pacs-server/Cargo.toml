@@ -18,6 +18,7 @@ clap.workspace = true
 mimalloc.workspace = true
 pacs-archive.workspace = true
 pacs-core.workspace = true
+pacs-deid.workspace = true
 pacs-dicomweb.workspace = true
 pacs-dimse.workspace = true
 pacs-index.workspace = true

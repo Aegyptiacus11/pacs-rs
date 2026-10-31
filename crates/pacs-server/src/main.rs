@@ -43,14 +43,22 @@ async fn main() -> anyhow::Result<()> {
     };
     if let Some(dimse_listen) = settings.dimse_listen {
         let config = dimse_config(&settings)?;
+        let projects = pacs_server::projects::open_projects_from_env(&settings, &archive)?;
         let dimse = tokio::net::TcpListener::bind(dimse_listen).await?;
         tracing::info!(
             dimse = %dimse.local_addr()?,
             ae_title = %config.ae_title,
             remotes = config.remotes.len(),
+            projects = projects.len(),
             "DIMSE ready",
         );
-        tokio::spawn(serve_dimse(dimse, archive, config, until_stopped()));
+        tokio::spawn(serve_dimse(
+            dimse,
+            archive,
+            config,
+            projects,
+            until_stopped(),
+        ));
     }
     tracing::info!(
         listen = %listener.local_addr()?,

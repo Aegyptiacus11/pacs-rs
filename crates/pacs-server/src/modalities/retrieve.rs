@@ -15,8 +15,9 @@ use serde_json::{Value, json};
 use super::Remotes;
 
 /// The body names the studies: `{"StudyInstanceUID": "1.2.3"}` or a list of them. The
-/// destination is always pacs-rs's own AE title: this route pulls studies in, it does not
-/// send a hospital's studies anywhere else.
+/// destination is pacs-rs's own AE title, or with `"Project": "<name>"` that project's, so
+/// the studies are de-identified on the way in: this route pulls studies in, it does not
+/// send a hospital's studies anywhere else. An unknown project is 400.
 ///
 /// With `"Asynchronous": true` the move runs as a job: 202 with its `ID` and `Path`, whose
 /// counts `GET /jobs/{id}` shows as they come. Otherwise the answer comes when the move is
@@ -65,20 +66,38 @@ pub(super) async fn move_studies(
         return RestError::bad_request("Bad request", "no Study Instance UID to move")
             .into_response();
     }
+    // the studies come to pacs-rs's own AE title, or to a project's to be de-identified
+    let destination = match body.as_ref().and_then(|b| b.get("Project")) {
+        None => config.ae_title.clone(),
+        Some(Value::String(name)) => match remotes.projects.iter().find(|(n, _)| n == name) {
+            Some((_, ae_title)) => ae_title.clone(),
+            None => {
+                return RestError::bad_request(
+                    "Bad request",
+                    format!("there is no project {name:?}"),
+                )
+                .into_response();
+            }
+        },
+        Some(_) => {
+            return RestError::bad_request("Bad request", "Project is a project's name")
+                .into_response();
+        }
+    };
     let asynchronous = body
         .as_ref()
         .and_then(|b| b.get("Asynchronous"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if asynchronous {
-        return super::jobs::spawn_move(remotes.clone(), id, studies);
+        return super::jobs::spawn_move(remotes.clone(), id, studies, destination);
     }
     let started = Instant::now();
     let result = pacs_dimse::move_studies(
         remote,
         &config.ae_title,
         &studies,
-        &config.ae_title,
+        &destination,
         config.timeout,
         config.move_timeout,
         |_| std::ops::ControlFlow::Continue(()),

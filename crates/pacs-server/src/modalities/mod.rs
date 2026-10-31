@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use pacs_dimse::{Config, RemoteAe};
+use pacs_dimse::{AeTitle, Config, RemoteAe};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
 
@@ -24,10 +24,12 @@ use serde_json::{Value, json};
 pub(crate) struct Remotes {
     pub config: Config,
     pub receiving: bool,
+    /// Project names and their AE titles, the destinations a move may name.
+    pub projects: Vec<(String, AeTitle)>,
     jobs: jobs::Jobs,
 }
 
-pub(crate) fn router(config: Config, receiving: bool) -> Router {
+pub(crate) fn router(config: Config, receiving: bool, projects: Vec<(String, AeTitle)>) -> Router {
     Router::new()
         .route("/modalities", get(list))
         .route("/modalities/{id}/echo", post(echo))
@@ -39,6 +41,7 @@ pub(crate) fn router(config: Config, receiving: bool) -> Router {
         .with_state(Arc::new(Remotes {
             config,
             receiving,
+            projects,
             jobs: jobs::Jobs::default(),
         }))
 }

@@ -176,6 +176,7 @@ pub(super) fn spawn_move(
     remotes: Arc<Remotes>,
     remote_id: String,
     studies: Vec<String>,
+    destination: pacs_dimse::AeTitle,
 ) -> Response {
     let (id, cancel) = remotes.jobs.start(&remote_id, &studies);
     tokio::spawn(async move {
@@ -187,7 +188,7 @@ pub(super) fn spawn_move(
             remote,
             &config.ae_title,
             &studies,
-            &config.ae_title,
+            &destination,
             config.timeout,
             config.move_timeout,
             |progress| {

@@ -22,6 +22,7 @@ use tracing::Level;
 
 mod annotations;
 mod modalities;
+pub mod projects;
 mod protocols;
 mod ui;
 mod worklist;
@@ -116,6 +117,17 @@ pub struct Settings {
     #[arg(long, env = "PACS_DIMSE_TIMEOUT", default_value_t = 30)]
     pub dimse_timeout: u64,
 
+    /// A JSON file listing projects: each an AE title whose instances are de-identified on
+    /// the way in by its profile (see `pacs_server::projects`). None by default: everything is
+    /// stored as received.
+    #[arg(long, env = "PACS_PROJECTS")]
+    pub projects: Option<PathBuf>,
+
+    /// Where instances a project quarantines are kept, identified, never indexed or served:
+    /// `file:<directory>` or `s3://<bucket>[/<prefix>]`. Without it they are refused.
+    #[arg(long, env = "PACS_QUARANTINE")]
+    pub quarantine: Option<String>,
+
     /// Seconds to wait between two C-MOVE responses: a remote AE may send none while it sends
     /// a large study to pacs-rs.
     #[arg(long, env = "PACS_DIMSE_MOVE_TIMEOUT", default_value_t = 600)]
@@ -182,13 +194,13 @@ pub fn secret(name: &str, env: impl Fn(&str) -> Option<String>) -> anyhow::Resul
     }
 }
 
-fn process_env(name: &str) -> Option<String> {
+pub(crate) fn process_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// Open the store and the index the settings name.
-pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
-    let store = match StorageLocation::parse(&settings.storage)? {
+/// The store `location` names (`file:` or `s3://`), with the S3 settings and keys.
+pub fn open_store(location: &str, settings: &Settings) -> anyhow::Result<Store> {
+    Ok(match StorageLocation::parse(location)? {
         StorageLocation::Directory(dir) => {
             std::fs::create_dir_all(&dir)
                 .with_context(|| format!("creating the storage directory {}", dir.display()))?;
@@ -208,7 +220,12 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
             };
             Store::s3(&config, &prefix)?
         }
-    };
+    })
+}
+
+/// Open the store and the index the settings name.
+pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
+    let store = open_store(&settings.storage, settings)?;
     let index = match IndexLocation::parse(&settings.index) {
         IndexLocation::Postgres(url) => {
             let url = match secret("PACS_INDEX_PASSWORD", process_env)? {
@@ -260,18 +277,23 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
 }
 
 /// Serve DIMSE on `listener` until `shutdown` completes: C-ECHO, and C-STORE into
-/// `archive` exactly as a REST upload.
+/// `archive` exactly as a REST upload, or through a project's de-identification for its AE
+/// title.
 pub async fn serve_dimse(
     listener: tokio::net::TcpListener,
     archive: Archive,
     config: pacs_dimse::Config,
+    projects: Vec<std::sync::Arc<pacs_dimse::Project>>,
     shutdown: impl Future<Output = ()> + Send,
 ) {
-    let scp = std::sync::Arc::new(pacs_dimse::Scp::new(
-        config,
-        pacs_dimse::Destination::Archive(archive),
-    ));
-    scp.serve(listener, shutdown).await;
+    let mut scp = pacs_dimse::Scp::new(config, pacs_dimse::Destination::Archive(archive));
+    for project in projects {
+        scp = scp.with_route(
+            project.ae_title.clone(),
+            pacs_dimse::Destination::Project(project),
+        );
+    }
+    std::sync::Arc::new(scp).serve(listener, shutdown).await;
 }
 
 /// Where the index is, parsed from `--index`.
@@ -345,9 +367,15 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
     if path == "/" {
         bail!("the DICOMweb path cannot be /: the REST API is served there");
     }
-    let rest = pacs_rest::router(archive.clone(), settings.max_upload_bytes).merge(
-        modalities::router(dimse_config(settings)?, settings.dimse_listen.is_some()),
-    );
+    let rest =
+        pacs_rest::router(archive.clone(), settings.max_upload_bytes).merge(modalities::router(
+            dimse_config(settings)?,
+            settings.dimse_listen.is_some(),
+            projects::project_configs(settings)?
+                .into_iter()
+                .map(|p| (p.profile.name, p.ae_title))
+                .collect(),
+        ));
     let index = archive.index().clone();
     let dicomweb = pacs_dicomweb::router(
         archive,
