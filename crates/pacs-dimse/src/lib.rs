@@ -10,12 +10,14 @@ use std::time::Duration;
 pub mod ae;
 pub mod command;
 pub mod message;
+pub mod query;
 pub mod scp;
 pub mod scu;
 pub mod sop_classes;
 pub mod status;
 
 pub use ae::{AeError, AeTitle, RemoteAe};
+pub use query::{DateRange, QueryError, StudyQuery};
 pub use scp::{Destination, Scp};
 pub use scu::{ConnectError, EchoError, echo};
 pub use status::{Status, StatusClass};

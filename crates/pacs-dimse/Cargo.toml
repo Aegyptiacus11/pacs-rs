@@ -10,10 +10,16 @@ repository.workspace = true
 [dependencies]
 bytes.workspace = true
 dicom-dictionary-std.workspace = true
+dicom-encoding.workspace = true
 dicom-object.workspace = true
+dicom-core.workspace = true
+dicom-json.workspace = true
+dicom-transfer-syntax-registry.workspace = true
 dicom-ul.workspace = true
 pacs-archive.workspace = true
 thiserror.workspace = true
+pacs-core.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
@@ -21,5 +27,4 @@ tracing.workspace = true
 pacs-core = { workspace = true, features = ["synthetic"] }
 pacs-index.workspace = true
 pacs-store.workspace = true
-dicom-core.workspace = true
 tempfile.workspace = true

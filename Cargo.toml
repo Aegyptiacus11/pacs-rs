@@ -18,8 +18,10 @@ charls = { version = "0.4.2", features = ["static"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 dicom-core = "0.10.0"
 dicom-dictionary-std = "0.10.0"
+dicom-encoding = "0.10.1"
 dicom-json = "0.10.0"
 dicom-object = "0.10.0"
+dicom-transfer-syntax-registry = { version = "0.10.1", default-features = false }
 # async, so the association tasks share tokio with the HTTP server; async-tls for step 6
 # of docs/interop.md.
 dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
