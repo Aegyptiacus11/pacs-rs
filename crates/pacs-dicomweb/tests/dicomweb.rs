@@ -594,3 +594,44 @@ async fn retrieve_urls_follow_the_proxy_and_the_mount_path() {
         &format!("https://fixed.example/root/studies/{}", series.study_uid())
     );
 }
+
+/// The client's order decides, not whether the stored form is acceptable somewhere in the
+/// list: a viewer asking for JPEG-LS first, anything after, gets JPEG-LS of a series
+/// stored uncompressed.
+#[tokio::test]
+async fn the_clients_first_choice_wins() {
+    let app = app().await;
+    let mut series = SyntheticSeries::new(67, 1);
+    (series.rows, series.columns) = (32, 24);
+    assert_eq!(
+        stow(&app, "/studies", vec![series.multiframe_bytes(0, 1)])
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let uri = format!(
+        "/studies/{}/series/{}/instances/{}/frames/1",
+        series.study_uid(),
+        series.series_uid(),
+        series.instance_uid(0)
+    );
+    let jls_first = format!(
+        r#"multipart/related; type="image/jls"; transfer-syntax={JPEG_LS}, {CORNERSTONE_FRAMES}"#
+    );
+    let parts = get(&app, &uri, &jls_first).await.parts();
+    assert_eq!(
+        parts[0].content_type.as_deref(),
+        Some("image/jls; transfer-syntax=1.2.840.10008.1.2.4.80")
+    );
+    let shape = pacs_core::codec::Shape::new(32, 24, 16, 12);
+    let decoded = pacs_core::codec::decode(JPEG_LS, shape, &parts[0].content).unwrap();
+    assert_eq!(decoded, le_bytes(&series.pixels(0, 0)));
+
+    // ranked lower, JPEG-LS loses to the stored form
+    let jls_less = format!(r#"multipart/related; type="image/jls"; q=0.5, {CORNERSTONE_FRAMES}"#);
+    let parts = get(&app, &uri, &jls_less).await.parts();
+    assert_eq!(
+        parts[0].content_type.as_deref(),
+        Some("application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1")
+    );
+}

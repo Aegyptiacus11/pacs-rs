@@ -45,9 +45,12 @@ instance that does not come back exact, or that the codecs do not handle (colour
 bits), is stored as received. So is anything that arrives compressed, **JPEG XL** included.
 `PACS_COMPRESSION=off` stores everything as received.
 
-A retrieve goes out as stored whenever the client accepts it (a viewer asking for
-`transfer-syntax=*` gets the stored JPEG-LS untouched). Otherwise instances and frames are
-transcoded to the first of these the client asks for, and anything else is 406:
+The client's preference decides what a retrieve sends (PS3.18 8.7.3.5): the Accept header's
+ranges by quality, those of equal quality in the order sent. Within the first range that takes
+anything, the content as stored wins (a viewer asking for `transfer-syntax=*` gets the stored
+JPEG-LS untouched), then these, in this order; nothing else can be made, so anything else is 406.
+So one header asks for JPEG-LS where the server can make it and anything otherwise:
+`multipart/related; type="image/jls", multipart/related; type="application/octet-stream"; transfer-syntax=*`.
 
 | Transfer syntax | Frames | Decoded by | Encoded by |
 |---|---|---|---|
