@@ -1,9 +1,10 @@
 # Hospital interfaces: the plan
 
 Steps 1 to 4 are built (`crates/pacs-dimse`, see the README's "DIMSE"), C-GET aside; the rest is
-not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today. Next to Quorum it is a **research PACS**
-beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies them when the project
-asks for it, and serves Quorum. It does not replace the clinical PACS.
+not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today. It is
+a **research PACS** beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies
+them when the project asks for it, and serves them to the research tools (viewers, annotation platforms,
+pipelines) over DICOMweb. It does not replace the clinical PACS.
 
 Sources, checked on 2026-10-31: DICOM 2026d (PS3.2, PS3.4, PS3.7, PS3.15) and the IHE Radiology Technical
 Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK, dcm4che and pynetdicom. Other
@@ -13,7 +14,7 @@ to read, never a source for behaviour.
 ## The role
 
 ```
-hospital PACS --C-FIND / C-MOVE--> pacs-rs staging --de-identify--> pacs-rs archive --> Quorum
+hospital PACS --C-FIND / C-MOVE--> pacs-rs staging --de-identify--> pacs-rs archive --> research tools
 (read-only source)                 (identified, never served)       (what readers see)
 ```
 
@@ -46,7 +47,7 @@ hospital names.
    (`PACS_PROJECTS`); what is not yet is said below.*
 6. **TLS** on associations, following PS3.15 H.1. Remote AEs (title, host, port) and pacs-rs's own are
    configured already (`PACS_DIMSE_*`).
-7. **Write-back** (clinical mode only): Quorum's masks as DICOM Segmentation and measurements as Structured
+7. **Write-back** (clinical mode only): segmentations as DICOM Segmentation and measurements as Structured
    Reports, sent by C-STORE SCU to the hospital's destination. Never in research mode: the de-identified
    UIDs no longer match the hospital's.
 8. **Later**: the SCP side of query/retrieve, so viewers and workstations can query pacs-rs (rules below);
@@ -116,4 +117,4 @@ would need the A-ASSOCIATE-RQ before negotiation, which dicom-ul 0.10 does not o
 A hospital's own archive is IHE Scheduled Workflow.b's Image Manager/Image Archive (RAD TF-1: 34). That would
 add HL7 v2 orders and patient updates over MLLP [RAD-4, -12, -13], Modality Performed Procedure Step
 [RAD-6, -7] (PS3.4 F.7), Storage Commitment [RAD-10] (PS3.4 J.3), Instance Availability Notification
-[RAD-49] (PS3.4 Annex R) and rejection notes for deletions (IOCM). None of it is needed beside Quorum.
+[RAD-49] (PS3.4 Annex R) and rejection notes for deletions (IOCM). None of it is needed by a research PACS.

@@ -113,7 +113,7 @@ fn value<'a>(json: &'a Value, tag: &str) -> &'a Value {
 }
 
 /// A study of two series, 3 and 2 slices, stored through STOW-RS.
-async fn quorum_study(app: &Router) -> (SyntheticSeries, SyntheticSeries) {
+async fn two_series_study(app: &Router) -> (SyntheticSeries, SyntheticSeries) {
     let big = SyntheticSeries::new(61, 3);
     let small = SyntheticSeries::new(62, 2).in_study(61, 2);
     let mut files = small.all_bytes();
@@ -129,9 +129,9 @@ async fn quorum_study(app: &Router) -> (SyntheticSeries, SyntheticSeries) {
 }
 
 #[tokio::test]
-async fn the_requests_quorum_makes() {
+async fn the_requests_a_viewer_makes() {
     let app = app().await;
-    let (big, small) = quorum_study(&app).await;
+    let (big, small) = two_series_study(&app).await;
     let study = big.study_uid();
 
     // 1. the study, with its instance count
@@ -225,7 +225,7 @@ async fn the_requests_quorum_makes() {
 #[tokio::test]
 async fn instances_and_series_come_back_byte_for_byte() {
     let app = app().await;
-    let (big, _) = quorum_study(&app).await;
+    let (big, _) = two_series_study(&app).await;
     let study = big.study_uid();
 
     let reply = get(
@@ -513,7 +513,7 @@ async fn stow_reports_what_it_stored_and_what_it_did_not() {
 #[tokio::test]
 async fn searches_it_cannot_do_exactly_are_refused() {
     let app = app().await;
-    quorum_study(&app).await;
+    two_series_study(&app).await;
     let json = "application/dicom+json";
 
     let reply = get(&app, "/studies?StudyInstanceUID=2.25.999", json).await;
@@ -651,7 +651,7 @@ async fn the_clients_first_choice_wins() {
 #[tokio::test]
 async fn the_browser_keeps_what_cannot_change() {
     let app = app().await;
-    let (big, _) = quorum_study(&app).await;
+    let (big, _) = two_series_study(&app).await;
     let frame = format!(
         "/studies/{}/series/{}/instances/{}/frames/1",
         big.study_uid(),

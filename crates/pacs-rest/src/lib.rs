@@ -3,8 +3,8 @@
 //!
 //! Resources, identifiers and answers follow the reference server's REST API, so clients
 //! written for it work unchanged; `crates/pacs-server/tests/reference.rs` checks that.
-//! The routes so far are the ones Quorum uses, their counterparts at the other levels,
-//! and deletion.
+//! The routes so far are those an annotation platform needs (upload, lookup, statistics,
+//! archives), their counterparts at the other levels, and deletion.
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;

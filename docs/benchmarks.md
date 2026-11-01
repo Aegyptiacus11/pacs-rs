@@ -58,7 +58,7 @@ allocator made frames about 25% slower.
 
 What this does not say: anything about other data (real CT, compressed transfer syntaxes,
 thousands of studies), other hardware, S3 storage, or a tuned reference server. It is one
-workload, the one Quorum's viewer makes, measured once on one machine.
+workload, the one a viewer opening a CT series makes, measured once on one machine.
 
 The first run of this benchmark found a bug: concurrent uploads failed with "database is
 locked" (fixed in "pacs-index: take the write lock up front").

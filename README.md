@@ -3,9 +3,10 @@
 An open-source PACS written in Rust, built on the [dicom-rs](https://github.com/Enet4/dicom-rs)
 crates. Its index is SQLite or Postgres; its files are on disk or in S3-compatible storage.
 
-Status: early development. `pacs-server` serves DICOMweb over HTTP, with files on disk or in
-S3 and a SQLite index, and speaks DIMSE: C-ECHO, C-STORE into the archive, and C-FIND and
-C-MOVE to search another archive's studies and pull them in.
+Status: early development. `pacs-server` serves DICOMweb and a REST API over HTTP, with files on
+disk or in S3 and a SQLite or Postgres index, a web interface with a viewer, and speaks DIMSE:
+C-ECHO, C-STORE into the archive, and C-FIND and C-MOVE to search another archive's studies and
+pull them in, de-identified on the way in when a project asks for it.
 
 ## Crates
 
@@ -82,8 +83,8 @@ a round trip, not the bytes. `private` keeps them out of shared caches, since th
 front decides who may read a study; a browser keeps for up to a day what it has already read.
 
 On a 160-slice 512x512 CT stored uncompressed, one open with the header above: 83.9 MB as
-stored before this, 31.6 MB of JPEG-LS now, and opened again with the tags, 160 answers of 304 and
-no pixel bytes.
+stored from v0.4.0, 31.6 MB of JPEG-LS from v0.5.0, and opened again with the tags, 160 answers
+of 304 and no pixel bytes.
 
 DICOM JSON numbers: IS and DS values are written as JSON numbers, padding trimmed (PS3.18 Table
 F.2.3-1 allows numbers or strings).
@@ -368,9 +369,10 @@ Every flag has a `PACS_*` environment variable:
 
 In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
 an unprivileged user (uid 10001). It listens on `0.0.0.0:8080` and keeps the index and files in
-the `/data` volume unless `PACS_STORAGE` says otherwise. With no shell or curl inside, health
-checks call `/healthz` from outside. For DIMSE, set `PACS_DIMSE_LISTEN=0.0.0.0:11112` and publish
-that port.
+the `/data` volume unless `PACS_STORAGE` says otherwise. There is no shell or curl inside, so the
+image's health check is the binary itself: `pacs-server --healthcheck` asks `/healthz` on the
+address of `PACS_LISTEN` and exits 0 or 1. For DIMSE, set `PACS_DIMSE_LISTEN=0.0.0.0:11112` and
+publish that port.
 
 A synthetic series to try it with:
 
@@ -396,7 +398,7 @@ and waits for `/healthz`. The job runs on a self-hosted runner on the homeserver
 | `PORTAINER_PACS_WEBHOOK` | the `pacs` stack's webhook id | Portainer, the stack's page (homeserver-infra `stacks/pacs/README.md`) |
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+git tag -a v0.5.0 -m v0.5.0 && git push origin v0.5.0
 ```
 
 **Before this repository goes public**, remove the runner (homeserver-infra,
