@@ -11,6 +11,7 @@ use axum::http::header::HOST;
 use axum::routing::get;
 use pacs_archive::Archive;
 
+mod cache;
 mod error;
 pub mod media;
 pub mod multipart;

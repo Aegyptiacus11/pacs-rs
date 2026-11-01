@@ -100,6 +100,12 @@ impl Archive {
         self
     }
 
+    /// Whether an instance sent again replaces the stored one, so that what is served
+    /// under its UIDs can change.
+    pub fn overwrites(&self) -> bool {
+        self.overwrite
+    }
+
     /// How native pixel data is stored; JPEG-LS lossless unless set otherwise.
     pub fn with_compression(mut self, compression: Compression) -> Self {
         self.compression = compression;

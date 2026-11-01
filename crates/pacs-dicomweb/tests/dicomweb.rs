@@ -20,7 +20,17 @@ const JPEG_LS: &str = "1.2.840.10008.1.2.4.80";
 struct Reply {
     status: StatusCode,
     content_type: String,
+    headers: axum::http::HeaderMap,
     body: Bytes,
+}
+
+impl Reply {
+    fn header(&self, name: &str) -> &str {
+        self.headers
+            .get(name)
+            .map(|h| h.to_str().unwrap())
+            .unwrap_or_default()
+    }
 }
 
 impl Reply {
@@ -67,10 +77,12 @@ async fn send(
         .get("content-type")
         .map(|h| h.to_str().unwrap().to_owned())
         .unwrap_or_default();
+    let headers = response.headers().clone();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     Reply {
         status,
         content_type,
+        headers,
         body,
     }
 }
@@ -634,4 +646,106 @@ async fn the_clients_first_choice_wins() {
         parts[0].content_type.as_deref(),
         Some("application/octet-stream; transfer-syntax=1.2.840.10008.1.2.1")
     );
+}
+
+#[tokio::test]
+async fn the_browser_keeps_what_cannot_change() {
+    let app = app().await;
+    let (big, _) = quorum_study(&app).await;
+    let frame = format!(
+        "/studies/{}/series/{}/instances/{}/frames/1",
+        big.study_uid(),
+        big.series_uid(),
+        big.instance_uid(0)
+    );
+    let series = format!("/studies/{}/series/{}", big.study_uid(), big.series_uid());
+    let metadata = format!("{series}/metadata");
+
+    let first = get(&app, &frame, CORNERSTONE_FRAMES).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(first.header("cache-control"), "private, max-age=86400");
+    assert_eq!(first.header("vary"), "Accept");
+    let etag = first.header("etag").to_owned();
+    assert!(etag.starts_with(r#"W/""#), "{etag}");
+
+    // asked again with the tag: 304, no body
+    let again = send(
+        &app,
+        "GET",
+        &frame,
+        &[("accept", CORNERSTONE_FRAMES), ("if-none-match", &etag)],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    assert!(again.body.is_empty());
+    assert_eq!(again.header("etag"), etag);
+
+    // another Accept is another response
+    let other = send(
+        &app,
+        "GET",
+        &frame,
+        &[
+            ("accept", r#"multipart/related; type="image/jls""#),
+            ("if-none-match", &etag),
+        ],
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(other.status, StatusCode::OK);
+    assert_ne!(other.header("etag"), etag);
+
+    // a series gains instances, so it is asked about each time
+    let accept = r#"multipart/related; type="application/dicom""#;
+    let whole = get(&app, &series, accept).await;
+    assert_eq!(whole.header("cache-control"), "private, no-cache");
+    let etag = whole.header("etag").to_owned();
+    let headers = [("accept", accept), ("if-none-match", etag.as_str())];
+    let reply = send(&app, "GET", &series, &headers, Bytes::new()).await;
+    assert_eq!(reply.status, StatusCode::NOT_MODIFIED);
+
+    let meta = get(&app, &metadata, "application/dicom+json").await;
+    assert_eq!(meta.header("cache-control"), "private, no-cache");
+    let etag = meta.header("etag").to_owned();
+    let headers = [
+        ("accept", "application/dicom+json"),
+        ("if-none-match", etag.as_str()),
+    ];
+    let reply = send(&app, "GET", &metadata, &headers, Bytes::new()).await;
+    assert_eq!(reply.status, StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn overwritten_instances_are_asked_about() {
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off)
+        .with_overwrite(true);
+    let app = router(archive, Config::default());
+    let series = SyntheticSeries::new(68, 1);
+    assert_eq!(
+        stow(&app, "/studies", series.all_bytes()).await.status,
+        StatusCode::OK
+    );
+    let uri = format!(
+        "/studies/{}/series/{}/instances/{}/frames/1",
+        series.study_uid(),
+        series.series_uid(),
+        series.instance_uid(0)
+    );
+    let first = get(&app, &uri, CORNERSTONE_FRAMES).await;
+    assert_eq!(first.header("cache-control"), "private, no-cache");
+    let etag = first.header("etag").to_owned();
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert_eq!(
+        stow(&app, "/studies", series.all_bytes()).await.status,
+        StatusCode::OK
+    );
+    let headers = [
+        ("accept", CORNERSTONE_FRAMES),
+        ("if-none-match", etag.as_str()),
+    ];
+    let reply = send(&app, "GET", &uri, &headers, Bytes::new()).await;
+    assert_eq!(reply.status, StatusCode::OK, "a new copy, a new tag");
 }

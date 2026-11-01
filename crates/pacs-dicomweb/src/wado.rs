@@ -1,7 +1,7 @@
 //! WADO-RS: retrieve studies, series and instances, their metadata, and frames (PS3.18
 //! 10.4). The client's preference decides what goes out (`media::choose`): as stored, or
 //! transcoded to Explicit VR Little Endian, JPEG-LS lossless or JPEG XL lossless, and
-//! nothing else (406).
+//! nothing else (406). Responses carry validators for the browser's cache (`cache`).
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -16,6 +16,7 @@ use pacs_core::codec::{self, EXPLICIT_VR_LE, JPEG_LS_LOSSLESS, JPEG_XL_LOSSLESS,
 use pacs_core::frames::{Frame, FrameError, NATIVE_MEDIA_TYPE, compressed_media_type};
 use pacs_index::InstanceEntry;
 
+use crate::cache::Validator;
 use crate::media::{Accept, Choice, Packaging, accepts_json, choose};
 use crate::qido::DICOM_JSON;
 use crate::{ApiError, AppState, multipart};
@@ -85,15 +86,17 @@ async fn file_as(
 
 /// Instances as `multipart/related; type="application/dicom"`, streamed from the store
 /// one file at a time, each transcoded on the way if the client prefers another transfer
-/// syntax.
+/// syntax. `fixed` when the response cannot change (see `cache`).
 fn retrieve(
     archive: Archive,
     headers: &HeaderMap,
     entries: Vec<InstanceEntry>,
+    fixed: bool,
 ) -> Result<Response, ApiError> {
     if entries.is_empty() {
         return Err(ApiError::not_found("no such instances"));
     }
+    let validator = Validator::for_entries(headers, &entries, "", fixed);
     let accept = accept(headers);
     let mut single = entries.len() == 1;
     let mut plan = Vec::with_capacity(entries.len());
@@ -115,13 +118,18 @@ fn retrieve(
         }
         plan.push((entry, target));
     }
+    if validator.matches(headers) {
+        return Ok(validator.not_modified());
+    }
     if single {
         let (entry, target) = plan.into_iter().next().expect("one entry");
         let content_type = part_type(DICOM, target.unwrap_or(&entry.transfer_syntax_uid));
         let body = Body::from_stream(futures::stream::once(async move {
             file_as(&archive, &entry, target).await
         }));
-        return Ok(([(CONTENT_TYPE, content_type)], body).into_response());
+        let mut response = ([(CONTENT_TYPE, content_type)], body).into_response();
+        validator.apply(&mut response);
+        return Ok(response);
     }
     let boundary = multipart::new_boundary();
     let content_type = multipart_type(DICOM, &boundary);
@@ -141,7 +149,9 @@ fn retrieve(
         }
     });
     let body = parts.chain(futures::stream::once(async move { Ok(closing) }));
-    Ok(([(CONTENT_TYPE, content_type)], Body::from_stream(body)).into_response())
+    let mut response = ([(CONTENT_TYPE, content_type)], Body::from_stream(body)).into_response();
+    validator.apply(&mut response);
+    Ok(response)
 }
 
 async fn study_entries(archive: &Archive, study: &str) -> Result<Vec<InstanceEntry>, ApiError> {
@@ -163,7 +173,7 @@ pub(crate) async fn study(
     Path(study): Path<String>,
 ) -> Result<Response, ApiError> {
     let entries = study_entries(&state.archive, &study).await?;
-    retrieve(state.archive, &headers, entries)
+    retrieve(state.archive, &headers, entries, false)
 }
 
 pub(crate) async fn series(
@@ -176,7 +186,7 @@ pub(crate) async fn series(
         .index()
         .instances(&study, &series, None)
         .await?;
-    retrieve(state.archive, &headers, entries)
+    retrieve(state.archive, &headers, entries, false)
 }
 
 pub(crate) async fn instance(
@@ -189,7 +199,8 @@ pub(crate) async fn instance(
         .index()
         .instances(&study, &series, Some(&instance))
         .await?;
-    retrieve(state.archive, &headers, entries)
+    let fixed = !state.archive.overwrites();
+    retrieve(state.archive, &headers, entries, fixed)
 }
 
 /// The stored JSON of each instance, joined into one array as it is: no parsing.
@@ -206,7 +217,13 @@ fn metadata_response(headers: &HeaderMap, metadata: Vec<String>) -> Result<Respo
     body.push('[');
     body.push_str(&metadata.join(","));
     body.push(']');
-    Ok(([(CONTENT_TYPE, DICOM_JSON)], body).into_response())
+    let validator = Validator::for_body(&body);
+    if validator.matches(headers) {
+        return Ok(validator.not_modified());
+    }
+    let mut response = ([(CONTENT_TYPE, DICOM_JSON)], body).into_response();
+    validator.apply(&mut response);
+    Ok(response)
 }
 
 pub(crate) async fn study_metadata(
@@ -284,6 +301,15 @@ pub(crate) async fn frames(
         .instance(&study, &series, &instance)
         .await?
         .ok_or_else(|| ApiError::not_found("no such instance"))?;
+    let validator = Validator::for_entries(
+        &headers,
+        std::slice::from_ref(&entry),
+        &list,
+        !state.archive.overwrites(),
+    );
+    if validator.matches(&headers) {
+        return Ok(validator.not_modified());
+    }
     let file = state.archive.file(&entry).await?;
     let (frames, shape) = tokio::task::spawn_blocking(move || {
         let instance = Instance::from_bytes(&file).map_err(ApiError::internal)?;
@@ -320,7 +346,10 @@ pub(crate) async fn frames(
     let (media_type, ts) = (frames[0].media_type, frames[0].transfer_syntax_uid.clone());
     if packaging == Packaging::Single && frames.len() == 1 {
         let frame = frames.into_iter().next().expect("one frame");
-        return Ok(([(CONTENT_TYPE, part_type(media_type, &ts))], frame.bytes).into_response());
+        let mut response =
+            ([(CONTENT_TYPE, part_type(media_type, &ts))], frame.bytes).into_response();
+        validator.apply(&mut response);
+        return Ok(response);
     }
     let boundary = multipart::new_boundary();
     let body = multipart::body(
@@ -332,11 +361,13 @@ pub(crate) async fn frames(
             )
         }),
     );
-    Ok((
+    let mut response = (
         [(CONTENT_TYPE, multipart_type(media_type, &boundary))],
         body,
     )
-        .into_response())
+        .into_response();
+    validator.apply(&mut response);
+    Ok(response)
 }
 
 /// Each frame decoded and encoded again in `target`.
