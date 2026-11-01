@@ -147,10 +147,15 @@ export function PatientsPage({ open }: { open: string | null }) {
           <Pager
             total={total}
             pageIndex={pageIndex}
+            pageSize={pageSize}
             noun={["patient", "patients"]}
             loading={page.isPlaceholderData}
             onPage={(i) => {
               setPagination((p) => ({ ...p, pageIndex: i }));
+              list.current?.scrollTo({ top: 0 });
+            }}
+            onPageSize={(size) => {
+              setPagination({ pageIndex: 0, pageSize: size });
               list.current?.scrollTo({ top: 0 });
             }}
           />
