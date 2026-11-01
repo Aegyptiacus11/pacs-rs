@@ -493,10 +493,15 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <Pager
             total={total}
             pageIndex={pageIndex}
+            pageSize={pageSize}
             noun={["study", "studies"]}
             loading={page.isPlaceholderData}
             onPage={(i) => {
               setPagination((p) => ({ ...p, pageIndex: i }));
+              list.current?.scrollTo({ top: 0 });
+            }}
+            onPageSize={(size) => {
+              setPagination({ pageIndex: 0, pageSize: size });
               list.current?.scrollTo({ top: 0 });
             }}
           />
