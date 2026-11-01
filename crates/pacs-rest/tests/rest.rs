@@ -95,7 +95,7 @@ async fn upload_answers_with_the_ids_and_keeps_the_first_copy() {
 }
 
 #[tokio::test]
-async fn what_quorum_reads_back() {
+async fn what_a_client_reads_back() {
     let app = app().await;
     let first = SyntheticSeries::new(92, 3);
     let second = SyntheticSeries::new(93, 2).in_study(92, 2);
