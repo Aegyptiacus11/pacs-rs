@@ -152,6 +152,9 @@ pub struct InstanceEntry {
     pub transfer_syntax_uid: String,
     pub object_key: String,
     pub size_bytes: i64,
+    /// When the stored copy was received, in milliseconds since the epoch: it changes
+    /// whenever the instance's file does.
+    pub received_ms: i64,
     pub attributes: Value,
 }
 
@@ -478,7 +481,7 @@ impl Index {
         let rows = sqlx::query(
             "SELECT se.study_instance_uid, i.series_instance_uid, i.sop_instance_uid,
                     i.sop_class_uid, i.transfer_syntax_uid, i.object_key, i.size_bytes,
-                    i.attributes
+                    i.received_ms, i.attributes
                FROM instances i JOIN series se USING (series_instance_uid)
               WHERE se.study_instance_uid = $1 AND i.series_instance_uid = $2
                 AND (CAST($3 AS TEXT) IS NULL OR i.sop_instance_uid = $3)
@@ -499,6 +502,9 @@ impl Index {
                     transfer_syntax_uid: row.try_get("transfer_syntax_uid")?,
                     object_key: row.try_get("object_key")?,
                     size_bytes: row.try_get("size_bytes")?,
+                    received_ms: row
+                        .try_get::<Option<i64>, _>("received_ms")?
+                        .unwrap_or_default(),
                     attributes: parse(row.try_get("attributes")?)?,
                 })
             })

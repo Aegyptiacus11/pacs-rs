@@ -69,6 +69,22 @@ and every frame came back exact as uncompressed, JPEG-LS and JPEG XL (checked wi
 libjxl, not only with the codecs above); jxl-rs decoded libjxl's own effort-7 output of the same
 slices exactly.
 
+### Browser caching
+
+Retrieves, frames and metadata carry a weak `ETag` and `Vary: Accept`; a request whose
+`If-None-Match` holds the tag gets 304 Not Modified before any file is read. The tag is a hash of
+the instances' storage keys, sizes and receipt times, the Accept header and the server's version
+(metadata: of the body). One instance and its frames cannot change while instances are never
+overwritten, so they are `private, max-age=86400`: a study opened again within a day costs no
+request at all. Studies, series (they gain instances) and metadata, and everything when
+`PACS_OVERWRITE_INSTANCES` is set, are `private, no-cache`: asked about each time, at the cost of
+a round trip, not the bytes. `private` keeps them out of shared caches, since the deployment in
+front decides who may read a study; a browser keeps for up to a day what it has already read.
+
+On a 160-slice 512x512 CT stored uncompressed, one open with the header above: 83.9 MB as
+stored before this, 31.6 MB of JPEG-LS now, and opened again with the tags, 160 answers of 304 and
+no pixel bytes.
+
 DICOM JSON numbers: IS and DS values are written as JSON numbers, padding trimmed (PS3.18 Table
 F.2.3-1 allows numbers or strings).
 
