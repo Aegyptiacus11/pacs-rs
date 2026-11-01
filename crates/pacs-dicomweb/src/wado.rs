@@ -1,7 +1,7 @@
 //! WADO-RS: retrieve studies, series and instances, their metadata, and frames (PS3.18
-//! 10.4). What is stored goes out as stored whenever the client accepts it; otherwise it
-//! is transcoded to the first of Explicit VR Little Endian, JPEG-LS lossless and JPEG XL
-//! lossless the client asks for, and to nothing else (406).
+//! 10.4). The client's preference decides what goes out (`media::choose`): as stored, or
+//! transcoded to Explicit VR Little Endian, JPEG-LS lossless or JPEG XL lossless, and
+//! nothing else (406).
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -16,7 +16,7 @@ use pacs_core::codec::{self, EXPLICIT_VR_LE, JPEG_LS_LOSSLESS, JPEG_XL_LOSSLESS,
 use pacs_core::frames::{Frame, FrameError, NATIVE_MEDIA_TYPE, compressed_media_type};
 use pacs_index::InstanceEntry;
 
-use crate::media::{Accept, Packaging, accepts_json, negotiate, negotiate_transcoded};
+use crate::media::{Accept, Choice, Packaging, accepts_json, choose};
 use crate::qido::DICOM_JSON;
 use crate::{ApiError, AppState, multipart};
 
@@ -84,7 +84,8 @@ async fn file_as(
 }
 
 /// Instances as `multipart/related; type="application/dicom"`, streamed from the store
-/// one file at a time, each transcoded on the way if the client does not take it as stored.
+/// one file at a time, each transcoded on the way if the client prefers another transfer
+/// syntax.
 fn retrieve(
     archive: Archive,
     headers: &HeaderMap,
@@ -98,18 +99,16 @@ fn retrieve(
     let mut plan = Vec::with_capacity(entries.len());
     for entry in entries {
         let stored = entry.transfer_syntax_uid.as_str();
-        let (packaging, target) = match negotiate(&accept, DICOM, stored) {
-            Some(packaging) => (packaging, None),
-            None => {
-                let candidates = candidates(stored, |_| DICOM);
-                let (i, packaging) = negotiate_transcoded(&accept, &candidates).ok_or_else(|| {
-                    ApiError::not_acceptable(format!(
-                        "instance {} is stored in {stored} and cannot be transcoded to what was asked for",
-                        entry.sop_instance_uid
-                    ))
-                })?;
-                (packaging, Some(candidates[i].1))
-            }
+        let candidates = candidates(stored, |_| DICOM);
+        let (choice, packaging) = choose(&accept, (DICOM, stored), &candidates).ok_or_else(|| {
+            ApiError::not_acceptable(format!(
+                "instance {} is stored in {stored} and cannot be transcoded to what was asked for",
+                entry.sop_instance_uid
+            ))
+        })?;
+        let target = match choice {
+            Choice::Stored => None,
+            Choice::Candidate(i) => Some(candidates[i].1),
         };
         if packaging == Packaging::Multipart {
             single = false;
@@ -299,25 +298,23 @@ pub(crate) async fn frames(
 
     let accept = accept(&headers);
     let (media_type, ts) = (frames[0].media_type, frames[0].transfer_syntax_uid.clone());
-    let (packaging, frames) = match negotiate(&accept, media_type, &ts) {
-        Some(packaging) => (packaging, frames),
-        None => {
-            let candidates = candidates(&ts, frame_media_type);
-            let refused = |why: String| {
-                ApiError::not_acceptable(format!(
-                    "frames are stored as {media_type} in {ts} and {why}"
-                ))
-            };
-            let (i, packaging) = negotiate_transcoded(&accept, &candidates)
-                .ok_or_else(|| refused("cannot be transcoded to what was asked for".into()))?;
+    let candidates = candidates(&ts, frame_media_type);
+    let refused = |why: String| {
+        ApiError::not_acceptable(format!(
+            "frames are stored as {media_type} in {ts} and {why}"
+        ))
+    };
+    let (choice, packaging) = choose(&accept, (media_type, &ts), &candidates)
+        .ok_or_else(|| refused("cannot be transcoded to what was asked for".into()))?;
+    let frames = match choice {
+        Choice::Stored => frames,
+        Choice::Candidate(i) => {
             let shape = shape.map_err(|e| refused(e.to_string()))?;
             let target = candidates[i].1;
-            let frames =
-                tokio::task::spawn_blocking(move || transcode_frames(frames, shape, target))
-                    .await
-                    .map_err(ApiError::internal)?
-                    .map_err(|e| refused(format!("could not be transcoded: {e}")))?;
-            (packaging, frames)
+            tokio::task::spawn_blocking(move || transcode_frames(frames, shape, target))
+                .await
+                .map_err(ApiError::internal)?
+                .map_err(|e| refused(format!("could not be transcoded: {e}")))?
         }
     };
     let (media_type, ts) = (frames[0].media_type, frames[0].transfer_syntax_uid.clone());
