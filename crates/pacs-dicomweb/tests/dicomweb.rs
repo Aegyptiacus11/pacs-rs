@@ -749,3 +749,32 @@ async fn overwritten_instances_are_asked_about() {
     let reply = send(&app, "GET", &uri, &headers, Bytes::new()).await;
     assert_eq!(reply.status, StatusCode::OK, "a new copy, a new tag");
 }
+
+/// STOW-RS takes standard elements in UN and shows them under their VR in metadata; a length that
+/// lies is refused, and only that part.
+#[tokio::test]
+async fn stow_reads_un_and_refuses_a_lying_length() {
+    let app = app().await;
+    let lying = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+        .identifiers(68, b"UI")
+        .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
+        .bytes();
+    let reply = stow(
+        &app,
+        "/studies",
+        vec![pacs_core::synthetic::un_sequence_file(67), lying],
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED);
+    let json = reply.json();
+    assert_eq!(json["00081199"]["Value"].as_array().unwrap().len(), 1);
+    assert_eq!(json["00081198"]["Value"].as_array().unwrap().len(), 1);
+    let reply = get(
+        &app,
+        "/studies/2.25.671/series/2.25.672/instances/2.25.673/metadata",
+        "application/dicom+json",
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.json()[0]["00081110"]["vr"], "SQ");
+}

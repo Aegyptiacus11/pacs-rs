@@ -552,3 +552,31 @@ async fn create_archive_takes_resources_at_any_level_each_file_once() {
     let (status, _, _) = archive("POST", "/tools/create-archive".into(), body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// Files GDCM re-encoded from Implicit VR: taken, and kept byte for byte. A length that lies: 400.
+#[tokio::test]
+async fn standard_elements_in_un_are_read_and_kept_as_received() {
+    let app = app().await;
+    for (bytes, study) in [
+        (pacs_core::synthetic::un_sequence_file(92), "2.25.921"),
+        (pacs_core::synthetic::un_study_uid_file(93), "2.25.931"),
+    ] {
+        let answer = json(&app, "POST", "/instances", bytes.clone().into()).await;
+        assert_eq!(answer["Status"], "Success");
+        let id = answer["ID"].as_str().unwrap();
+        let parent = json(&app, "GET", &format!("/instances/{id}/study"), Bytes::new()).await;
+        assert_eq!(parent["MainDicomTags"]["StudyInstanceUID"], study);
+        let (status, _, file) =
+            call(&app, "GET", &format!("/instances/{id}/file"), Bytes::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(file, bytes);
+    }
+
+    let lying = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+        .identifiers(94, b"UI")
+        .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
+        .bytes();
+    let (status, _, body) = call(&app, "POST", "/instances", lying.into()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(String::from_utf8_lossy(&body).contains("3221225472"));
+}
