@@ -70,7 +70,7 @@ and every frame came back exact as uncompressed, JPEG-LS and JPEG XL (checked wi
 libjxl, not only with the codecs above); jxl-rs decoded libjxl's own effort-7 output of the same
 slices exactly.
 
-### Elements in UN and wrong lengths
+### Elements in UN, wrong lengths and costly files
 
 A file re-encoded from Implicit VR may carry standard elements as UN, which PS3.5 6.2.2 allows: an
 undefined-length UN holds a sequence in Implicit VR Little Endian whatever the transfer syntax,
@@ -83,6 +83,18 @@ values too long for the VR's 16-bit length or of a size it does not come in.
 A value declared longer than the file, or nesting deeper than 64 sequences, is refused before
 dicom-rs allocates for it: 400 on `POST /instances`, a failed part in STOW-RS, a failure status in
 C-STORE. A last fragment of encapsulated pixel data cut short stays readable, as it was.
+
+Some well-formed files take far more memory to read than their size: an 8 MB file of one-byte text
+values takes 1.3 GB with its metadata JSON, while pixel data takes its own size
+(`docs/benchmarks.md`). The same walk counts elements, items and text values into an estimate. A
+file estimated over `PACS_MAX_READ_BYTES` is refused unread (413 on `POST /instances`, failure
+reason A700 in STOW-RS, status A702 in C-STORE), and files being read share that amount, so that
+some at once wait their turn instead of adding up. It is an estimate for one file at its worst:
+allow about 1.6 times it, so keep it near half of the memory the server has. The default lets through about
+3 million text values or 600 000 elements; raise it for larger structure sets or enhanced
+multi-frame objects if the memory is there. Bodies are not counted, since they are in memory before
+the walk: `PACS_MAX_UPLOAD_BYTES` and concurrent clients bound those. Identifiers in C-FIND and
+C-MOVE responses go through the same walk, with a fixed limit of 64 MiB.
 
 ### Browser caching
 
@@ -366,6 +378,7 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_OVERWRITE_INSTANCES` | `false` | replace an instance sent again, instead of keeping the first copy |
 | `PACS_COMPRESSION` | `jpeg-ls` | how uncompressed pixel data is stored: `jpeg-ls` (lossless, checked) or `off` |
 | `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
+| `PACS_MAX_READ_BYTES` | 512 MiB | memory that reading files may take at once beyond the files themselves, by estimate (see "Elements in UN, wrong lengths and costly files") |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
 | `PACS_UI` | `true` | serve the web interface at `/ui/` |
 | `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
