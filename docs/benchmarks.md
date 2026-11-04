@@ -22,7 +22,7 @@ default `PACS_MAX_READ_BYTES` (512 MiB). Over: 8 MiB of backslashes, estimated a
 
 | | 0.5.0 | with the read limit |
 |---|---|---|
-| over the limit | OOM-killed after 10: 6 answered 100 | 16 of 413 |
+| over the limit | OOM-killed: none answered in full | 16 of 413 |
 | under the limit | no answer, container dead | 16 of 200, one at a time |
 | peak of the container | over the limit | 828 MB anonymous (983 MB with page cache), no swap |
 
