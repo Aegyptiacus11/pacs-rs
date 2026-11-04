@@ -21,6 +21,7 @@ tokio.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+dicom-dictionary-std.workspace = true
 http-body-util.workspace = true
 pacs-core = { workspace = true, features = ["synthetic"] }
 tower.workspace = true

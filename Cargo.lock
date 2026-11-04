@@ -1700,6 +1700,7 @@ name = "pacs-archive"
 version = "0.5.0"
 dependencies = [
  "bytes",
+ "dicom-dictionary-std",
  "pacs-core",
  "pacs-index",
  "pacs-store",
@@ -1803,6 +1804,7 @@ version = "0.5.0"
 dependencies = [
  "axum",
  "bytes",
+ "dicom-dictionary-std",
  "futures",
  "http-body-util",
  "pacs-archive",
