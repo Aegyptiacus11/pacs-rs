@@ -580,3 +580,19 @@ async fn standard_elements_in_un_are_read_and_kept_as_received() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(String::from_utf8_lossy(&body).contains("3221225472"));
 }
+
+/// A file that would cost too much memory to read: 413, and it says so.
+#[tokio::test]
+async fn a_file_too_costly_to_read_is_413() {
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off)
+        .with_read_limit(1 << 20);
+    let app = pacs_rest::router(archive, 1 << 30);
+    let costly = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+        .identifiers(103, b"UI")
+        .long((0x0043, 0x1001), b"UC", &vec![b'\\'; 100_000])
+        .bytes();
+    let (status, _, body) = call(&app, "POST", "/instances", costly.into()).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(String::from_utf8_lossy(&body).contains("over the limit"));
+}

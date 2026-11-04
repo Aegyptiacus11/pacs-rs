@@ -73,7 +73,9 @@ async fn file_as(
     let Some(target) = target else {
         return Ok(file);
     };
+    let reading = archive.admit_stored(&file).await;
     tokio::task::spawn_blocking(move || {
+        let _reading = reading;
         let instance = Instance::from_bytes(&file).map_err(std::io::Error::other)?;
         instance
             .transcoded(target, false)
@@ -311,7 +313,9 @@ pub(crate) async fn frames(
         return Ok(validator.not_modified());
     }
     let file = state.archive.file(&entry).await?;
+    let reading = state.archive.admit_stored(&file).await;
     let (frames, shape) = tokio::task::spawn_blocking(move || {
+        let _reading = reading;
         let instance = Instance::from_bytes(&file).map_err(ApiError::internal)?;
         let frames = numbers
             .into_iter()
