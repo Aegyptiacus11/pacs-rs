@@ -241,3 +241,33 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+/// Native pixel data goes to JPEG-LS as any other, and the stored file has the elements under
+/// their VR, since it is written from what was read.
+#[tokio::test]
+async fn native_file_with_elements_in_un_is_compressed_with_them_reverted() {
+    let archive = archive().await;
+    let bytes = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+        .identifiers(95, b"UN")
+        .short((0x0028, 0x0002), b"US", &1u16.to_le_bytes())
+        .short((0x0028, 0x0004), b"CS", b"MONOCHROME2 ")
+        .long((0x0028, 0x0010), b"UN", &2u16.to_le_bytes())
+        .long((0x0028, 0x0011), b"UN", &2u16.to_le_bytes())
+        .short((0x0028, 0x0100), b"US", &16u16.to_le_bytes())
+        .short((0x0028, 0x0101), b"US", &16u16.to_le_bytes())
+        .short((0x0028, 0x0102), b"US", &15u16.to_le_bytes())
+        .short((0x0028, 0x0103), b"US", &0u16.to_le_bytes())
+        .long((0x7FE0, 0x0010), b"OW", &[1, 0, 2, 0, 3, 0, 4, 0])
+        .bytes();
+    let ingested = archive.ingest(Bytes::from(bytes)).await.unwrap();
+    assert_eq!(ingested.key.study_instance_uid, "2.25.951");
+    let entry = archive
+        .index()
+        .instance("2.25.951", "2.25.952", "2.25.953")
+        .await
+        .unwrap()
+        .unwrap();
+    let stored = Instance::from_bytes(&archive.file(&entry).await.unwrap()).unwrap();
+    assert_eq!(stored.key.transfer_syntax_uid, JPEG_LS_LOSSLESS);
+    assert_eq!(stored.int(dicom_dictionary_std::tags::ROWS), Some(2));
+}

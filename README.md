@@ -70,6 +70,20 @@ and every frame came back exact as uncompressed, JPEG-LS and JPEG XL (checked wi
 libjxl, not only with the codecs above); jxl-rs decoded libjxl's own effort-7 output of the same
 slices exactly.
 
+### Elements in UN and wrong lengths
+
+A file re-encoded from Implicit VR may carry standard elements as UN, which PS3.5 6.2.2 allows: an
+undefined-length UN holds a sequence in Implicit VR Little Endian whatever the transfer syntax,
+and any other UN is little endian. Every read goes through `pacs_core::wire::checked`, which gives
+dicom-rs such elements under their dictionary VR, as DCMTK and dcm4che read them. The stored file
+stays as received (a native one is written anew when compressed, then under the real VRs). UN stays
+UN for private elements with a defined length, for tags the dictionary does not have, and for
+values too long for the VR's 16-bit length or of a size it does not come in.
+
+A value declared longer than the file, or nesting deeper than 64 sequences, is refused before
+dicom-rs allocates for it: 400 on `POST /instances`, a failed part in STOW-RS, a failure status in
+C-STORE. A last fragment of encapsulated pixel data cut short stays readable, as it was.
+
 ### Browser caching
 
 Retrieves, frames and metadata carry a weak `ETag` and `Vary: Accept`; a request whose

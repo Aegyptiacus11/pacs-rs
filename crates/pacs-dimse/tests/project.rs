@@ -255,3 +255,34 @@ async fn a_quarantined_instance_goes_to_the_quarantine_store() {
             .is_none()
     );
 }
+
+/// A Patient's Name in UN is a Patient's Name: the profile reaches it, and it does not survive
+/// as bytes in the de-identified file.
+#[tokio::test]
+async fn a_name_in_un_is_de_identified() {
+    let (addr, archive) = with_project(None).await;
+    let file = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+        .identifiers(102, b"UI")
+        .long((0x0010, 0x0010), b"UN", b"REAL^NAME ");
+    let mut client = Client::connect(addr, "HOSPITAL", "LIVER_2026", &[CT], &[EXPLICIT_VR_LE])
+        .await
+        .unwrap();
+    let rsp = client
+        .store_as(CT, CT, "2.25.1023", &data_set(&file.bytes()))
+        .await;
+    assert_eq!(
+        rsp.status(),
+        Ok(Status::SUCCESS),
+        "{:?}",
+        rsp.text(pacs_dimse::command::tag::ERROR_COMMENT)
+    );
+    client.release().await;
+    let entry = archive
+        .index()
+        .rest_instance_by_uid(&keys().uid("2.25.1023"))
+        .await
+        .unwrap()
+        .expect("the de-identified instance");
+    let stored = archive.file_at(&entry.object_key).await.unwrap();
+    assert!(!stored.windows(9).any(|w| w == b"REAL^NAME"));
+}

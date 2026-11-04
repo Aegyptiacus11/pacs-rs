@@ -3,6 +3,22 @@
 `scripts/bench.sh` against pacs-rs and the reference server (see the README, "Comparing with a
 reference server"), with the same client and the same files.
 
+## 2026-11-04: uploads with elements in UN and with lengths that lie
+
+`scripts/un-vr-memory.sh`: 16 files of each kind, 6 at a time, written by the `write_un_vr` example,
+against the production image with `--memory=1g --memory-swap=2g`. A file is a few hundred bytes.
+
+| | 0.5.0 | with `pacs_core::wire` |
+|---|---|---|
+| standard sequence in UN, undefined length | OOM-killed after 16 answers: 4 lost, 12 of 400 | 16 of 200 |
+| Study Instance UID in UN, defined length | no answer, container dead | 16 of 200 |
+| private element in UN declaring 3 GiB | no answer, container dead | 16 of 400 |
+| cgroup peak | over the limit | 47 MB, 0 restarts |
+
+At the allocator (`crates/pacs-rest/tests/bad_upload_memory.rs`), the first group requested
+4650 MB before: six times 775 MB, the length dicom-rs read from the text `1.2.` of a UID in
+implicit content.
+
 ## 2026-10-24: memory while serving a study ZIP
 
 `scripts/zip-memory.sh`: peak resident memory (VmHWM) of the pacs-server binary, native, before

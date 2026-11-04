@@ -148,7 +148,7 @@ fn identifiers(file: &[u8]) -> Result<(String, String), String> {
     let object = dicom_object::OpenFileOptions::new()
         .read_preamble(dicom_object::file::ReadPreamble::Always)
         .read_until(tags::PIXEL_DATA)
-        .from_reader(file)
+        .from_reader(&*pacs_core::wire::checked(file).map_err(|e| e.to_string())?)
         .map_err(|e| format!("cannot read the data set: {e}"))?;
     let read = |tag, name| {
         object

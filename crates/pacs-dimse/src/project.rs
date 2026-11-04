@@ -89,7 +89,9 @@ enum Done {
 fn deidentify_file(file: &[u8], profile: &Profile, keys: &Keys) -> Result<Done, ProjectError> {
     let object = OpenFileOptions::new()
         .read_preamble(dicom_object::file::ReadPreamble::Auto)
-        .from_reader(file)
+        .from_reader(
+            &*pacs_core::wire::checked(file).map_err(|e| ProjectError::Read(e.to_string()))?,
+        )
         .map_err(|e| ProjectError::Read(e.to_string()))?;
     let transfer_syntax = object
         .meta()
