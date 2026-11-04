@@ -637,3 +637,35 @@ async fn a_command_in_fragments_is_reassembled() {
     }
     client.release().await;
 }
+
+/// C-STORE reads a data set with standard elements in UN (PS3.5 6.2.2), and answers one whose
+/// length lies with a failure, not by allocating it.
+#[tokio::test]
+async fn c_store_takes_un_and_refuses_a_lying_length() {
+    let archive = archive().await;
+    let addr = start(config(), archive.clone()).await;
+    let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
+        .await
+        .unwrap();
+    let file = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE).identifiers(62, b"UN");
+    let rsp = client
+        .store_as(CT, CT, "2.25.623", &data_set(&file.bytes()))
+        .await;
+    assert_eq!(rsp.status(), Ok(Status::SUCCESS));
+    let lying = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+        .identifiers(63, b"UI")
+        .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short");
+    let rsp = client
+        .store_as(CT, CT, "2.25.633", &data_set(&lying.bytes()))
+        .await;
+    assert_ne!(rsp.status(), Ok(Status::SUCCESS));
+    client.release().await;
+    assert!(
+        archive
+            .index()
+            .rest_instance_by_uid("2.25.623")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
