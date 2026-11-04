@@ -271,3 +271,113 @@ async fn native_file_with_elements_in_un_is_compressed_with_them_reverted() {
     assert_eq!(stored.key.transfer_syntax_uid, JPEG_LS_LOSSLESS);
     assert_eq!(stored.int(dicom_dictionary_std::tags::ROWS), Some(2));
 }
+
+fn costly_file(seed: u32, values: usize) -> Vec<u8> {
+    pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+        .identifiers(seed, b"UI")
+        .long((0x0043, 0x1001), b"UC", &vec![b'\\'; values])
+        .bytes()
+}
+
+/// A well-formed file that would take more memory than the limit is refused without being read;
+/// the limit is a setting, and one just under it passes.
+#[tokio::test]
+async fn a_file_over_the_read_limit_is_refused() {
+    let file = costly_file(96, 100_000);
+    let cost = pacs_core::wire::read_cost(&file).unwrap();
+    let archive = uncompressed().await.with_read_limit(cost - 1);
+    let refused = archive.ingest(Bytes::from(file.clone())).await.unwrap_err();
+    assert!(
+        matches!(refused, IngestError::TooCostly { estimate, limit } if estimate == cost && limit == cost - 1),
+        "{refused:?}"
+    );
+    let archive = uncompressed().await.with_read_limit(cost);
+    archive.ingest(Bytes::from(file)).await.unwrap();
+}
+
+/// A file of lengths that lie is still reported as unreadable, not as costly.
+#[tokio::test]
+async fn admitting_a_lying_file_says_it_is_invalid() {
+    let lying = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+        .identifiers(97, b"UI")
+        .long_declared((0x0043, 0x1001), b"OB", 0xC000_0000, b"short")
+        .bytes();
+    let refused = uncompressed()
+        .await
+        .ingest(Bytes::from(lying))
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, IngestError::Invalid(_)), "{refused:?}");
+}
+
+/// Files over what is free wait for it and then go through, smaller or larger than the limit;
+/// with a limit of nothing, and with a pixel file far over it. Nothing hangs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_read_limit_makes_files_wait_not_fail() {
+    let archive = uncompressed().await.with_read_limit(4 << 20);
+    let held = archive.admit(&costly_file(98, 20_000)).await.unwrap();
+    let waiting = {
+        let archive = archive.clone();
+        tokio::spawn(async move { archive.ingest(Bytes::from(costly_file(99, 20_000))).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!waiting.is_finished(), "it should wait for room");
+    drop(held);
+    tokio::time::timeout(std::time::Duration::from_secs(20), waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let native_over_the_limit = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+        .identifiers(100, b"UI")
+        .long((0x7FE0, 0x0010), b"OW", &vec![0; 8 << 20])
+        .bytes();
+    archive
+        .ingest(Bytes::from(native_over_the_limit))
+        .await
+        .unwrap();
+
+    let none = uncompressed().await.with_read_limit(0);
+    assert!(matches!(
+        none.ingest(Bytes::from(costly_file(101, 1))).await,
+        Err(IngestError::TooCostly { .. })
+    ));
+}
+
+/// A deletion waiting for its lock while files wait for room: all of it finishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_read_limit_and_deletions_do_not_wait_on_each_other() {
+    let archive = uncompressed().await.with_read_limit(2 << 20);
+    let series = SyntheticSeries::new(102, 1);
+    archive
+        .ingest(Bytes::from(series.slice_bytes(0)))
+        .await
+        .unwrap();
+    let id = pacs_core::public_ids::study(&series.patient_id(), &series.study_uid());
+    let mut tasks = Vec::new();
+    for seed in 0..12 {
+        let archive = archive.clone();
+        tasks.push(tokio::spawn(async move {
+            archive
+                .ingest(Bytes::from(costly_file(200 + seed, 10_000)))
+                .await
+                .map(|_| ())
+                .unwrap();
+        }));
+    }
+    let deleting = {
+        let archive = archive.clone();
+        tokio::spawn(async move { archive.delete(Level::Study, &id).await.unwrap() })
+    };
+    tasks.push(tokio::spawn(async move {
+        deleting.await.unwrap();
+    }));
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        for task in tasks {
+            task.await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}

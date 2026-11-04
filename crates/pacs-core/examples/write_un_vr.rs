@@ -4,6 +4,8 @@
 //! cargo run -p pacs-core --features synthetic --example write_un_vr -- out/ 16
 //! ```
 //! `un_sequence_*` and `un_uid_*` are legal (PS3.5 6.2.2); `bad_length_*` are not.
+//! `costly_over_*` and `costly_under_*` are legal too, and well over and just under what the
+//! default read limit lets a file cost in memory (8 MiB and 3 MiB of backslashes in a UC).
 
 use dicom_dictionary_std::uids;
 use pacs_core::synthetic::{RawFile, un_sequence_file, un_study_uid_file};
@@ -25,6 +27,13 @@ fn main() -> std::io::Result<()> {
             .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
             .bytes();
         std::fs::write(format!("{dir}/bad_length_{n}.dcm"), bad)?;
+        for (name, values, base) in [("over", 8 << 20, 3000), ("under", 3 << 20, 4000)] {
+            let costly = RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                .identifiers(seed + base, b"UI")
+                .long((0x0043, 0x1001), b"UC", &vec![b'\\'; values])
+                .bytes();
+            std::fs::write(format!("{dir}/costly_{name}_{n}.dcm"), costly)?;
+        }
     }
     Ok(())
 }

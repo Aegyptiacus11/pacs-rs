@@ -54,10 +54,12 @@ impl Project {
         let profile = self.profile.clone();
         let keys = self.keys.clone();
         let identified = file.clone();
+        let reading = self.archive.admit(&file).await?;
         let done =
             tokio::task::spawn_blocking(move || deidentify_file(&identified, &profile, &keys))
                 .await
                 .map_err(|e| ProjectError::Read(e.to_string()))??;
+        drop(reading); // the ingest takes its own: held here, both could wait on each other.
         match done {
             Done::Deidentified(bytes) => {
                 self.archive.ingest(Bytes::from(bytes)).await?;
@@ -67,9 +69,11 @@ impl Project {
                 let Some(store) = &self.quarantine else {
                     return Err(ProjectError::Refused(reason));
                 };
+                let reading = self.archive.admit(&file).await?;
                 let key = pacs_core::Instance::from_bytes(&file)
                     .map_err(|e| ProjectError::Read(e.to_string()))?
                     .key;
+                drop(reading);
                 store.put(&key, file).await?;
                 tracing::info!(project = %self.profile.name, sop_instance = %key.sop_instance_uid, %reason, "quarantined");
                 Ok(Received::Quarantined(reason))

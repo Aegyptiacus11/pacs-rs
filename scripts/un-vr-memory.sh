@@ -16,7 +16,7 @@ for i in $(seq 40); do
     sleep 0.25
 done
 id=$(docker inspect -f '{{.Id}}' "$name")
-for pattern in 'un_sequence_*' 'un_uid_*' 'bad_length_*'; do
+for pattern in 'un_sequence_*' 'un_uid_*' 'bad_length_*' 'costly_over_*' 'costly_under_*'; do
     # xargs ends non-zero when curl cannot connect, as it will if the server was killed.
     answers=$(find "$files" -name "$pattern.dcm" -print0 |
         xargs -0 -P6 -I{} curl -s -o /dev/null -w '%{http_code}\n' -m 120 --data-binary @{} \
@@ -26,7 +26,8 @@ done
 # Gone with the container, if it was killed.
 peak_file=/sys/fs/cgroup/system.slice/docker-$id.scope/memory.peak
 if [ -r "$peak_file" ]; then
-    echo "peak_MB $(($(cat "$peak_file") / 1048576))"
+    swap_file=${peak_file%memory.peak}memory.swap.peak
+    echo "peak_MB $(($(cat "$peak_file") / 1048576)) swap_peak_MB $(($(cat "$swap_file") / 1048576))"
 else
     echo "peak_MB unknown"
 fi

@@ -243,8 +243,7 @@ fn failed_list(
     bytes: &[u8],
     ts: &dicom_encoding::TransferSyntax,
 ) -> Result<Vec<String>, MoveError> {
-    let identifier = InMemDicomObject::read_dataset_with_ts(bytes, ts)
-        .map_err(|e| MoveError::Identifier(e.to_string()))?;
+    let identifier = super::read_identifier(bytes, ts).map_err(MoveError::Identifier)?;
     Ok(identifier
         .element(tags::FAILED_SOP_INSTANCE_UID_LIST)
         .ok()

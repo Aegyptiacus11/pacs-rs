@@ -73,6 +73,11 @@ pub struct Settings {
     #[arg(long, env = "PACS_MAX_UPLOAD_BYTES", default_value_t = 1 << 30)]
     pub max_upload_bytes: usize,
 
+    /// Memory that reading files may take at once beyond the files themselves, in bytes, by
+    /// estimate; a file that would take more alone is refused (see the README).
+    #[arg(long, env = "PACS_MAX_READ_BYTES", default_value_t = pacs_archive::DEFAULT_READ_LIMIT)]
+    pub max_read_bytes: u64,
+
     /// Check that a server with these settings answers on /healthz, exit 0 if it does and
     /// 1 if not, and do nothing else: a health check for images without a shell or curl.
     #[arg(long)]
@@ -249,7 +254,8 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     };
     Ok(Archive::new(store, index)
         .with_overwrite(settings.overwrite_instances)
-        .with_compression(settings.compression.into()))
+        .with_compression(settings.compression.into())
+        .with_read_limit(settings.max_read_bytes))
 }
 
 /// The DIMSE side's configuration, from the settings. A remote AE named twice is an error.

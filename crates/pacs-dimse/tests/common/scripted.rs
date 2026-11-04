@@ -17,6 +17,8 @@ pub enum Act {
     /// Send this command, with this Identifier as its data set if any; Command Data Set
     /// Type is set to match.
     Send(Command, Option<InMemDicomObject>),
+    /// Send this command with these bytes as its data set, whatever they say.
+    SendRaw(Command, Vec<u8>),
     /// Read the next message, the C-CANCEL-RQ, and record it.
     ExpectCancel,
     /// Say nothing more.
@@ -89,6 +91,12 @@ where
                         if data.is_some() { 0x0102 } else { NO_DATA_SET },
                     );
                     message::send(&mut association, context_id, &command, data.as_deref())
+                        .await
+                        .unwrap();
+                }
+                Act::SendRaw(command, data) => {
+                    let command = command.with_us(tag::COMMAND_DATA_SET_TYPE, 0x0102);
+                    message::send(&mut association, context_id, &command, Some(&data))
                         .await
                         .unwrap();
                 }

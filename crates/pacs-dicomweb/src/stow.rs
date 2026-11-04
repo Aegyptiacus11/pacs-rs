@@ -19,6 +19,7 @@ mod reason {
     /// 0110H Processing failure
     pub const PROCESSING_FAILURE: u16 = 0x0110;
     /// A900H Error: Data Set does not match SOP Class (here: not in the target study)
+    pub const OUT_OF_RESOURCES: u16 = 0xA700;
     pub const DOES_NOT_MATCH: u16 = 0xA900;
     /// C000H Error: Cannot understand
     pub const CANNOT_UNDERSTAND: u16 = 0xC000;
@@ -41,11 +42,15 @@ struct Failure {
 }
 
 fn failure_of(e: &IngestError, bytes: &Bytes) -> Failure {
-    // the UIDs, when the file can be read at all
-    let key = pacs_core::Instance::from_bytes(bytes).ok().map(|i| i.key);
+    // the UIDs, when the file can be read at all and at a cost the archive accepts
+    let key = match e {
+        IngestError::TooCostly { .. } => None,
+        _ => pacs_core::Instance::from_bytes(bytes).ok().map(|i| i.key),
+    };
     let reason = match e {
         IngestError::Invalid(_) => reason::CANNOT_UNDERSTAND,
         IngestError::WrongStudy { .. } => reason::DOES_NOT_MATCH,
+        IngestError::TooCostly { .. } => reason::OUT_OF_RESOURCES,
         IngestError::Conflict(_) | IngestError::Store(_) | IngestError::Index(_) => {
             reason::PROCESSING_FAILURE
         }

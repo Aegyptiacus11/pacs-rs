@@ -9,13 +9,22 @@ use pacs_core::codec::{self, JPEG_LS_LOSSLESS};
 use pacs_core::{Instance, InstanceKey};
 use pacs_index::{Deleted, Index, InstanceEntry, Level, NewInstance, Recorded};
 use pacs_store::Store;
-use tokio::sync::RwLock;
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
+
+/// How much memory reading files may take at once beyond the files themselves, by
+/// [`pacs_core::wire::read_cost`], unless set with [`Archive::with_read_limit`].
+pub const DEFAULT_READ_LIMIT: u64 = 512 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
     /// Not DICOM, or missing the UIDs an instance must have.
     #[error(transparent)]
     Invalid(#[from] pacs_core::Error),
+    /// Reading it would take more memory than the archive allows any file.
+    #[error(
+        "reading the file would take about {estimate} bytes of memory, over the limit of {limit}"
+    )]
+    TooCostly { estimate: u64, limit: u64 },
     /// The UIDs contradict what the archive already holds.
     #[error("{0}")]
     Conflict(String),
@@ -79,7 +88,16 @@ pub struct Archive {
     /// UIDs, so an upload of an instance being deleted would otherwise have its new file
     /// removed by the deletion. One server process; several on one index would need more.
     writes: Arc<RwLock<()>>,
+    /// Refuse a file whose [`pacs_core::wire::read_cost`] is over this.
+    read_limit: u64,
+    /// The same amount in KiB, shared by the files being read, so that a few at once cannot
+    /// add up to what one is refused for.
+    reading: Arc<Semaphore>,
 }
+
+/// Room in the archive's read limit, for as long as it is held.
+#[derive(Debug)]
+pub struct Admitted(#[allow(dead_code)] OwnedSemaphorePermit);
 
 impl Archive {
     /// An archive that keeps the first copy of an instance sent twice, like the
@@ -91,7 +109,50 @@ impl Archive {
             overwrite: false,
             compression: Compression::default(),
             writes: Arc::default(),
+            read_limit: DEFAULT_READ_LIMIT,
+            reading: Arc::new(Semaphore::new(read_permits(DEFAULT_READ_LIMIT))),
         }
+    }
+
+    /// How much memory reading files may take at once beyond the files themselves; a file
+    /// that would take more alone is refused.
+    pub fn with_read_limit(mut self, bytes: u64) -> Self {
+        self.read_limit = bytes;
+        self.reading = Arc::new(Semaphore::new(read_permits(bytes)));
+        self
+    }
+
+    /// Wait for room to read `file` and hold on to it, or refuse a file over the read limit or
+    /// with lengths that lie. To hold while nothing else of this archive is waited for: two
+    /// holders waiting for more could wait for ever.
+    pub async fn admit(&self, file: &[u8]) -> Result<Admitted, IngestError> {
+        let estimate = pacs_core::wire::read_cost(file)?;
+        if estimate > self.read_limit {
+            return Err(IngestError::TooCostly {
+                estimate,
+                limit: self.read_limit,
+            });
+        }
+        Ok(self.room_for(estimate + file.len() as u64).await)
+    }
+
+    /// Wait for room to read a file the archive has already taken, however large.
+    pub async fn admit_stored(&self, file: &[u8]) -> Admitted {
+        // A stored file was read once, so an error here is for the read itself to report.
+        let estimate = pacs_core::wire::read_cost(file).unwrap_or(0);
+        self.room_for(estimate + file.len() as u64).await
+    }
+
+    async fn room_for(&self, bytes: u64) -> Admitted {
+        // One bigger than the whole limit (a large native file) waits to have all of it.
+        let wanted = ((bytes >> 10) + 1).min(read_permits(self.read_limit) as u64) as u32;
+        Admitted(
+            self.reading
+                .clone()
+                .acquire_many_owned(wanted)
+                .await
+                .expect("the semaphore is never closed"),
+        )
     }
 
     /// Whether an instance sent again replaces the stored one.
@@ -140,6 +201,8 @@ impl Archive {
         bytes: Bytes,
         expected_study: Option<&str>,
     ) -> Result<Ingested, IngestError> {
+        // Before the lock: a deletion waiting for it must not hold up those who have room.
+        let _reading = self.admit(&bytes).await?;
         let _writing = self.writes.read().await;
         let instance = Instance::from_bytes(&bytes)?;
         if let Some(expected) = expected_study
@@ -260,4 +323,11 @@ impl Archive {
     pub async fn file_at(&self, object_key: &str) -> Result<Bytes, pacs_store::Error> {
         self.store.get(object_key).await
     }
+}
+
+/// The limit in KiB, at least one: a semaphore of none would never let anything through.
+fn read_permits(bytes: u64) -> usize {
+    ((bytes >> 10).max(1) as usize)
+        .min(Semaphore::MAX_PERMITS)
+        .min(u32::MAX as usize)
 }

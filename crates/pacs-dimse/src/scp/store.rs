@@ -32,6 +32,13 @@ enum Refusal {
 }
 
 impl Destination {
+    fn archive(&self) -> &Archive {
+        match self {
+            Destination::Archive(archive) => archive,
+            Destination::Project(project) => &project.archive,
+        }
+    }
+
     async fn store(&self, file: Bytes) -> Result<(), Refusal> {
         match self {
             Destination::Archive(archive) => archive
@@ -81,10 +88,18 @@ pub(super) async fn store(
         request.calling,
         request.called,
     );
+    let reading = match destination.archive().admit(&file).await {
+        Ok(reading) => reading,
+        Err(e @ IngestError::TooCostly { .. }) => {
+            return (Status::OUT_OF_RESOURCES_TOO_LARGE, Some(e.to_string()));
+        }
+        Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e.to_string())),
+    };
     let (found_class, found_instance) = match identifiers(&file) {
         Ok(found) => found,
         Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e)),
     };
+    drop(reading); // the store takes its own: held here, both could wait on each other.
     // PS3.4 B.2.3: the data set must be an instance of the SOP class it is sent as
     if found_class != sop_class {
         return (
@@ -105,6 +120,9 @@ pub(super) async fn store(
         // kept is the first (or the new one, with overwriting on), as for a REST upload. An
         // instance a project quarantines is stored too, in its quarantine.
         Ok(()) => (Status::SUCCESS, None),
+        Err(Refusal::Ingest(e @ IngestError::TooCostly { .. })) => {
+            (Status::OUT_OF_RESOURCES_TOO_LARGE, Some(e.to_string()))
+        }
         Err(Refusal::Ingest(IngestError::Invalid(e))) => {
             (Status::CANNOT_UNDERSTAND, Some(e.to_string()))
         }

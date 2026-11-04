@@ -8,12 +8,26 @@ pub mod retrieve;
 
 use std::time::Duration;
 
+use dicom_encoding::TransferSyntax;
+use dicom_object::InMemDicomObject;
 use dicom_ul::ClientAssociationOptions;
 use dicom_ul::association::AsyncClientAssociation;
 use dicom_ul::pdu::PresentationContextResultReason;
 use tokio::net::TcpStream;
 
 use crate::ae::{AeTitle, RemoteAe};
+
+/// The most memory a remote AE's response Identifier may take to read, by estimate
+/// ([`pacs_core::wire::read_cost`]): a few hundred thousand values or tens of thousands of elements,
+/// far beyond what an Identifier holds.
+const MAX_IDENTIFIER_COST: u64 = 64 << 20;
+
+/// A response Identifier from a remote AE, which is not trusted to tell the truth about lengths.
+fn read_identifier(bytes: &[u8], ts: &TransferSyntax) -> Result<InMemDicomObject, String> {
+    let checked = pacs_core::wire::checked_data_set(bytes, ts.uid(), MAX_IDENTIFIER_COST)
+        .map_err(|e| e.to_string())?;
+    InMemDicomObject::read_dataset_with_ts(&*checked, ts).map_err(|e| e.to_string())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectError {

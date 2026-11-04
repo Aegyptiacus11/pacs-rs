@@ -376,3 +376,47 @@ async fn an_scp_without_study_root_find_is_reported() {
     let result = find(&remote, &by_patient("P1"), None).await.0;
     assert!(matches!(result, Err(FindError::Connect(_))), "{result:?}");
 }
+
+/// A remote AE's Identifier is walked as an upload is: a length that lies is refused, not
+/// allocated; so is one that costs too much to read, and a standard element in UN is read.
+#[tokio::test]
+async fn an_identifier_is_checked_before_it_is_read() {
+    use pacs_core::synthetic::{RawFile, even};
+    // Written as data sets: what follows the File Meta group of these files.
+    let data_set = |file: RawFile| {
+        let bytes = file.bytes();
+        let length = u32::from_le_bytes(bytes[140..144].try_into().unwrap()) as usize;
+        bytes[144 + length..].to_vec()
+    };
+    let identifier = || {
+        RawFile::new(EXPLICIT)
+            .short((0x0008, 0x0052), b"CS", b"STUDY ")
+            .short((0x0010, 0x0020), b"LO", b"P1")
+    };
+    let lying =
+        data_set(identifier().long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short"));
+    let costly = data_set(identifier().long((0x0043, 0x1001), b"UC", &vec![b'\\'; 1 << 20]));
+    let in_un = data_set(identifier().long((0x0020, 0x000D), b"UN", &even("2.25.1")));
+
+    for (bytes, refused) in [(lying, true), (costly, true), (in_un, false)] {
+        let (remote, _) =
+            common::scripted::serve("QRSCP", STUDY_ROOT_FIND, &[EXPLICIT], move |id| {
+                let rsp = |status| response(STUDY_ROOT_FIND, field::C_FIND_RSP, id, status);
+                vec![
+                    Act::SendRaw(rsp(0xFF00), bytes),
+                    Act::Send(rsp(0x0000), None),
+                ]
+            })
+            .await;
+        let (result, found) = find(&remote, &by_patient("P1"), None).await;
+        if refused {
+            assert!(
+                matches!(result, Err(FindError::Identifier(_))),
+                "{result:?}"
+            );
+        } else {
+            result.unwrap();
+            assert_eq!(found, ["2.25.1"]);
+        }
+    }
+}

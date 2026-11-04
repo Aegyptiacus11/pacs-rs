@@ -3,6 +3,32 @@
 `scripts/bench.sh` against pacs-rs and the reference server (see the README, "Comparing with a
 reference server"), with the same client and the same files.
 
+## 2026-11-04: well-formed files that cost far more to read than their size
+
+At the allocator, the peak of reading an 8 MB file and making its metadata JSON
+(`crates/pacs-rest/tests/bad_upload_memory.rs` holds `pacs_core::wire::read_cost` to these):
+
+| The file is nothing but | Reading | With the JSON | Per unit |
+|---|---|---|---|
+| backslashes in a UC | 73 x | 168 x, 1344 MB | 168 bytes a value |
+| text at 11 bytes a value, like contour data | 6 x | 15 x | 160 bytes a value |
+| elements of 8 bytes | 27 x | 105 x | 836 bytes an element |
+| empty items of 8 bytes | 6 x | 13 x | 104 bytes an item |
+| native pixel data | 1 x | 1 x | |
+
+`scripts/un-vr-memory.sh`, `--memory=1g --memory-swap=2g`, 16 files of each, 6 at a time, with the
+default `PACS_MAX_READ_BYTES` (512 MiB). Over: 8 MiB of backslashes, estimated at 1426 MB. Under:
+3 MiB of backslashes, estimated at 535 MB, just inside the limit.
+
+| | 0.5.0 | with the read limit |
+|---|---|---|
+| over the limit | OOM-killed: none answered in full | 16 of 413 |
+| under the limit | no answer, container dead | 16 of 200, one at a time |
+| peak of the container | over the limit | 828 MB anonymous (983 MB with page cache), no swap |
+
+At the limit, then, a file really takes about 1.6 times the estimate (vectors doubling, the
+allocator's own overhead), which is why the default is about half of the smallest deployment's 1 GiB.
+
 ## 2026-11-04: uploads with elements in UN and with lengths that lie
 
 `scripts/un-vr-memory.sh`: 16 files of each kind, 6 at a time, written by the `write_un_vr` example,

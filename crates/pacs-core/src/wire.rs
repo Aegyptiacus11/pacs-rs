@@ -14,6 +14,10 @@
 //! it, so one wrong length costs up to 4 GiB, however small the file. [`checked`] refuses a value
 //! longer than what is left, as dcm4che's `testNoOutOfMemoryErrorOnInvalidLength` asks of it.
 //!
+//! What a file costs: dicom-rs and the metadata JSON made from it take far more memory for some
+//! well-formed files than the file's size. [`read_cost`] estimates that from the walk, for callers
+//! to bound; the walk itself refuses nothing for it.
+//!
 //! Apart from nesting too deep, the walk refuses only what dicom-rs would refuse too: it follows
 //! dicom-rs's reading of each header. A file with no UN to revert comes back as the same bytes.
 
@@ -37,6 +41,53 @@ const EXPLICIT_VR_BIG_ENDIAN: &str = "1.2.840.10008.1.2.2"; // retired, still le
 /// Sequences nested deeper are refused. PS3.5 sets no limit, but dicom-rs reads them by
 /// recursion, so some megabytes of nested items would overflow the stack and end the process.
 const MAX_DEPTH: usize = 64;
+
+/// Bytes requested per element, per item or fragment, and per text value beyond an element's first,
+/// at the peak of reading a file and making its metadata JSON. Measured at the allocator on 8 MB
+/// files of nothing else (836, 104 and 168 bytes); `bad_upload_memory` holds the estimate to them.
+const ELEMENT_COST: u64 = 840;
+const ITEM_COST: u64 = 110;
+const VALUE_COST: u64 = 170;
+
+/// About how many bytes reading this Part 10 file and making its metadata JSON takes beyond the
+/// file's own size. Refuses what [`checked`] refuses.
+pub fn read_cost(bytes: &[u8]) -> Result<u64, Error> {
+    let Some((start, encoding)) = data_set_start(bytes)? else {
+        return Ok(0);
+    };
+    let mut scan = Walk::new(bytes, encoding.big, None);
+    scan.data_set(start, Some(bytes.len()), encoding, 0)
+        .map_err(Error::Malformed)?;
+    Ok(scan.cost)
+}
+
+/// [`checked`] for a data set without File Meta group, in the transfer syntax `transfer_syntax`,
+/// as DIMSE carries them; also refused when [`read_cost`] of it is over `max_cost`.
+pub fn checked_data_set<'a>(
+    bytes: &'a [u8],
+    transfer_syntax: &str,
+    max_cost: u64,
+) -> Result<Cow<'a, [u8]>, Error> {
+    let Some(encoding) = encoding_of(transfer_syntax) else {
+        return Ok(Cow::Borrowed(bytes));
+    };
+    let mut scan = Walk::new(bytes, encoding.big, None);
+    scan.data_set(0, Some(bytes.len()), encoding, 0)
+        .map_err(Error::Malformed)?;
+    if scan.cost > max_cost {
+        return Err(Error::Malformed(format!(
+            "reading the data set would take about {} bytes, over the limit of {max_cost}",
+            scan.cost
+        )));
+    }
+    if !scan.rewrite {
+        return Ok(Cow::Borrowed(bytes));
+    }
+    let mut copy = Walk::new(bytes, encoding.big, Some(Vec::with_capacity(bytes.len())));
+    copy.data_set(0, Some(bytes.len()), encoding, 0)
+        .map_err(Error::Malformed)?;
+    Ok(Cow::Owned(copy.out.unwrap_or_default()))
+}
 
 /// The bytes to give dicom-rs for this Part 10 file: the file itself or, when it has UN elements
 /// to revert, a copy with them under their VR, in which every sequence and item has undefined
@@ -117,18 +168,23 @@ fn data_set_start(bytes: &[u8]) -> Result<Option<(usize, Encoding)>, Error> {
     let Some(transfer_syntax) = transfer_syntax else {
         return Ok(None);
     };
-    let encoding = match String::from_utf8_lossy(transfer_syntax).trim_end_matches(['\0', ' ']) {
+    let transfer_syntax = String::from_utf8_lossy(transfer_syntax);
+    Ok(encoding_of(&transfer_syntax).map(|encoding| (pos, encoding)))
+}
+
+/// How a data set in this transfer syntax is encoded; `None` for a deflated one.
+fn encoding_of(transfer_syntax: &str) -> Option<Encoding> {
+    match transfer_syntax.trim_end_matches(['\0', ' ']) {
         uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN
         | uids::JPIP_REFERENCED_DEFLATE
-        | uids::JPIPHTJ2K_REFERENCED_DEFLATE => return Ok(None),
-        uids::IMPLICIT_VR_LITTLE_ENDIAN => IMPLICIT_LE,
-        EXPLICIT_VR_BIG_ENDIAN => Encoding {
+        | uids::JPIPHTJ2K_REFERENCED_DEFLATE => None,
+        uids::IMPLICIT_VR_LITTLE_ENDIAN => Some(IMPLICIT_LE),
+        EXPLICIT_VR_BIG_ENDIAN => Some(Encoding {
             explicit: true,
             big: true,
-        },
-        _ => EXPLICIT_LE,
-    };
-    Ok(Some((pos, encoding)))
+        }),
+        _ => Some(EXPLICIT_LE),
+    }
 }
 
 struct Header {
@@ -149,6 +205,8 @@ struct Walk<'a> {
     rewrite: bool,
     /// The last Pixel Representation: whether a "US or SS" element is SS.
     signed: bool,
+    /// The estimate of [`read_cost`] so far.
+    cost: u64,
 }
 
 impl<'a> Walk<'a> {
@@ -159,6 +217,7 @@ impl<'a> Walk<'a> {
             out,
             rewrite: false,
             signed: false,
+            cost: 0,
         }
     }
 
@@ -283,6 +342,7 @@ impl<'a> Walk<'a> {
     ) -> Result<usize, String> {
         let Header { tag, vr, len, .. } = header;
         let written_un = vr == Some(VR::UN);
+        self.cost += ELEMENT_COST;
         if len == UNDEFINED {
             if tag == PIXEL_DATA {
                 return self.fragments(pos, encoding);
@@ -325,6 +385,9 @@ impl<'a> Walk<'a> {
         } else {
             VR::UN
         };
+        if has_several_values(vr) {
+            self.cost += VALUE_COST * memchr::memchr_iter(b'\\', value).count() as u64;
+        }
         self.put_header(tag, vr, len);
         if self.big && little_endian {
             self.put_big_endian(value, vr);
@@ -346,7 +409,7 @@ impl<'a> Walk<'a> {
     ) -> Result<usize, String> {
         let after = pos + value.len();
         let mark = self.out.as_ref().map(Vec::len);
-        let signed = self.signed;
+        let (signed, cost) = (self.signed, self.cost);
         let content = self.content_of_un(pos, encoding);
         match self.sequence(tag, pos, Some(after), content, depth + 1) {
             Ok(end) if end == after => Ok(after),
@@ -355,6 +418,7 @@ impl<'a> Walk<'a> {
                     out.truncate(mark);
                 }
                 self.signed = signed;
+                self.cost = cost;
                 self.put_header(tag, VR::UN, value.len() as u32);
                 self.put(value);
                 Ok(after)
@@ -401,6 +465,7 @@ impl<'a> Walk<'a> {
                     pos - 8
                 ));
             }
+            self.cost += ITEM_COST;
             self.put_item(UNDEFINED);
             let item_end = if len == UNDEFINED {
                 None
@@ -457,6 +522,7 @@ impl<'a> Walk<'a> {
                 }
                 self.rewrite = true;
             }
+            self.cost += ITEM_COST;
             self.put_item(kept as u32);
             let bytes = self.bytes;
             self.put(&bytes[pos..pos + kept]);
@@ -574,6 +640,15 @@ fn has_short_length(vr: VR) -> bool {
             | UI
             | UL
             | US
+    )
+}
+
+/// The VRs dicom-rs reads as one string per backslash-separated value.
+fn has_several_values(vr: VR) -> bool {
+    use VR::*;
+    matches!(
+        vr,
+        AE | AS | CS | DA | DS | DT | IS | LO | PN | SH | TM | UC | UI
     )
 }
 

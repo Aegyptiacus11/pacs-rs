@@ -22,6 +22,13 @@ pub(crate) async fn instance(
                 format!("Cannot parse an invalid DICOM file (size: {size} bytes): {e}"),
             ));
         }
+        Err(e @ IngestError::TooCostly { .. }) => {
+            return Err(RestError::Status {
+                status: StatusCode::PAYLOAD_TOO_LARGE,
+                message: "Too costly to read".into(),
+                details: Some(e.to_string()),
+            });
+        }
         Err(IngestError::Conflict(e)) => {
             return Err(RestError::Status {
                 status: StatusCode::CONFLICT,
