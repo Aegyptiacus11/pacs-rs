@@ -214,3 +214,197 @@ fn to_file(object: InMemDicomObject, ts: &str) -> Vec<u8> {
         .expect("the transfer syntax is known and writing to a Vec does not fail");
     bytes
 }
+
+/// A Part 10 file written byte by byte, for what an encoder would not write: elements in UN, as
+/// GDCM leaves them when it re-encodes an Implicit VR file, and wrong lengths.
+#[derive(Debug, Clone)]
+pub struct RawFile {
+    transfer_syntax: String,
+    big: bool,
+    data_set: Vec<u8>,
+}
+
+/// Undefined length.
+pub const UNDEFINED: u32 = u32::MAX;
+/// The head of an item, little endian; its length follows.
+pub const ITEM: [u8; 4] = [0xFE, 0xFF, 0x00, 0xE0];
+/// The delimiters with their zero lengths, little endian.
+pub const ITEM_END: [u8; 8] = [0xFE, 0xFF, 0x0D, 0xE0, 0, 0, 0, 0];
+pub const SEQUENCE_END: [u8; 8] = [0xFE, 0xFF, 0xDD, 0xE0, 0, 0, 0, 0];
+
+impl RawFile {
+    /// An empty data set in this transfer syntax, written little endian.
+    pub fn new(transfer_syntax: &str) -> Self {
+        RawFile {
+            transfer_syntax: transfer_syntax.into(),
+            big: false,
+            data_set: Vec::new(),
+        }
+    }
+
+    /// An empty data set in Explicit VR Big Endian.
+    pub fn big_endian() -> Self {
+        RawFile {
+            transfer_syntax: "1.2.840.10008.1.2.2".into(),
+            big: true,
+            data_set: Vec::new(),
+        }
+    }
+
+    fn head(&mut self, tag: (u16, u16), vr: &[u8; 2]) {
+        let (group, element) = if self.big {
+            (tag.0.to_be_bytes(), tag.1.to_be_bytes())
+        } else {
+            (tag.0.to_le_bytes(), tag.1.to_le_bytes())
+        };
+        self.data_set.extend(group);
+        self.data_set.extend(element);
+        self.data_set.extend(vr);
+    }
+
+    /// An element with a 16-bit length (PS3.5 Table 7.1-2).
+    pub fn short(mut self, tag: (u16, u16), vr: &[u8; 2], value: &[u8]) -> Self {
+        self.head(tag, vr);
+        let len = value.len() as u16;
+        self.data_set.extend(if self.big {
+            len.to_be_bytes()
+        } else {
+            len.to_le_bytes()
+        });
+        self.data_set.extend(value);
+        self
+    }
+
+    /// An element with a 32-bit length (PS3.5 Table 7.1-1), which `len` may contradict.
+    pub fn long_declared(mut self, tag: (u16, u16), vr: &[u8; 2], len: u32, value: &[u8]) -> Self {
+        self.head(tag, vr);
+        self.data_set.extend([0, 0]);
+        self.data_set.extend(if self.big {
+            len.to_be_bytes()
+        } else {
+            len.to_le_bytes()
+        });
+        self.data_set.extend(value);
+        self
+    }
+
+    /// An element with a 32-bit length.
+    pub fn long(self, tag: (u16, u16), vr: &[u8; 2], value: &[u8]) -> Self {
+        self.long_declared(tag, vr, value.len() as u32, value)
+    }
+
+    /// Bytes as they are: elements of an implicit VR data set, anything else.
+    pub fn raw(mut self, bytes: &[u8]) -> Self {
+        self.data_set.extend_from_slice(bytes);
+        self
+    }
+
+    /// The UIDs an instance must have, those of `seed`, with `vr` written for Study Instance UID
+    /// and in a 32-bit length if that is UN; ascending tags up to Series Instance UID.
+    pub fn identifiers(self, seed: u32, study_vr: &[u8; 2]) -> Self {
+        let study = even(&format!("2.25.{seed}1"));
+        let with_sop = self
+            .short((0x0008, 0x0016), b"UI", &even(uids::CT_IMAGE_STORAGE))
+            .short((0x0008, 0x0018), b"UI", &even(&format!("2.25.{seed}3")));
+        let with_study = if study_vr == b"UN" {
+            with_sop.long((0x0020, 0x000D), b"UN", &study)
+        } else {
+            with_sop.short((0x0020, 0x000D), study_vr, &study)
+        };
+        with_study.short((0x0020, 0x000E), b"UI", &even(&format!("2.25.{seed}2")))
+    }
+
+    /// Encapsulated pixel data: an empty offset table and one fragment.
+    pub fn one_fragment(self) -> Self {
+        let mut value = ITEM.to_vec();
+        value.extend(0u32.to_le_bytes());
+        value.extend(ITEM);
+        value.extend(4u32.to_le_bytes());
+        value.extend([0xFF, 0xD8, 0xFF, 0xD9]);
+        value.extend(SEQUENCE_END);
+        self.long_declared((0x7FE0, 0x0010), b"OB", UNDEFINED, &value)
+    }
+
+    /// The whole file: preamble, File Meta group, data set.
+    pub fn bytes(&self) -> Vec<u8> {
+        let meta = |element: u8, vr: &[u8; 2], value: &[u8]| {
+            let mut bytes = vec![0x02, 0x00, element, 0x00];
+            bytes.extend(vr);
+            bytes.extend((value.len() as u16).to_le_bytes());
+            bytes.extend(value);
+            bytes
+        };
+        let mut group = meta(0x02, b"UI", &even(uids::CT_IMAGE_STORAGE));
+        group.extend(meta(0x03, b"UI", &even("2.25.1")));
+        group.extend(meta(0x10, b"UI", &even(&self.transfer_syntax)));
+        group.extend(meta(0x12, b"UI", &even("2.25.2")));
+        let mut file = vec![0u8; 128];
+        file.extend(b"DICM");
+        file.extend(meta(0x00, b"UL", &(group.len() as u32).to_le_bytes()));
+        file.extend(group);
+        file.extend(&self.data_set);
+        file
+    }
+}
+
+/// `text` padded with NUL to an even length, as a UID is on the wire.
+pub fn even(text: &str) -> Vec<u8> {
+    let mut bytes = text.as_bytes().to_vec();
+    if bytes.len() % 2 == 1 {
+        bytes.push(0);
+    }
+    bytes
+}
+
+/// An element in implicit VR, little endian, as a sequence in UN holds them.
+pub fn implicit(tag: (u16, u16), value: &[u8]) -> Vec<u8> {
+    let mut element = tag.0.to_le_bytes().to_vec();
+    element.extend(tag.1.to_le_bytes());
+    element.extend((value.len() as u32).to_le_bytes());
+    element.extend(value);
+    element
+}
+
+/// An item of undefined length around `content`, delimiter included, little endian.
+pub fn item(content: &[u8]) -> Vec<u8> {
+    let mut bytes = ITEM.to_vec();
+    bytes.extend(UNDEFINED.to_le_bytes());
+    bytes.extend(content);
+    bytes.extend(ITEM_END);
+    bytes
+}
+
+/// A sequence in implicit VR, with its delimiter, of one item that references an instance.
+pub fn implicit_reference_sequence(instance: &str) -> Vec<u8> {
+    let mut content = implicit((0x0008, 0x1150), &even(uids::CT_IMAGE_STORAGE));
+    content.extend(implicit((0x0008, 0x1155), &even(instance)));
+    let mut bytes = item(&content);
+    bytes.extend(SEQUENCE_END);
+    bytes
+}
+
+/// A JPEG Lossless SV1 file as GDCM leaves one it re-encoded from Implicit VR: Referenced Study
+/// Sequence in UN with undefined length and implicit content.
+pub fn un_sequence_file(seed: u32) -> Vec<u8> {
+    RawFile::new(uids::JPEG_LOSSLESS_SV1)
+        .short((0x0008, 0x0016), b"UI", &even(uids::CT_IMAGE_STORAGE))
+        .short((0x0008, 0x0018), b"UI", &even(&format!("2.25.{seed}3")))
+        .long_declared(
+            (0x0008, 0x1110),
+            b"UN",
+            UNDEFINED,
+            &implicit_reference_sequence(&format!("2.25.{seed}4")),
+        )
+        .short((0x0020, 0x000D), b"UI", &even(&format!("2.25.{seed}1")))
+        .short((0x0020, 0x000E), b"UI", &even(&format!("2.25.{seed}2")))
+        .one_fragment()
+        .bytes()
+}
+
+/// The same with Study Instance UID, a standard element, in UN with a defined length.
+pub fn un_study_uid_file(seed: u32) -> Vec<u8> {
+    RawFile::new(uids::JPEG_LOSSLESS_SV1)
+        .identifiers(seed, b"UN")
+        .one_fragment()
+        .bytes()
+}
