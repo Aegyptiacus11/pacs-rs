@@ -570,3 +570,100 @@ fn cut_or_damaged_files_get_an_answer() {
         }
     }
 }
+
+// What a file costs to read.
+
+#[test]
+fn read_cost_counts_elements_items_and_values() {
+    let cost = |file: RawFile| wire::read_cost(&file.bytes()).unwrap();
+    let empty = cost(explicit_le());
+    assert_eq!(
+        cost(explicit_le().short((0x0020, 0x0013), b"IS", b"7 ")),
+        empty + 840
+    );
+    assert_eq!(
+        cost(explicit_le().short((0x3006, 0x0050), b"DS", b"1\\2\\3 ")),
+        empty + 840 + 2 * 170
+    );
+    // Numbers and bytes stay as they came, whatever the size.
+    assert_eq!(
+        cost(explicit_le().long((0x7FE0, 0x0010), b"OW", &[0x5C; 4096])),
+        empty + 840
+    );
+    // A backslash in text that is one value.
+    assert_eq!(
+        cost(explicit_le().long((0x0008, 0x0119), b"UT", b"a\\b ")),
+        empty + 840
+    );
+    let mut sequence = item(&implicit(NESTED_US, &[0x23, 0x01]));
+    sequence.extend(SEQUENCE_END);
+    assert_eq!(
+        cost(explicit_le().long_declared((0x0008, 0x1110), b"UN", UNDEFINED, &sequence)),
+        empty + 840 + 110 + 840
+    );
+}
+
+#[test]
+fn read_cost_refuses_what_checked_refuses_and_passes_what_it_passes() {
+    assert_eq!(wire::read_cost(b"not dicom").unwrap(), 0);
+    let lying = explicit_le()
+        .long_declared((0x0043, 0x1001), b"OB", LIE, b"data")
+        .bytes();
+    assert!(wire::read_cost(&lying).is_err());
+}
+
+fn bare(file: RawFile) -> Vec<u8> {
+    let bytes = file.bytes();
+    let length = u32::from_le_bytes(bytes[140..144].try_into().unwrap()) as usize;
+    bytes[144 + length..].to_vec()
+}
+
+#[test]
+fn a_bare_data_set_is_checked_in_its_transfer_syntax() {
+    const NO_LIMIT: u64 = u64::MAX;
+    let ts = uids::EXPLICIT_VR_LITTLE_ENDIAN;
+    let plain = bare(explicit_le());
+    assert!(matches!(
+        wire::checked_data_set(&plain, ts, NO_LIMIT).unwrap(),
+        Cow::Borrowed(_)
+    ));
+    let un = bare(RawFile::new(ts).long((0x0020, 0x000D), b"UN", &even("2.25.1")));
+    assert!(matches!(
+        wire::checked_data_set(&un, ts, NO_LIMIT).unwrap(),
+        Cow::Owned(_)
+    ));
+    let lying = bare(explicit_le().long_declared((0x0043, 0x1001), b"OB", LIE, b"data"));
+    assert!(wire::checked_data_set(&lying, ts, NO_LIMIT).is_err());
+    // Read as implicit VR these bytes are other elements, and the walk goes by what it is told.
+    let implicit_lying = {
+        let mut element = implicit((0x0043, 0x1001), b"data");
+        element[4..8].copy_from_slice(&LIE.to_le_bytes());
+        element
+    };
+    assert!(
+        wire::checked_data_set(&implicit_lying, uids::IMPLICIT_VR_LITTLE_ENDIAN, NO_LIMIT).is_err()
+    );
+    // Deflated bytes say nothing; dicom-rs decides.
+    let deflated = uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN;
+    assert!(matches!(
+        wire::checked_data_set(b"zzz", deflated, NO_LIMIT).unwrap(),
+        Cow::Borrowed(_)
+    ));
+}
+
+#[test]
+fn a_bare_data_set_over_its_limit_is_refused() {
+    let ts = uids::EXPLICIT_VR_LITTLE_ENDIAN;
+    let bytes = bare(explicit_le().long((0x0043, 0x1001), b"UC", &[b'\\'; 1000]));
+    let cost = wire::read_cost(
+        &explicit_le()
+            .long((0x0043, 0x1001), b"UC", &[b'\\'; 1000])
+            .bytes(),
+    )
+    .unwrap();
+    assert!(wire::checked_data_set(&bytes, ts, cost).is_ok());
+    let message = wire::checked_data_set(&bytes, ts, cost - 1)
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("over the limit"), "{message}");
+}
