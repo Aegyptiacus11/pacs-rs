@@ -2,7 +2,8 @@
 //!
 //! An instance arrives as a DICOM Part 10 file (preamble optional). [`Instance::from_bytes`]
 //! parses it and pulls out the identifiers the index is keyed on: study, series and SOP
-//! instance UIDs, the SOP class and the stored transfer syntax.
+//! instance UIDs, the SOP class and the stored transfer syntax. Every read of a file goes through
+//! [`wire::checked`] first.
 
 use dicom_core::Tag;
 use dicom_core::header::Header;
@@ -19,11 +20,15 @@ pub mod public_ids;
 #[cfg(feature = "synthetic")]
 pub mod synthetic;
 pub mod transcode;
+pub mod wire;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("not a readable DICOM file: {0}")]
     Read(#[from] dicom_object::ReadError),
+    /// Refused by [`wire::checked`] before dicom-rs allocates for it.
+    #[error("not a readable DICOM file: {0}")]
+    Malformed(String),
     #[error("missing required attribute {name} {tag}")]
     Missing { name: &'static str, tag: Tag },
     #[error("attribute {name} {tag} is not a valid UID: {value:?}")]
@@ -61,7 +66,7 @@ impl Instance {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let object = OpenFileOptions::new()
             .read_preamble(ReadPreamble::Auto)
-            .from_reader(bytes)?;
+            .from_reader(&*wire::checked(bytes)?)?;
         let key = InstanceKey {
             study_instance_uid: uid(&object, "StudyInstanceUID", tags::STUDY_INSTANCE_UID)?,
             series_instance_uid: uid(&object, "SeriesInstanceUID", tags::SERIES_INSTANCE_UID)?,
