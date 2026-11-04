@@ -143,8 +143,8 @@ where
                         continue;
                     }
                     outcome.optional_keys_unsupported |= status == Status::PENDING_OPTIONAL_KEYS;
-                    let found = InMemDicomObject::read_dataset_with_ts(&bytes[..], ts)
-                        .map_err(|e| FindError::Identifier(e.to_string()))?;
+                    let found =
+                        super::read_identifier(&bytes, ts).map_err(FindError::Identifier)?;
                     if !level_is_study(&found) {
                         return Err(FindError::Identifier(
                             "Query/Retrieve Level is not STUDY".into(),
