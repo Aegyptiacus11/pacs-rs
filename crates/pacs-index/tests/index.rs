@@ -210,7 +210,13 @@ async fn a_file_index_survives_reopening() {
 #[tokio::test]
 async fn a_file_index_opens_at_a_path_with_url_characters() {
     let dir = tempfile::tempdir().unwrap();
-    let sub = dir.path().join("a dir?#%20x");
+    // Windows forbids `?` in file names; `#`, `%` and spaces are allowed everywhere.
+    let name = if cfg!(windows) {
+        "a dir#%20x"
+    } else {
+        "a dir?#%20x"
+    };
+    let sub = dir.path().join(name);
     std::fs::create_dir(&sub).unwrap();
     let path = sub.join("in dex.sqlite");
     let series = SyntheticSeries::new(36, 1);
