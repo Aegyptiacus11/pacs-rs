@@ -366,8 +366,8 @@ docker compose up -d --wait
 
 The web interface is then at `http://127.0.0.1:8080/ui/` and DICOMweb at
 `http://127.0.0.1:8080/dicom-web`; the index and files stay in the `pacs-data` volume. Settings go
-in the file's `environment` (the table below). Each release also attaches a `compose.yaml` pinned
-to its version. pacs-rs has no login yet, so the file publishes the port on 127.0.0.1 only: put an
+in the file's `environment` (the table below). To stay on one version instead of `latest`, run
+`PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.5.2 docker compose up -d`. pacs-rs has no login yet, so the file publishes the port on 127.0.0.1 only: put an
 authenticating proxy in front before opening it to a network.
 
 From source:
@@ -439,12 +439,11 @@ git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
 
 `.github/workflows/release.yml` then publishes, once every build has passed:
 
-- `pacs-rs-<version>-linux-x86_64.tar.gz` and `-linux-aarch64.tar.gz`: the static
+- `pacs-rs-<version>-linux-amd64.tar.gz` and `-linux-arm64.tar.gz`: the static
   `pacs-server` binary, no dependencies;
-- `pacs-rs-<version>-windows-x86_64.zip`: `pacs-server.exe`, needs no Visual C++ runtime;
+- `pacs-rs-<version>-windows-amd64.zip`: `pacs-server.exe`, needs no Visual C++ runtime;
 - the image `ghcr.io/aegyptiacus11/pacs-rs:<version>` for linux/amd64 and linux/arm64, and
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
-- `compose.yaml` with the image pinned to that version;
 - a GitHub release with those files and `SHA256SUMS`.
 
 Started by hand (Actions, *release*, *Run workflow*), the same workflow is a dry run: it builds
