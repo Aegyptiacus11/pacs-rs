@@ -372,7 +372,7 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_INDEX` | `data/index.sqlite` | a SQLite file, or `postgres://user@host/database` |
 | `PACS_INDEX_PASSWORD` | | the Postgres password; environment only, or `..._FILE` naming a file |
 | `PACS_STORAGE` | `file:data/files` | `file:<directory>` or `s3://<bucket>[/<prefix>]` |
-| `PACS_S3_ENDPOINT` | AWS | e.g. `http://homeserver:8333` for SeaweedFS |
+| `PACS_S3_ENDPOINT` | AWS | e.g. `http://localhost:8333` for SeaweedFS |
 | `PACS_S3_REGION` | `us-east-1` | |
 | `PACS_S3_ACCESS_KEY_ID`, `PACS_S3_SECRET_ACCESS_KEY` | | environment only, or `..._FILE` naming a file |
 | `PACS_OVERWRITE_INSTANCES` | `false` | replace an instance sent again, instead of keeping the first copy |
@@ -410,29 +410,14 @@ curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 
 ## Releases
 
-Pushing a tag `v<version>` (the workspace version in `Cargo.toml`) releases to the homeserver
-(`.github/workflows/image.yml`): it builds the Docker image, pushes it to the private registry
-there as `pacs/pacs-server:<version>-<commit>` (and `latest`, when it is the highest release
-version; pre-releases like `v1.0.0-rc1` never get it), pins that digest in homeserver-infra's
-`stacks/pacs/compose.yml` (a commit to its `main`), calls the `pacs` stack's Portainer webhook,
-and waits for `/healthz`. The job runs on a self-hosted runner on the homeserver
-(homeserver-infra, `stacks/runners`). Repository secrets:
-
-| Secret | What | Made with |
-|---|---|---|
-| `HARBOR_USERNAME`, `HARBOR_PASSWORD` | registry robot, push and pull in `pacs` | homeserver-infra `scripts/harbor-ci-robot.py` |
-| `INFRA_TOKEN` | fine-grained token, Contents: read and write on homeserver-infra only | GitHub settings |
-| `PORTAINER_PACS_WEBHOOK` | the `pacs` stack's webhook id | Portainer, the stack's page (homeserver-infra `stacks/pacs/README.md`) |
+A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash
-git tag -a v0.5.0 -m v0.5.0 && git push origin v0.5.0
+git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
 ```
 
-**Before this repository goes public**, remove the runner (homeserver-infra,
-`stacks/runners/README.md`), revoke `INFRA_TOKEN`, delete the four secrets, and drop the
-workflow or move it to GitHub's runners: the runner's build daemon is privileged, which is
-root on the homeserver, and in a public repository a pull request can add a workflow that
-runs on it.
+The tag builds nothing here: this repository has no CI of its own. The Docker image is
+built from the `Dockerfile` (see [Building](#building)) by whoever deploys it.
 
 ## Building
 
