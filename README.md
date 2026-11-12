@@ -455,6 +455,15 @@ For work on the interface, `npm run dev` in `ui/` serves it with hot reload and 
 requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`);
 `npm run check` type-checks it. Components from shadcn/ui live in `ui/src/components/ui`.
 
+On Windows, a static build (no Visual C++ runtime needed) also tells CMake which C runtime
+CharLS uses; this is what CI and the release do:
+
+```powershell
+$env:RUSTFLAGS = "-C target-feature=+crt-static"
+$env:CMAKE_TOOLCHAIN_FILE = "$PWD\ci\msvc-static-crt.cmake"
+cargo build --release -p pacs-server
+```
+
 The Postgres tests run only when `PACS_TEST_POSTGRES_URL` names a server; each test makes a
 database of its own there. Every index test, the server tests and the reference comparison then
 run on Postgres as well as SQLite:
