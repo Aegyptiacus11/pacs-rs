@@ -101,7 +101,7 @@ jobs:
           docker buildx build --platform "${{ matrix.platform }}" --output "type=local,dest=$RUNNER_TEMP/rootfs" .
           bin="$RUNNER_TEMP/rootfs/pacs-server"
           [ -x "$bin" ] || { echo "::error::no pacs-server in the image"; exit 1; }
-          file "$bin" | grep -qE "static(-pie)? linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
+          file "$bin" | grep -qE "(statically|static-pie) linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
           name="pacs-rs-$VERSION-linux-${{ matrix.arch }}"
           mkdir -p "$RUNNER_TEMP/$name" dist
           cp "$bin" LICENSE-MIT LICENSE-APACHE README.md "$RUNNER_TEMP/$name/"
