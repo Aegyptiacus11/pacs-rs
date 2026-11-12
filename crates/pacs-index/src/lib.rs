@@ -205,6 +205,28 @@ macro_rules! studies_query {
     };
 }
 
+/// `sqlite:<path, percent-encoded>?mode=rwc`. The Any driver parses the URL before sqlite
+/// sees it, and a path pasted in as is does not survive that: `sqlite://C:\Users\...` reads
+/// as host `C` with a port, and `?` or `#` in a name would start the query or fragment.
+/// Encoded, the path is one opaque segment the parser keeps verbatim; sqlx decodes it back.
+fn sqlite_url(path: &Path) -> Result<String, Error> {
+    let Some(text) = path.to_str() else {
+        return Err(Error::Database(sqlx::Error::Configuration(
+            format!("index path is not UTF-8: {}", path.display()).into(),
+        )));
+    };
+    let mut url = String::from("sqlite:");
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            url.push(byte as char);
+        } else {
+            url.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    url.push_str("?mode=rwc");
+    Ok(url)
+}
+
 /// Milliseconds since the Unix epoch, now.
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
@@ -215,8 +237,7 @@ pub(crate) fn now_ms() -> i64 {
 impl Index {
     /// Open (creating if needed) the index in a SQLite file.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let url = format!("sqlite://{}?mode=rwc", path.as_ref().display());
-        Self::connect(&url).await
+        Self::connect(&sqlite_url(path.as_ref())?).await
     }
 
     /// Open the index at `url`: `sqlite://<path>?mode=rwc`, `sqlite::memory:` or

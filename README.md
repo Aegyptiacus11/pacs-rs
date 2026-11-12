@@ -410,14 +410,27 @@ curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 
 ## Releases
 
+Every push to `main` and every pull request runs `.github/workflows/ci.yml`: the web interface,
+`cargo fmt`, clippy, and the tests on Linux (with Postgres, S3, the reference server and the
+DIMSE interoperability tests) and on Windows.
+
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash
 git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
 ```
 
-The tag builds nothing here: this repository has no CI of its own. The Docker image is
-built from the `Dockerfile` (see [Building](#building)) by whoever deploys it.
+`.github/workflows/release.yml` then publishes, once every build has passed:
+
+- `pacs-rs-<version>-linux-x86_64.tar.gz` and `-linux-aarch64.tar.gz`: the static
+  `pacs-server` binary, no dependencies;
+- `pacs-rs-<version>-windows-x86_64.zip`: `pacs-server.exe`, needs no Visual C++ runtime;
+- the image `ghcr.io/aegyptiacus11/pacs-rs:<version>` for linux/amd64 and linux/arm64, and
+  `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
+- a GitHub release with those files and `SHA256SUMS`.
+
+Started by hand (Actions, *release*, *Run workflow*), the same workflow is a dry run: it builds
+and smoke-tests everything at the workspace version and publishes nothing.
 
 ## Building
 
@@ -441,6 +454,15 @@ cargo build --release -p pacs-server
 For work on the interface, `npm run dev` in `ui/` serves it with hot reload and sends API
 requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`);
 `npm run check` type-checks it. Components from shadcn/ui live in `ui/src/components/ui`.
+
+On Windows, a static build (no Visual C++ runtime needed) also tells CMake which C runtime
+CharLS uses; this is what CI and the release do:
+
+```powershell
+$env:RUSTFLAGS = "-C target-feature=+crt-static"
+$env:CMAKE_TOOLCHAIN_FILE = "$PWD\ci\msvc-static-crt.cmake"
+cargo build --release -p pacs-server
+```
 
 The Postgres tests run only when `PACS_TEST_POSTGRES_URL` names a server; each test makes a
 database of its own there. Every index test, the server tests and the reference comparison then

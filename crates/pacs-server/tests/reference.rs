@@ -377,6 +377,10 @@ async fn start_pacs(tag: &str) -> (Server, tempfile::TempDir) {
         index_for(dir.path(), tag).await,
         "--storage".into(),
         format!("file:{}", dir.path().join("files").display()),
+        // The reference keeps pixel data as received; with `transfer-syntax=*` both answer
+        // with what they stored, so pacs-rs must store as received too to be comparable.
+        "--compression".into(),
+        "off".into(),
     ])
     .unwrap();
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();

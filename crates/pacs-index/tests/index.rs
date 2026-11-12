@@ -204,6 +204,31 @@ async fn a_file_index_survives_reopening() {
     assert_eq!(study.instance_count, 2);
 }
 
+/// A path is not a URL: drive letters and backslashes on Windows, and `?`, `#`, `%` or spaces
+/// anywhere, must reach SQLite as they are (it once failed on Windows with "unable to open
+/// database file").
+#[tokio::test]
+async fn a_file_index_opens_at_a_path_with_url_characters() {
+    let dir = tempfile::tempdir().unwrap();
+    // Windows forbids `?` in file names; `#`, `%` and spaces are allowed everywhere.
+    let name = if cfg!(windows) {
+        "a dir#%20x"
+    } else {
+        "a dir?#%20x"
+    };
+    let sub = dir.path().join(name);
+    std::fs::create_dir(&sub).unwrap();
+    let path = sub.join("in dex.sqlite");
+    let series = SyntheticSeries::new(36, 1);
+    {
+        let index = Index::open(&path).await.unwrap();
+        record_series(&index, &series).await;
+    }
+    assert!(path.is_file(), "the index is not at {}", path.display());
+    let index = Index::open(&path).await.unwrap();
+    assert!(index.study(&series.study_uid()).await.unwrap().is_some());
+}
+
 /// Concurrent uploads: a file index (and Postgres) has several connections, and every
 /// write must wait its turn instead of failing with "database is locked".
 #[tokio::test]
