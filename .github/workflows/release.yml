@@ -213,19 +213,25 @@ jobs:
       PRERELEASE: ${{ needs.version.outputs.prerelease }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      # compose.yaml with the image pinned to this release, so a downloaded copy keeps it.
+      - name: compose.yaml
+        run: |
+          sed "s#\${PACS_IMAGE:-$IMAGE:latest}#\${PACS_IMAGE:-$IMAGE:$VERSION}#" compose.yaml > dist/compose.yaml
+          grep -qF "$IMAGE:$VERSION}" dist/compose.yaml || { echo "::error::image line not pinned in compose.yaml"; exit 1; }
       - name: Release
         working-directory: dist
         run: |
           n="$(find . -maxdepth 1 -type f | wc -l)"
-          [ "$n" -eq 3 ] || { echo "::error::expected 3 archives, got $n"; ls -l; exit 1; }
+          [ "$n" -eq 4 ] || { echo "::error::expected 3 archives and compose.yaml, got $n files"; ls -l; exit 1; }
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
-          notes="Docker image: \`docker pull $IMAGE:$VERSION\` (linux/amd64, linux/arm64)."
+          notes="Docker image: \`docker pull $IMAGE:$VERSION\` (linux/amd64, linux/arm64), or download \`compose.yaml\` and run \`docker compose up -d\`."
           pre=()
           [ "$PRERELEASE" = true ] && pre=(--prerelease)
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag \
