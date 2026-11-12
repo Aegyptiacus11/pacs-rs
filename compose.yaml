@@ -1,0 +1,32 @@
+# pacs-rs with Docker Compose: `docker compose up -d`, then
+#   web interface  http://127.0.0.1:8080/ui/
+#   DICOMweb       http://127.0.0.1:8080/dicom-web
+#   REST API       http://127.0.0.1:8080/
+# Index (SQLite) and files live in the `pacs-data` volume. Every setting is a PACS_* variable
+# (README, "Running"); Postgres and S3 go in `environment` the same way.
+#
+# pacs-rs has no login yet: anyone who can reach the port can read, upload and delete studies.
+# So the ports are published on 127.0.0.1 only. Put an authenticating proxy in front before
+# opening them to a network.
+name: pacs-rs
+
+services:
+  pacs:
+    # A release tag (e.g. ghcr.io/aegyptiacus11/pacs-rs:0.5.2) keeps the version fixed.
+    image: ${PACS_IMAGE:-ghcr.io/aegyptiacus11/pacs-rs:latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+      # DIMSE (C-ECHO, C-STORE, C-FIND, C-MOVE): uncomment, and PACS_DIMSE_LISTEN below.
+      # - "127.0.0.1:11112:11112"
+    environment:
+      RUST_LOG: info
+      # PACS_DIMSE_LISTEN: 0.0.0.0:11112
+      # PACS_DIMSE_AE_TITLE: PACSRS
+    volumes:
+      - pacs-data:/data
+    # The image's own health check (`pacs-server --healthcheck`) applies;
+    # `docker compose up --wait` waits for it.
+
+volumes:
+  pacs-data:
