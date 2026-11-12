@@ -26,7 +26,7 @@ env:
 
 jobs:
   version:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -59,8 +59,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - { runner: ubuntu-24.04, platform: linux/amd64, arch: x86_64 }
-          - { runner: ubuntu-24.04-arm, platform: linux/arm64, arch: aarch64 }
+          - { runner: ubuntu-26.04, platform: linux/amd64, arch: x86_64 }
+          - { runner: ubuntu-26.04-arm, platform: linux/arm64, arch: aarch64 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -101,7 +101,7 @@ jobs:
           docker buildx build --platform "${{ matrix.platform }}" --output "type=local,dest=$RUNNER_TEMP/rootfs" .
           bin="$RUNNER_TEMP/rootfs/pacs-server"
           [ -x "$bin" ] || { echo "::error::no pacs-server in the image"; exit 1; }
-          file "$bin" | grep -qE "static(-pie)? linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
+          file "$bin" | grep -qE "(statically|static-pie) linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
           name="pacs-rs-$VERSION-linux-${{ matrix.arch }}"
           mkdir -p "$RUNNER_TEMP/$name" dist
           cp "$bin" LICENSE-MIT LICENSE-APACHE README.md "$RUNNER_TEMP/$name/"
@@ -168,7 +168,7 @@ jobs:
   image:
     needs: [version, linux, windows]
     if: needs.version.outputs.push == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -204,7 +204,7 @@ jobs:
   publish:
     needs: [version, image]
     if: needs.version.outputs.push == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: write
