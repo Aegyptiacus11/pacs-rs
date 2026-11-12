@@ -1,6 +1,6 @@
 # Publishes a release when a tag v<version> is pushed (the workspace version in Cargo.toml):
-# - binaries: Linux x86_64 and aarch64 (static musl, the same ones as in the image) and
-#   Windows x86_64 (static CRT, no runtime to install), each with the licences and README;
+# - binaries: Linux amd64 and arm64 (static musl, the same ones as in the image) and
+#   Windows amd64 (static CRT, no runtime to install), each with the licences and README;
 # - the image ghcr.io/aegyptiacus11/pacs-rs:<version> for linux/amd64 and linux/arm64,
 #   and :latest when this is the highest release (pre-releases like v1.0.0-rc1 never get it);
 # - a GitHub release with those files, SHA256SUMS and generated notes.
@@ -59,8 +59,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - { runner: ubuntu-26.04, platform: linux/amd64, arch: x86_64 }
-          - { runner: ubuntu-26.04-arm, platform: linux/arm64, arch: aarch64 }
+          - { runner: ubuntu-26.04, platform: linux/amd64, arch: amd64 }
+          - { runner: ubuntu-26.04-arm, platform: linux/arm64, arch: arm64 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -161,13 +161,13 @@ jobs:
           target/release/pacs-server.exe --help >/dev/null
       - name: Package
         run: |
-          name="pacs-rs-$VERSION-windows-x86_64"
+          name="pacs-rs-$VERSION-windows-amd64"
           mkdir -p "$name" dist
           cp target/release/pacs-server.exe LICENSE-MIT LICENSE-APACHE README.md "$name/"
           7z a -tzip -bso0 "dist/$name.zip" "$name"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist-windows-x86_64
+          name: dist-windows-amd64
           path: dist/
           if-no-files-found: error
 
