@@ -1,7 +1,7 @@
 # Publishes a release when a tag v<version> is pushed (the workspace version in Cargo.toml):
 # - binaries: Linux x86_64 and aarch64 (static musl, the same ones as in the image) and
 #   Windows x86_64 (static CRT, no runtime to install), each with the licences and README;
-# - the image ghcr.io/aegyptiacus11/pacs-server:<version> for linux/amd64 and linux/arm64,
+# - the image ghcr.io/aegyptiacus11/pacs-rs:<version> for linux/amd64 and linux/arm64,
 #   and :latest when this is the highest release (pre-releases like v1.0.0-rc1 never get it);
 # - a GitHub release with those files, SHA256SUMS and generated notes.
 # Nothing is published unless every build succeeded.
@@ -22,7 +22,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  IMAGE: ghcr.io/aegyptiacus11/pacs-server
+  IMAGE: ghcr.io/aegyptiacus11/pacs-rs
 
 jobs:
   version:
@@ -102,7 +102,7 @@ jobs:
           bin="$RUNNER_TEMP/rootfs/pacs-server"
           [ -x "$bin" ] || { echo "::error::no pacs-server in the image"; exit 1; }
           file "$bin" | grep -qE "static(-pie)? linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
-          name="pacs-server-$VERSION-linux-${{ matrix.arch }}"
+          name="pacs-rs-$VERSION-linux-${{ matrix.arch }}"
           mkdir -p "$RUNNER_TEMP/$name" dist
           cp "$bin" LICENSE-MIT LICENSE-APACHE README.md "$RUNNER_TEMP/$name/"
           tar -C "$RUNNER_TEMP" -czf "dist/$name.tar.gz" "$name"
@@ -153,7 +153,7 @@ jobs:
           target/release/pacs-server.exe --help >/dev/null
       - name: Package
         run: |
-          name="pacs-server-$VERSION-windows-x86_64"
+          name="pacs-rs-$VERSION-windows-x86_64"
           mkdir -p "$name" dist
           cp target/release/pacs-server.exe LICENSE-MIT LICENSE-APACHE README.md "$name/"
           7z a -tzip -bso0 "dist/$name.zip" "$name"
