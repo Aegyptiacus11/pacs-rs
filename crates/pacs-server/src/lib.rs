@@ -52,7 +52,7 @@ pub struct Settings {
     #[arg(long, env = "PACS_STORAGE", default_value = "file:data/files")]
     pub storage: String,
 
-    /// S3 endpoint for a non-AWS store, e.g. `http://homeserver:8333`.
+    /// S3 endpoint for a non-AWS store, e.g. `http://localhost:8333`.
     #[arg(long, env = "PACS_S3_ENDPOINT")]
     pub s3_endpoint: Option<String>,
 

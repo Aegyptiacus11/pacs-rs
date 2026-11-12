@@ -29,7 +29,7 @@ pub enum Error {
 /// An S3-compatible bucket.
 #[derive(Debug, Clone)]
 pub struct S3Config {
-    /// e.g. `http://homeserver:8333`; `None` means AWS itself.
+    /// e.g. `http://localhost:8333`; `None` means AWS itself.
     pub endpoint: Option<String>,
     pub region: String,
     pub bucket: String,
