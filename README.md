@@ -357,6 +357,21 @@ protocols and the measurements. `PACS_UI=false` turns it off, protocols and meas
 
 ## Running
 
+With Docker Compose, from the published image (no build):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Aegyptiacus11/pacs-rs/main/compose.yaml
+docker compose up -d --wait
+```
+
+The web interface is then at `http://127.0.0.1:8080/ui/` and DICOMweb at
+`http://127.0.0.1:8080/dicom-web`; the index and files stay in the `pacs-data` volume. Settings go
+in the file's `environment` (the table below). Each release also attaches a `compose.yaml` pinned
+to its version. pacs-rs has no login yet, so the file publishes the port on 127.0.0.1 only: put an
+authenticating proxy in front before opening it to a network.
+
+From source:
+
 ```bash
 cargo run --release -p pacs-server -- --help
 cargo run --release -p pacs-server            # files in data/files, index in data/index.sqlite
@@ -394,7 +409,9 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_QUARANTINE` | none | `file:<directory>` or `s3://<bucket>[/<prefix>]` for quarantined instances; without it they are refused |
 | `RUST_LOG` | `info` | log filter |
 
-In Docker, `docker build -t pacs-server .`: a static binary on an empty image, about 20 MB, run as
+The image is `ghcr.io/aegyptiacus11/pacs-rs` (linux/amd64 and linux/arm64; `:latest` or a
+version such as `:0.5.2`), or build it with `docker build -t pacs-rs .`: a static binary on an
+empty image, about 40 MB with the web interface, run as
 an unprivileged user (uid 10001). It listens on `0.0.0.0:8080` and keeps the index and files in
 the `/data` volume unless `PACS_STORAGE` says otherwise. There is no shell or curl inside, so the
 image's health check is the binary itself: `pacs-server --healthcheck` asks `/healthz` on the
@@ -427,6 +444,7 @@ git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
 - `pacs-rs-<version>-windows-x86_64.zip`: `pacs-server.exe`, needs no Visual C++ runtime;
 - the image `ghcr.io/aegyptiacus11/pacs-rs:<version>` for linux/amd64 and linux/arm64, and
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
+- `compose.yaml` with the image pinned to that version;
 - a GitHub release with those files and `SHA256SUMS`.
 
 Started by hand (Actions, *release*, *Run workflow*), the same workflow is a dry run: it builds
