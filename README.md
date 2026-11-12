@@ -422,10 +422,10 @@ git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
 
 `.github/workflows/release.yml` then publishes, once every build has passed:
 
-- `pacs-server-<version>-linux-x86_64.tar.gz` and `-linux-aarch64.tar.gz`: static binaries,
-  no dependencies;
-- `pacs-server-<version>-windows-x86_64.zip`: needs no Visual C++ runtime;
-- the image `ghcr.io/aegyptiacus11/pacs-server:<version>` for linux/amd64 and linux/arm64, and
+- `pacs-rs-<version>-linux-x86_64.tar.gz` and `-linux-aarch64.tar.gz`: the static
+  `pacs-server` binary, no dependencies;
+- `pacs-rs-<version>-windows-x86_64.zip`: `pacs-server.exe`, needs no Visual C++ runtime;
+- the image `ghcr.io/aegyptiacus11/pacs-rs:<version>` for linux/amd64 and linux/arm64, and
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
 - a GitHub release with those files and `SHA256SUMS`.
 
