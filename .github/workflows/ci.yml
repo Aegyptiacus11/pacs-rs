@@ -2,6 +2,8 @@
 # interface, formatting, clippy, and the tests on Linux (SQLite, Postgres, S3, the reference
 # server and DIMSE interoperability) and on Windows. A job runs only when the change touches
 # what it checks (scripts/ci-changes.sh): documentation alone runs none of the builds.
+# release.yml calls this workflow too, and publishes nothing unless it passes; called so, every
+# job runs.
 # GitHub's own runners only: this repository is public, so it never gets a self-hosted runner.
 name: ci
 
@@ -9,12 +11,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
+# github.workflow is the caller's name when release.yml calls this, so its tests and a ci run
+# on the same ref do not cancel each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-tests-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -34,7 +39,8 @@ jobs:
       - name: The filter's own tests
         run: bash scripts/test-ci-changes.sh
       # A pull request is checked out as its merge into the base, whose first parent is the
-      # base. A push to main is compared with where main was. Anything else runs every job.
+      # base. A push to main is compared with where main was. Anything else (a tag or a manual
+      # run of release.yml) runs every job.
       - id: changes
         env:
           BEFORE: ${{ github.event.before }}
