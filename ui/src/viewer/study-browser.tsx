@@ -95,7 +95,7 @@ export function StudyBrowser({
   const toggle = (id: string) => setOpen((s) => (s.has(id) ? (s.delete(id), new Set(s)) : new Set(s.add(id))));
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r bg-card">
+    <aside className="flex w-60 shrink-0 flex-col border-r bg-card max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-20 max-md:w-72 max-md:max-w-[85vw] max-md:shadow-xl">
       <div className="border-b px-3 py-2.5">
         <div className="truncate text-sm font-semibold">{personName(p.PatientName)}</div>
         <div className="truncate text-xs text-muted-foreground">{[p.PatientID, sexAge(p.PatientSex, p.PatientBirthDate)].filter(Boolean).join(" · ")}</div>

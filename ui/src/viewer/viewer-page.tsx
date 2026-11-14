@@ -42,6 +42,7 @@ import {
   SunMoon,
   Tags,
   ZoomIn,
+  GalleryVerticalEnd,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -113,6 +114,7 @@ const SHORTCUTS: [string, string][] = [
   ["Middle drag, Shift drag", "Pan, whatever tool is chosen"],
   ["Right drag", "Zoom, whatever tool is chosen"],
   ["In a 3D view", "Drag to turn it, wheel or right drag to zoom"],
+  ["On a touch screen", "One finger runs the chosen tool, two pinch to zoom, three pan"],
   [", .", "Previous or next hanging protocol"],
   ["Esc", "Back to the studies"],
 ];
@@ -209,7 +211,8 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   const grid = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const [state, setState] = useState<ViewerState | null>(null);
-  const [browser, setBrowser] = useState(true);
+  // on a narrow screen the series list lies over the images, so it starts closed
+  const [browser, setBrowser] = useState(() => !matchMedia("(max-width: 767px)").matches);
   const [tags, setTags] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
   const [help, setHelp] = useState(false);
@@ -373,7 +376,8 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground">
-      <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-0.5 border-b bg-card px-2 py-1">
+      {/* the tools wrap on a wide screen; on a narrow one they stay on one line, scrolled sideways */}
+      <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-0.5 border-b bg-card px-2 py-1 max-md:flex-nowrap max-md:overflow-x-auto max-md:[&>*]:shrink-0">
         <Tip label="Back to the studies" shortcut="Esc">
           <a href={href.studies(null, studyId)} className="mr-1 flex h-12 shrink-0 items-center gap-2 rounded-md px-2 hover:bg-accent" aria-label="Back to the studies">
             <ArrowLeft className="size-4 text-muted-foreground" />
@@ -402,6 +406,13 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
                 <DropdownMenuShortcut>I</DropdownMenuShortcut>
               </DropdownMenuItem>
             </ToolMenu>
+            <ToolBtn
+              label="Scroll"
+              tip="Scroll: drag up or down to go through the images (the wheel always does)"
+              Icon={GalleryVerticalEnd}
+              active={s.tool === "scroll"}
+              onClick={() => v.useTool("scroll")}
+            />
             <ToolBtn label="Pan" Icon={Move} shortcut="P" active={s.tool === "pan"} onClick={() => v.useTool("pan")} />
             <ToolBtn label="Zoom" tip="Zoom: drag up or down" Icon={ZoomIn} shortcut="Z" active={s.tool === "zoom"} onClick={() => v.useTool("zoom")} />
             <ToolBtn
@@ -578,7 +589,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         )}
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         {browser && study && (
           <StudyBrowser
             study={study}
@@ -588,6 +599,8 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
             onPick={(id) => {
               setProtocol(null);
               v?.showSeries(id);
+              // over the images on a narrow screen: out of the way once a series is chosen
+              if (matchMedia("(max-width: 767px)").matches) setBrowser(false);
             }}
           />
         )}
@@ -595,7 +608,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
       </div>
 
       <Sheet open={tags} onOpenChange={setTags} modal={false}>
-        <SheetContent className="w-[480px] gap-0 sm:max-w-[480px]" onInteractOutside={(e) => e.preventDefault()}>
+        <SheetContent className="w-full gap-0 sm:w-[480px] sm:max-w-[480px]" onInteractOutside={(e) => e.preventDefault()}>
           <SheetHeader className="border-b">
             <SheetTitle>DICOM tags</SheetTitle>
             <SheetDescription>The image shown in the active viewport</SheetDescription>
