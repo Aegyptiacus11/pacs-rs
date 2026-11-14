@@ -19,9 +19,8 @@ pacs-server
 - A start with the login on and something missing (the secret, a first password of 12 bytes
   or more) stops with the reason; it never starts unguarded.
 
-**The web interface has no sign-in page yet.** With the login on, `/ui/` loads and its
-requests are refused; use the REST API and DICOMweb with a token until it has one.
-`/ui/config.json` says `"auth": true`.
+The [web interface](web-interface.md) then opens on a sign-in page, and `/ui/config.json` says
+`"auth": true`.
 
 DIMSE has no login here: `PACS_DIMSE_KNOWN_CALLERS_ONLY` and the network decide who may open
 an association.
@@ -79,6 +78,20 @@ curl -H "Authorization: Bearer <access_token>" https://pacs.example/dicom-web/st
 curl -b jar -c jar -X POST https://pacs.example/auth/refresh
 ```
 
+### Links a browser follows itself
+
+A browser cannot send the header on a link it follows: a download, a page opened in a tab.
+For those:
+
+| Request | | |
+|---|---|---|
+| `POST /auth/download-token` | `{"path": "/studies/<id>/archive"}` | `{"token", "expires_in"}` |
+
+The token is good for one minute and for `GET` on that path alone, query included, sent as
+`?token=`. The user must be allowed to read the path; there is none for `/users` or `/auth`.
+It is the only token a URL may carry: an access token in a query is refused, and so is a
+download token in the header. The request log leaves it out.
+
 Behind a proxy that serves pacs-rs under a prefix, set `PACS_AUTH_COOKIE_PATH` to the path of
 `/auth` as the browser sees it (`/pacs/auth`). The cookie is `Secure`: over plain HTTP on
 localhost, `PACS_AUTH_COOKIE_SECURE=false` lets a browser keep it.
@@ -101,7 +114,6 @@ For the administrator.
 
 ## Not yet
 
-- A sign-in page in the web interface.
 - Tokens for tools that cannot hold a session (a viewer, a pipeline), revocable one by one.
 - Signing in through an identity provider (OpenID Connect).
 - Rights per project.

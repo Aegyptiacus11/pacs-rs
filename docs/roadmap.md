@@ -12,12 +12,12 @@ test that CI runs.
 ## 1. Safe to expose
 
 Built: the [login](login.md) (`PACS_AUTH`, off by default), with sessions, the roles reader,
-editor, manager and admin, and users kept in the index. Without it, anyone who reaches the
+editor, manager and admin, users kept in the index, and the sign-in and users pages of the
+[web interface](web-interface.md). Without it, anyone who reaches the
 server can read and delete everything. What remains:
 
 | Item | Done when |
 |---|---|
-| Sign-in page | the [web interface](web-interface.md) signs in, keeps its session and downloads archives with the login on; today only the [REST API](rest-api.md) and [DICOMweb](dicomweb.md) can be used with it |
 | Signing in through a provider | a user signs in with OpenID Connect, and pacs-rs gives the same session as after a password |
 | Rights per project | a user can be limited to some projects |
 | Tokens for tools | a viewer or a pipeline connects with a token that can be revoked, following IHE Internet User Authorization |

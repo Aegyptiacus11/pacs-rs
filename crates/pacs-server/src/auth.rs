@@ -359,9 +359,8 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     if is_open(&method, &path) {
         return next.run(request).await;
     }
-    let invalid = || {
-        refused(StatusCode::UNAUTHORIZED, "Invalid or expired access token").into_response()
-    };
+    let invalid =
+        || refused(StatusCode::UNAUTHORIZED, "Invalid or expired access token").into_response();
     let bearer = request
         .headers()
         .get(AUTHORIZATION)
@@ -466,18 +465,28 @@ async fn download_token(
     let usable = asked.starts_with('/')
         && asked.len() <= 4096
         && !asked.contains(['#', ' ', '\r', '\n'])
-        && split_token(asked.split_once('?').map(|(_, query)| query)).0.is_none()
+        && split_token(asked.split_once('?').map(|(_, query)| query))
+            .0
+            .is_none()
         && asked.parse::<axum::http::uri::PathAndQuery>().is_ok();
     if !usable {
-        return Err(unprocessable("path: a path of this server, starting with /".into()));
+        return Err(unprocessable(
+            "path: a path of this server, starting with /".into(),
+        ));
     }
     // nothing of the accounts by URL, and nothing that needs no token anyway
     let right = right_for(&Method::GET, path);
     if matches!(right, Right::SignedIn | Right::Admin) || is_open(&Method::GET, path) {
-        return Err(refused(StatusCode::FORBIDDEN, "No download token for this path"));
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "No download token for this path",
+        ));
     }
     if !user.role.allows(right) {
-        return Err(refused(StatusCode::FORBIDDEN, "Your role does not allow this"));
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "Your role does not allow this",
+        ));
     }
     let mut claims = serde_json::Map::new();
     claims.insert("role".into(), user.role.as_str().into());
@@ -487,7 +496,9 @@ async fn download_token(
         .downloads
         .issue(&user.id, &claims)
         .map_err(|e| internal("making a download token", e))?;
-    Ok(Json(json!({ "token": token, "expires_in": DOWNLOAD_TOKEN_SECONDS })))
+    Ok(Json(
+        json!({ "token": token, "expires_in": DOWNLOAD_TOKEN_SECONDS }),
+    ))
 }
 
 fn shown(user: &StoredUser) -> Value {
@@ -815,14 +826,23 @@ mod tests {
         assert_eq!(split_token(None), (None, None));
         assert_eq!(split("a=1"), (None, Some("a=1".into())));
         assert_eq!(split("token=T"), (Some("T".into()), None));
-        assert_eq!(split("a=1&token=T&b=2"), (Some("T".into()), Some("a=1&b=2".into())));
+        assert_eq!(
+            split("a=1&token=T&b=2"),
+            (Some("T".into()), Some("a=1&b=2".into()))
+        );
         // only a parameter named token, and only the first
         assert_eq!(split("mytoken=T"), (None, Some("mytoken=T".into())));
-        assert_eq!(split("token=T&token=U"), (Some("T".into()), Some("token=U".into())));
+        assert_eq!(
+            split("token=T&token=U"),
+            (Some("T".into()), Some("token=U".into()))
+        );
 
         let log = |uri: &str| for_log(&uri.parse().unwrap());
         assert_eq!(log("/studies?limit=2"), "/studies?limit=2");
-        assert_eq!(log("/studies/a/archive?token=SECRET"), "/studies/a/archive?token=...");
+        assert_eq!(
+            log("/studies/a/archive?token=SECRET"),
+            "/studies/a/archive?token=..."
+        );
         assert_eq!(
             log("/tools/create-archive?resources=a,b&token=SECRET"),
             "/tools/create-archive?resources=a,b&token=..."
