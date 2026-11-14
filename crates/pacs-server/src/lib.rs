@@ -21,6 +21,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod annotations;
+pub mod auth;
 mod modalities;
 pub mod projects;
 mod protocols;
@@ -87,10 +88,32 @@ pub struct Settings {
     #[arg(long, env = "PACS_CORS_ORIGINS", value_delimiter = ',')]
     pub cors_origins: Vec<String>,
 
-    /// Serve the web interface at /ui/ (`/` redirects there). It has no login of its own:
-    /// whoever reaches it can delete, as with the REST API.
+    /// Serve the web interface at /ui/ (`/` redirects there). Without PACS_AUTH whoever
+    /// reaches it can delete, as with the REST API.
     #[arg(long, env = "PACS_UI", default_value_t = true, action = clap::ArgAction::Set)]
     pub ui: bool,
+
+    /// Ask for a login on every HTTP route but /healthz and the web interface's files (see
+    /// `pacs_server::auth`). Needs PACS_AUTH_SECRET (or PACS_AUTH_SECRET_FILE), the signing
+    /// secret of at least 32 bytes, and for the first start PACS_ADMIN_PASSWORD (or
+    /// PACS_ADMIN_PASSWORD_FILE). Off by default: anyone who reaches the server can then read
+    /// and delete everything.
+    #[arg(long, env = "PACS_AUTH", default_value_t = false, action = clap::ArgAction::Set)]
+    pub auth: bool,
+
+    /// The login of the first administrator, made when PACS_AUTH is on and there is no user.
+    #[arg(long, env = "PACS_ADMIN_LOGIN", default_value = "admin")]
+    pub admin_login: String,
+
+    /// Send the refresh cookie over HTTPS only. Turn off only to try the login over plain
+    /// HTTP on localhost.
+    #[arg(long, env = "PACS_AUTH_COOKIE_SECURE", default_value_t = true, action = clap::ArgAction::Set)]
+    pub auth_cookie_secure: bool,
+
+    /// The path of the refresh cookie as the browser sees it, when a proxy serves pacs-rs
+    /// under a prefix, e.g. `/pacs/auth`. By default `/auth`.
+    #[arg(long, env = "PACS_AUTH_COOKIE_PATH")]
+    pub auth_cookie_path: Option<String>,
 
     /// Address DIMSE (C-ECHO, C-STORE) listens on, e.g. `0.0.0.0:11112`. None by default:
     /// no DIMSE port is opened.
@@ -199,7 +222,7 @@ pub fn secret(name: &str, env: impl Fn(&str) -> Option<String>) -> anyhow::Resul
     }
 }
 
-pub(crate) fn process_env(name: &str) -> Option<String> {
+pub fn process_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
@@ -368,7 +391,25 @@ pub fn without_password(url: &str) -> String {
 /// `dicomweb_path` and, unless turned off, the web interface at `/ui/` with its shared
 /// hanging protocols at `/ui/api/protocols`, the viewer's measurements at
 /// `/ui/api/annotations` and the paged study list at `/ui/api/studies`.
+///
+/// Without a login: with `PACS_AUTH` on, use [`app_with_login`], and this refuses.
 pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
+    if settings.auth {
+        bail!("PACS_AUTH is on: the application needs its login (open_login, app_with_login)");
+    }
+    app_with_login(archive, settings, None)
+}
+
+/// [`app`] behind `login`, when there is one: its routes are added and every route is
+/// guarded (see [`auth`]).
+pub fn app_with_login(
+    archive: Archive,
+    settings: &Settings,
+    login: Option<auth::Login>,
+) -> anyhow::Result<Router> {
+    if settings.auth != login.is_some() {
+        bail!("PACS_AUTH and the login given to the application disagree");
+    }
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
     if path == "/" {
         bail!("the DICOMweb path cannot be /: the REST API is served there");
@@ -402,10 +443,15 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
             );
         }
         app = app
-            .merge(ui::router(&path))
+            .merge(ui::router(&path, login.is_some()))
             .merge(protocols::router(index.clone()))
             .merge(annotations::router(index.clone()))
             .merge(worklist::router(index));
+    }
+    if let Some(login) = &login {
+        // the guard goes on after every route is there, and inside CORS, which answers
+        // preflight requests itself
+        app = login.protect(app.merge(login.router()?));
     }
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
