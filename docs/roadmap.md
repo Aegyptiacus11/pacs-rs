@@ -11,12 +11,15 @@ test that CI runs.
 
 ## 1. Safe to expose
 
-Today anyone who reaches the server can read and delete everything.
+Built: the [login](login.md) (`PACS_AUTH`, off by default), with sessions, the roles reader,
+editor, manager and admin, and users kept in the index. Without it, anyone who reaches the
+server can read and delete everything. What remains:
 
 | Item | Done when |
 |---|---|
-| Login | the [REST API](rest-api.md), [DICOMweb](dicomweb.md) and the [web interface](web-interface.md) refuse a request without a valid user or token |
-| Roles | reading, writing, deleting and administering are separate rights, and a user can be limited to some projects |
+| Sign-in page | the [web interface](web-interface.md) signs in, keeps its session and downloads archives with the login on; today only the [REST API](rest-api.md) and [DICOMweb](dicomweb.md) can be used with it |
+| Signing in through a provider | a user signs in with OpenID Connect, and pacs-rs gives the same session as after a password |
+| Rights per project | a user can be limited to some projects |
 | Tokens for tools | a viewer or a pipeline connects with a token that can be revoked, following IHE Internet User Authorization |
 | TLS on DIMSE | associations can require TLS, following PS3.15 H.1 (step 6 of the [plan](interop.md#build-order)) |
 | TLS to Postgres | the index connection is encrypted and the server's certificate checked |
