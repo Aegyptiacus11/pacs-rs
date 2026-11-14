@@ -4,9 +4,10 @@
 # - the image ghcr.io/aegyptiacus11/pacs-rs:<version> for linux/amd64 and linux/arm64,
 #   and :latest when this is the highest release (pre-releases like v1.0.0-rc1 never get it);
 # - a GitHub release with those files, SHA256SUMS and generated notes.
-# Nothing is published unless every build succeeded.
-# Run by hand (Actions -> release -> Run workflow), it is a dry run: everything is built and
-# smoke-tested at the workspace version, nothing is pushed or published.
+# Nothing is built for publishing unless the tests of ci.yml pass on the tagged commit, and
+# nothing is published unless every build succeeded.
+# Run by hand (Actions -> release -> Run workflow), it is a dry run: everything is tested, built
+# and smoke-tested at the workspace version, nothing is pushed or published.
 name: release
 
 on:
@@ -53,9 +54,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
 
+  # Every job of ci.yml, on this very commit. The builds wait for it, since the Linux one
+  # already pushes its image (untagged) to ghcr.io.
+  tests:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
   # One native runner per architecture: building Rust under emulation takes hours.
   linux:
-    needs: version
+    needs: [version, tests]
     strategy:
       matrix:
         include:
@@ -130,7 +137,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    needs: version
+    needs: [version, tests]
     runs-on: windows-2025
     timeout-minutes: 60
     env:
