@@ -26,10 +26,14 @@ dicom-transfer-syntax-registry = { version = "0.10.1", default-features = false 
 # of docs/interop.md.
 dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
 futures = "0.3.34"
+getrandom = "0.4.3"
 hmac = "0.13.0"
 http-body-util = "0.1.5"
 # jxl-rs, the libjxl project's JPEG XL decoder.
 jxl = "0.8.0"
+# The login: access JWTs and rotating refresh tokens, with its axum routes and its store on
+# the index's own database.
+jwt-sessions = { git = "https://github.com/Aegyptiacus11/jwt-sessions-rs", rev = "a43ecba210caf055f27955cd17845d14816386b6", features = ["axum", "sqlx"] }
 memchr = "2.8.3"
 mimalloc = { version = "0.1.52", default-features = false }
 object_store = { version = "0.14.2", features = ["aws"] }
