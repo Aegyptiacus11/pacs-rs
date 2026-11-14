@@ -1,7 +1,7 @@
 // The frame around the pages. Down the left, the rail: the name and the two lists, icons over
 // their names like the viewer's toolbar. Along the top, the bar: the search that finds a
-// patient or a study anywhere (Ctrl K, ⌘K on a Mac), light or dark, and a warning when the
-// server doesn't answer. / goes to the list's own filter.
+// patient or a study anywhere (Ctrl K, ⌘K on a Mac), light or dark, a warning when the
+// server doesn't answer, and the signed-in user's menu when the server asks for a login. / goes to the list's own filter.
 
 import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import { FileStack, Moon, Sun, Users, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GlobalSearch } from "@/components/search-bar";
+import { UserMenu } from "@/components/user-menu";
 import { ROOT } from "@/lib/api";
 import { href, type Route } from "@/lib/route";
 import { useTheme } from "@/lib/theme";
@@ -117,11 +118,12 @@ export function AppHeader({ route }: { route: Route }) {
   }, []);
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-card px-5">
-      <span className="w-24 shrink-0 font-semibold tracking-tight">pacs-rs</span>
+      <span className="w-32 shrink-0 font-semibold tracking-tight">pacs-rs</span>
       <GlobalSearch page={route.page === "patients" ? "patients" : "studies"} className="mx-auto w-full max-w-xl" />
-      <div className="flex w-24 shrink-0 items-center justify-end gap-2">
+      <div className="flex w-32 shrink-0 items-center justify-end gap-2">
         <ServerStatus />
         <ThemeToggle />
+        <UserMenu />
       </div>
     </header>
   );
