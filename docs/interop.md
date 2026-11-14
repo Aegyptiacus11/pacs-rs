@@ -7,9 +7,7 @@ them when the project asks for it, and serves them to the research tools (viewer
 pipelines) over DICOMweb. It does not replace the clinical PACS.
 
 Sources, checked on 2026-10-31: DICOM 2026d (PS3.2, PS3.4, PS3.7, PS3.15) and the IHE Radiology Technical
-Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK, dcm4che and pynetdicom. Other
-Rust code, such as [segganeadel/dicom-rs-net](https://github.com/segganeadel/dicom-rs-net), is an example
-to read, never a source for behaviour.
+Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK, dcm4che and pynetdicom.
 
 ## The role
 
