@@ -2,8 +2,8 @@
 //! the index per study (by Study Instance UID), so that they come back when the study is
 //! opened again, on any browser. `GET` returns the study's list (a JSON array, empty when it
 //! has none), `PUT` replaces it (an empty array removes it). Deleting the study deletes them.
-//! Part of the web interface: off with it (`PACS_UI=false`). Like the rest of the server, no
-//! login yet.
+//! Part of the web interface: off with it (`PACS_UI=false`). Behind the login when there is
+//! one (`auth`): reading needs a reader, writing an editor.
 
 use axum::Router;
 use axum::body::Bytes;

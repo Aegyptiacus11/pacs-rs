@@ -1,6 +1,7 @@
 use clap::Parser;
 use pacs_server::{
-    Settings, StorageLocation, app, dimse_config, open_archive, serve, serve_dimse, shutdown_signal,
+    Settings, StorageLocation, app_with_login, dimse_config, open_archive, serve, serve_dimse,
+    shutdown_signal,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -27,7 +28,14 @@ async fn main() -> anyhow::Result<()> {
         });
     }
     let archive = open_archive(&settings).await?;
-    let app = app(archive.clone(), &settings)?;
+    let login =
+        pacs_server::auth::open_login(&settings, archive.index(), pacs_server::process_env).await?;
+    if login.is_none() {
+        tracing::warn!(
+            "no login (PACS_AUTH is off): anyone who reaches this server can read and delete"
+        );
+    }
+    let app = app_with_login(archive.clone(), &settings, login)?;
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;
     // one shutdown signal for both servers
     let (stop, stopped) = tokio::sync::watch::channel(false);

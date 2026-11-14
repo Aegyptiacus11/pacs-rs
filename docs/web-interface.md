@@ -93,5 +93,5 @@ The measurements are at `/ui/api/annotations/{StudyInstanceUID}`: `GET` returns 
 empty one removes it), for a study the server has. They are Cornerstone3D annotations, stored as
 received in the `ui_annotations` table; deleting the study deletes them.
 
-Like the REST API, it has no login yet: whoever reaches it can delete, and change the shared
-protocols and the measurements. `PACS_UI=false` turns it off, protocols and measurements included.
+Without the [login](login.md), whoever reaches it can delete, and change the shared protocols and
+the measurements. With it, the interface cannot be used yet: it has no sign-in page. `PACS_UI=false` turns it off, protocols and measurements included.

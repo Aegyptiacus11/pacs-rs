@@ -5,9 +5,9 @@
 # Index (SQLite) and files live in the `pacs-data` volume. Every setting is a PACS_* variable
 # (docs/running.md); Postgres and S3 go in `environment` the same way.
 #
-# pacs-rs has no login yet: anyone who can reach the port can read, upload and delete studies.
-# So the ports are published on 127.0.0.1 only. Put an authenticating proxy in front before
-# opening them to a network.
+# The login is off unless PACS_AUTH is set (docs/login.md): anyone who can reach the port can
+# then read, upload and delete studies. So the ports are published on 127.0.0.1 only. Turn the
+# login on, or put an authenticating proxy in front, before opening them to a network.
 name: pacs-rs
 
 services:

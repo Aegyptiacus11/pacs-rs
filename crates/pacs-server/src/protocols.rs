@@ -2,7 +2,8 @@
 //! browser on this server shares them. `GET` lists them (a JSON array, the most recently
 //! saved first), `PUT /{id}` keeps one (a JSON object whose `id` is the one in the path),
 //! `DELETE /{id}` removes one. Part of the web interface: off with it (`PACS_UI=false`).
-//! Like the rest of the server, no login yet.
+//! Behind the login when there is one (`auth`): reading needs a reader, writing and removing
+//! an editor.
 
 use axum::Router;
 use axum::body::Bytes;
