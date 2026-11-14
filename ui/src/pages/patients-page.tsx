@@ -80,7 +80,7 @@ export function PatientsPage({ open }: { open: string | null }) {
 
   return (
     <div className="flex h-full">
-      <section className="flex w-[26rem] shrink-0 flex-col border-r">
+      <section className="flex w-full shrink-0 flex-col md:w-[26rem] md:border-r">
         <div className="px-5 pt-5 pb-3">
           <div className="flex items-end justify-between gap-3">
             <div>
@@ -164,7 +164,11 @@ export function PatientsPage({ open }: { open: string | null }) {
         )}
       </section>
 
-      <main aria-label="The chosen patient" className="min-w-0 flex-1 overflow-y-auto">
+      {/* beside the list on a wide screen; over the whole page on a narrow one, once a patient is chosen */}
+      <main
+        aria-label="The chosen patient"
+        className={cn("min-w-0 flex-1 overflow-y-auto bg-background md:static md:block", current ? "fixed inset-0 z-30" : "hidden")}
+      >
         {current ? (
           <PatientRecord
             onClose={() => setCurrent(null)}
@@ -218,9 +222,10 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
   if (!who) return <div className="space-y-4 p-8">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-16" />)}</div>;
   return (
     <div className="flex min-h-full flex-col">
-      <header className="flex flex-wrap items-center gap-4 border-b bg-card px-8 py-6">
+      <header className="relative flex flex-wrap items-center gap-x-4 gap-y-3 border-b bg-card px-4 py-5 md:px-8 md:py-6">
         <span className="grid size-14 shrink-0 place-items-center rounded-full bg-secondary text-lg font-medium text-muted-foreground ring-1 ring-border">{initials(who.name)}</span>
-        <div className="mr-auto min-w-0">
+        {/* on a narrow screen the name takes the first line, under the close button, and the actions the second */}
+        <div className="mr-auto min-w-0 flex-1 basis-48 pr-8 md:pr-0">
           <h2 className="truncate text-xl font-semibold tracking-tight">{personName(who.name)}</h2>
           <div className="truncate text-sm text-muted-foreground">
             {[who.patientId, sexAge(who.sex, who.birth), isoDate(who.birth) && `born ${formatDate(who.birth)}`].filter(Boolean).join(" · ")}
@@ -256,7 +261,14 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>}
-        <Button variant="ghost" size="icon-sm" aria-label="Close the patient" title="Close (Esc)" className="text-muted-foreground" onClick={onClose}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close the patient"
+          title="Close (Esc)"
+          className="text-muted-foreground max-md:absolute max-md:top-4 max-md:right-3"
+          onClick={onClose}
+        >
           <X />
         </Button>
       </header>
@@ -271,10 +283,10 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
         </Fact>
       </section>
 
-      <section className="px-8 py-6">
+      <section className="px-4 py-5 md:px-8 md:py-6">
         <div className="mb-4 flex items-baseline justify-between">
           <h3 className="text-sm font-medium">Timeline</h3>
-          <span className="text-xs text-muted-foreground">Tick two studies to compare them side by side</span>
+          <span className="hidden text-xs text-muted-foreground sm:inline">Tick two studies to compare them side by side</span>
         </div>
         {studies.isPending && <Skeleton className="h-40" />}
         <ol className="relative">
@@ -290,7 +302,7 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
       </section>
 
       {picked.length > 0 && (
-        <div className="sticky bottom-0 mt-auto flex items-center gap-3 border-t bg-popover/95 px-8 py-3 backdrop-blur animate-in fade-in slide-in-from-bottom-2">
+        <div className="sticky bottom-0 mt-auto flex items-center gap-3 border-t bg-popover/95 px-4 py-3 backdrop-blur md:px-8 animate-in fade-in slide-in-from-bottom-2">
           <Columns2 className="size-4 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-sm">
             {picked.length === 1 ? (
@@ -335,7 +347,8 @@ function TimelineStudy({ study: s, newest, ticked, onTick }: { study: Study; new
   return (
     <article className={cn("rounded-lg border bg-card p-4 transition-colors", ticked && "border-selection/50 bg-selection-soft/40")}>
       <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
-        <div className="min-w-0 flex-1">
+        {/* wide enough to read: on a narrow screen Compare and Open go to the line below */}
+        <div className="min-w-0 flex-1 basis-56">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="tabular font-medium text-foreground">{formatDate(s.date)}</span>
             {formatTime(s.time) && <span className="tabular">{formatTime(s.time)}</span>}
