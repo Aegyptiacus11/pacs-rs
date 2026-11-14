@@ -26,7 +26,7 @@ CharLS uses; this is what CI and the release do:
 
 ```powershell
 $env:RUSTFLAGS = "-C target-feature=+crt-static"
-$env:CMAKE_TOOLCHAIN_FILE = "$PWD\ci\msvc-static-crt.cmake"
+$env:CMAKE_TOOLCHAIN_FILE = "$PWD\cmake\msvc-static-crt.cmake"
 cargo build --release -p pacs-server
 ```
 

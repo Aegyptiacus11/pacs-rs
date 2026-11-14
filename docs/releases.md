@@ -1,8 +1,11 @@
 # CI and releases
 
-Every push to `main` and every pull request runs `.github/workflows/ci.yml`: the web interface,
-`cargo fmt`, clippy, and the tests on Linux (with Postgres, S3, the reference server and the
-DIMSE interoperability tests) and on Windows.
+Every push to `main` and every pull request runs `.github/workflows/ci.yml`: actionlint over the
+workflows, the web interface, `cargo fmt`, clippy, and the tests on Linux (with Postgres, S3, the
+reference server and the DIMSE interoperability tests) and on Windows. Each job runs only when
+the change touches what it checks: `scripts/ci-changes.sh` reads the changed paths, so a change
+to the documentation alone builds nothing, one to `ui/` builds the web interface only, and
+anything else, a path the script does not know included, runs the Rust jobs.
 
 This documentation is the mdBook in `docs/` (`book.toml`). `.github/workflows/docs.yml` checks its
 links (`scripts/check-doc-links.py`) and builds it on every pull request that touches it, and
