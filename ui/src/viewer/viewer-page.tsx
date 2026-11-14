@@ -41,6 +41,7 @@ import {
   Square,
   SunMoon,
   Tags,
+  X,
   ZoomIn,
   GalleryVerticalEnd,
   Trash2,
@@ -66,6 +67,7 @@ import { toast } from "sonner";
 import { Logo } from "@/components/app-header";
 import { api } from "@/lib/api";
 import { DownloadLink } from "@/components/download-link";
+import { Button } from "@/components/ui/button";
 import { tagRows } from "@/lib/dicom-tags";
 import { href } from "@/lib/route";
 import { applyTheme } from "@/lib/theme";
@@ -626,6 +628,21 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
           />
         )}
         <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
+        {/* with a finger there is no Delete key, and the toolbar's button may be scrolled out of
+            sight: what can be done with the selected measurement comes to it */}
+        {!!s?.selected && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 hidden justify-center px-4 max-md:flex pointer-coarse:flex">
+            <div className="pointer-events-auto flex items-center gap-1 rounded-xl border bg-popover p-1.5 pl-4 shadow-lg animate-in fade-in slide-in-from-bottom-2">
+              <span className="mr-2 text-sm font-medium">{s.selected === 1 ? "Measurement selected" : `${s.selected} measurements selected`}</span>
+              <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={deleteSelected}>
+                <Trash2 /> Delete
+              </Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Deselect" onClick={() => v?.escape()}>
+                <X />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       <Sheet open={tags} onOpenChange={setTags} modal={false}>
