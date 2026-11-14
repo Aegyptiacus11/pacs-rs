@@ -55,6 +55,10 @@ import { first, num, tag } from "@/lib/pixels";
 import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
 
+/** Cornerstone holds a quick click for 400 ms, in case a second one makes it a double click,
+ * before it acts on it; what a tap began is there to be dropped after that. */
+const TAP_SETTLED_MS = 450;
+
 /** A drag across this many pixels takes the window through the image's whole range. */
 const WINDOW_SWEEP = 1000;
 
@@ -381,9 +385,122 @@ export class Viewer {
   /** The measurements that were finished: one being drawn is not among them yet. */
   private drawn = new Set<string>();
   private onDrawn = (e: any) => {
-    const uid = e.detail?.annotation?.annotationUID;
-    if (uid) this.drawn.add(uid);
+    const a = e.detail?.annotation;
+    const uid = a?.annotationUID;
+    if (!uid) return;
+    // A tap with a measuring tool chosen makes a measurement a few pixels across, which then
+    // sits on the image, almost invisible, and is what gets selected and deleted in place
+    // of the one meant. A drawing that small was not meant as one.
+    if (!this.drawn.has(uid) && this.tooSmall(a)) {
+      annotation.state.removeAnnotation(uid);
+      this.cells.forEach((c) => c.viewport.render());
+      return;
+    }
+    this.drawn.add(uid);
   };
+
+  /** Whether a measurement with two points or more spans less than a tap does on screen. */
+  private tooSmall(a: any) {
+    const viewport: any = this.cells[this.current]?.viewport;
+    const points: number[][] = a.data?.handles?.points ?? [];
+    if (!viewport?.worldToCanvas || points.length < 2) return false;
+    const on = points.map((p) => viewport.worldToCanvas(p));
+    let span = 0;
+    for (const p of on) for (const q of on) span = Math.max(span, Math.hypot(p[0] - q[0], p[1] - q[1]));
+    return span < 8;
+  }
+
+  // ---- a tap or a click, on top of what Cornerstone does with it ----
+  // Cornerstone selects a measurement when the pointer comes down on its outline. A finger
+  // rarely lands on a line one pixel wide, so a tap anywhere inside a rectangle or an ellipse
+  // selects it too (the smallest one, when they overlap), and a tap on nothing lets go of the
+  // selection.
+  //
+  // Cornerstone also starts a measurement on a click without a drag: the shape then follows
+  // the mouse until the next click. A finger has nothing to follow, so on a touch screen a
+  // tap with a measuring tool left a shape waiting for its end, which the next tap anywhere
+  // gave it. There a tap starts nothing: a measurement is drawn by dragging.
+  private down = { x: 0, y: 0, at: 0, selected: "", drawing: false, finger: false };
+  private unfinished() {
+    return annotation.state.getAllAnnotations().filter((a: any) => !this.drawn.has(a.annotationUID));
+  }
+  private onPointerDown = (e: PointerEvent) => {
+    this.down = {
+      x: e.clientX,
+      y: e.clientY,
+      at: performance.now(),
+      selected: annotation.selection.getAnnotationsSelected().join(),
+      drawing: this.unfinished().length > 0,
+      finger: e.pointerType === "touch" || matchMedia("(pointer: coarse)").matches,
+    };
+  };
+  private onPointerUp = (e: PointerEvent) => {
+    if (Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 8 || performance.now() - this.down.at > 500) return;
+    const cell = this.cells.find((c) => c.element.contains(e.target as Node));
+    if (!cell || cell.kind === "3d") return;
+    const { selected: before, drawing, finger } = this.down;
+    this.tapped(cell, e.clientX, e.clientY, before);
+    if (!finger || drawing) return;
+    // what the tap selected or let go of, before a shape it begins takes the selection
+    const wanted = annotation.selection.getAnnotationsSelected();
+    setTimeout(() => this.dropBegun(wanted), TAP_SETTLED_MS);
+  };
+  /** What a tap began, if anything, goes: Cornerstone has started it by now. A tap that ends
+   * an angle's second arm began nothing and is not looked at here. */
+  private dropBegun(wanted: string[]) {
+    if (this.closed) return;
+    const begun = this.unfinished();
+    if (!begun.length) return;
+    for (const c of this.cells) cancelActiveManipulations(c.element);
+    for (const a of begun as any[]) {
+      this.drawn.delete(a.annotationUID);
+      annotation.state.removeAnnotation(a.annotationUID);
+    }
+    annotation.selection.deselectAnnotation();
+    for (const uid of wanted) if (annotation.state.getAnnotation(uid)) annotation.selection.setAnnotationSelected(uid, true, true);
+    this.cells.forEach((c) => c.viewport.render());
+    this.emit();
+  }
+  private tapped(cell: Cell, clientX: number, clientY: number, before: string) {
+    if (this.closed || !this.cells.includes(cell)) return;
+    const box = cell.element.getBoundingClientRect();
+    const at: [number, number] = [clientX - box.left, clientY - box.top];
+    const viewport: any = cell.viewport;
+    const shown = (name: ToolName): any[] => {
+      const tool: any = this.stackGroup.getToolInstance(TOOLS[name].toolName);
+      const all = annotation.state.getAnnotations(TOOLS[name].toolName, cell.element) ?? [];
+      return tool?.filterInteractableAnnotationsForElement?.(cell.element, all) ?? [];
+    };
+    let inside: { uid: string; area: number } | null = null;
+    for (const name of ["rectangle", "ellipse"] as const) {
+      for (const a of shown(name)) {
+        const on: number[][] = (a.data?.handles?.points ?? []).map((p: any) => viewport.worldToCanvas(p));
+        if (on.length < 2) continue;
+        const xs = on.map((p) => p[0]), ys = on.map((p) => p[1]);
+        const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+        if (at[0] < x0 || at[0] > x1 || at[1] < y0 || at[1] > y1) continue;
+        const area = (x1 - x0) * (y1 - y0);
+        if (!inside || area < inside.area) inside = { uid: a.annotationUID, area };
+      }
+    }
+    const now = annotation.selection.getAnnotationsSelected();
+    if (inside) {
+      if (now.length === 1 && now[0] === inside.uid) return;
+      annotation.selection.setAnnotationSelected(inside.uid, true, false);
+    } else if (now.length && now.join() === before) {
+      // the tap changed nothing: it was on nothing, unless it was on the outline of what is
+      // selected already
+      const onSelected = now.some((uid) => {
+        const a: any = annotation.state.getAnnotation(uid);
+        const tool: any = a && this.stackGroup.getToolInstance(a.metadata?.toolName);
+        return !!tool?.isPointNearTool?.(cell.element, a, at, 24, "touch");
+      });
+      if (onSelected) return;
+      annotation.selection.deselectAnnotation();
+    } else return;
+    this.cells.forEach((c) => c.viewport.render());
+    this.emit();
+  }
   private onSelection = () => this.emit();
   private onAnnotation = (e: any) => {
     const a = e.detail?.annotation;
@@ -446,6 +563,8 @@ export class Viewer {
       eventTarget.addEventListener(event, this.onAnnotation);
     eventTarget.addEventListener(ToolEnums.Events.ANNOTATION_COMPLETED, this.onDrawn);
     eventTarget.addEventListener(ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, this.onSelection);
+    grid.addEventListener("pointerdown", this.onPointerDown, true);
+    grid.addEventListener("pointerup", this.onPointerUp, true);
     this.resize = new ResizeObserver(() => this.refit());
     this.resize.observe(grid);
   }
@@ -464,6 +583,8 @@ export class Viewer {
       eventTarget.removeEventListener(event, this.onAnnotation);
     eventTarget.removeEventListener(ToolEnums.Events.ANNOTATION_COMPLETED, this.onDrawn);
     eventTarget.removeEventListener(ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, this.onSelection);
+    this.grid.removeEventListener("pointerdown", this.onPointerDown, true);
+    this.grid.removeEventListener("pointerup", this.onPointerUp, true);
     // what is waiting goes now
     for (const [study, timer] of this.saves) {
       clearTimeout(timer);
@@ -503,7 +624,6 @@ export class Viewer {
             this.studyOfAnnotation.set(a.annotationUID, study);
             a.invalidated = true;
             annotation.state.addAnnotation(a, undefined as any);
-            this.drawn.add(a.annotationUID);
             this.drawn.add(a.annotationUID);
           }
           this.annotationsIn.add(study);

@@ -92,8 +92,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
 - **Measurements are kept**: each one is saved with its study as soon as it is drawn, changed
-  or removed, and is there again when the study is opened, in any browser. A click or a tap on one
-  selects it, and Delete (the key, the button, or on a touch or narrow screen the bar that
+  or removed, and is there again when the study is opened, in any browser. A click or a tap on one,
+  or anywhere inside a rectangle or an ellipse, selects it; one on nothing lets go of the
+  selection. On a touch screen a measurement is drawn by dragging: a tap starts none. Delete (the key, the button, or on a touch or narrow screen the bar that
   comes up under the image) removes it; Clear removes them all. Both can
   be undone. Escape drops a measurement being drawn, then deselects, then goes back to the
   tool the viewer starts with; it never leaves the viewer, which the arrow at the top left
