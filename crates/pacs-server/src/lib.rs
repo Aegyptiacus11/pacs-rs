@@ -74,7 +74,7 @@ pub struct Settings {
     pub max_upload_bytes: usize,
 
     /// Memory that reading files may take at once beyond the files themselves, in bytes, by
-    /// estimate; a file that would take more alone is refused (see the README).
+    /// estimate; a file that would take more alone is refused (see docs/dicomweb.md).
     #[arg(long, env = "PACS_MAX_READ_BYTES", default_value_t = pacs_archive::DEFAULT_READ_LIMIT)]
     pub max_read_bytes: u64,
 

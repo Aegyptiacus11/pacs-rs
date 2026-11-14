@@ -1,6 +1,6 @@
 //! The backends every index test runs on: SQLite in memory always, and Postgres when
 //! `PACS_TEST_POSTGRES_URL` names a server, e.g. `postgres://postgres:test@127.0.0.1:15432`
-//! (README). Each Postgres index is a fresh database of its own.
+//! (docs/building.md). Each Postgres index is a fresh database of its own.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

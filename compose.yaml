@@ -3,7 +3,7 @@
 #   DICOMweb       http://127.0.0.1:8080/dicom-web
 #   REST API       http://127.0.0.1:8080/
 # Index (SQLite) and files live in the `pacs-data` volume. Every setting is a PACS_* variable
-# (README, "Running"); Postgres and S3 go in `environment` the same way.
+# (docs/running.md); Postgres and S3 go in `environment` the same way.
 #
 # pacs-rs has no login yet: anyone who can reach the port can read, upload and delete studies.
 # So the ports are published on 127.0.0.1 only. Put an authenticating proxy in front before

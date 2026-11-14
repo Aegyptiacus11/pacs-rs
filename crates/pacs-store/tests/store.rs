@@ -75,7 +75,7 @@ async fn a_key_is_never_built_from_a_bad_uid() {
 
 /// Runs against a real S3-compatible server when `PACS_TEST_S3_ENDPOINT` is set, e.g.
 /// `docker run --rm -p 8333:8333 chrislusf/seaweedfs:4.48 server -s3` and a bucket made
-/// beforehand; see the README.
+/// beforehand; see docs/building.md.
 #[tokio::test]
 async fn s3_round_trip() {
     let Ok(endpoint) = std::env::var("PACS_TEST_S3_ENDPOINT") else {
