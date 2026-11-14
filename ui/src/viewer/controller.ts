@@ -55,6 +55,8 @@ import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
 
 export const TOOLS = {
+  // through the images: always on the wheel, and on the left button or one finger when chosen
+  scroll: StackScrollTool,
   windowLevel: WindowLevelTool,
   pan: PanTool,
   zoom: ZoomTool,
@@ -340,7 +342,8 @@ export class Viewer {
   private linked = false;
   private syncing = false;
   private overlaysOn = true;
-  private tool: ToolName = "windowLevel";
+  // with a finger there is no wheel: going through the images is the tool one starts with
+  private tool: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
   private loadingVolume = false;
   private stackLayout = 0;
   private stackSeries: string[] = [];
@@ -382,7 +385,7 @@ export class Viewer {
     this.stackGroup = ToolGroupManager.createToolGroup(STACK_GROUP)!;
     this.mprGroup = ToolGroupManager.createToolGroup(MPR_GROUP)!;
     for (const group of [this.stackGroup, this.mprGroup]) {
-      for (const tool of [StackScrollTool, ...Object.values(TOOLS)]) {
+      for (const tool of Object.values(TOOLS)) {
         if (tool === CrosshairsTool && group === this.stackGroup) continue;
         if (tool === CrosshairsTool)
           group.addTool(tool.toolName, {
@@ -393,19 +396,22 @@ export class Viewer {
           });
         else group.addTool(tool.toolName);
       }
-      group.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: ToolEnums.MouseBindings.Wheel }] });
     }
     // a 3D view has its own mouse, whatever tool is chosen: left turns it, middle or
     // shift-left pans, right or the wheel zooms
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     this.vrGroup = ToolGroupManager.createToolGroup(VR_GROUP)!;
     for (const tool of [TrackballRotateTool, PanTool, ZoomTool]) this.vrGroup.addTool(tool.toolName);
-    this.vrGroup.setToolActive(TrackballRotateTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
+    // on a touch screen: one finger turns it, two pinch to zoom
+    this.vrGroup.setToolActive(TrackballRotateTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }, { numTouchPoints: 1 }] });
     this.vrGroup.setToolActive(PanTool.toolName, {
       bindings: [{ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }],
     });
-    this.vrGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }] });
-    this.applyTool(null, "windowLevel");
+    this.vrGroup.setToolActive(ZoomTool.toolName, {
+      bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }, { numTouchPoints: 2 }],
+    });
+    this.applyTool(null, this.tool);
+    this.grid.dataset.tool = this.tool;
     // what another viewing left; this one's come from the server, study by study
     annotation.state.removeAllAnnotations();
     eventTarget.addEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
@@ -957,15 +963,17 @@ export class Viewer {
   }
 
   // the left button runs the chosen tool; pan stays on the middle button and shift-drag,
-  // zoom on the right button, whatever is chosen
+  // zoom on the right button, scrolling on the wheel, whatever is chosen. On a touch screen
+  // one finger runs the chosen tool, two pinch to zoom, three pan.
   private bindings(name: ToolName, left: boolean) {
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     const b: any[] = [];
     // the magnifying glass is ours (see `lens`), not Cornerstone's: no binding for it
     if (name === "magnify") return b;
-    if (left) b.push({ mouseButton: MouseBindings.Primary });
-    if (name === "pan") b.push({ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift });
-    if (name === "zoom") b.push({ mouseButton: MouseBindings.Secondary });
+    if (left) b.push({ mouseButton: MouseBindings.Primary }, { numTouchPoints: 1 });
+    if (name === "scroll") b.push({ mouseButton: MouseBindings.Wheel });
+    if (name === "pan") b.push({ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }, { numTouchPoints: 3 });
+    if (name === "zoom") b.push({ mouseButton: MouseBindings.Secondary }, { numTouchPoints: 2 });
     return b;
   }
   private applyTool(from: ToolName | null, to: ToolName) {
@@ -973,7 +981,7 @@ export class Viewer {
       for (const name of Object.keys(TOOLS) as ToolName[]) {
         // crosshairs need the three MPR views in place: enterMpr turns them on
         if (name === "crosshairs" && (group === this.stackGroup || this.mode !== "mpr")) continue;
-        if (from && name !== from && name !== to && name !== "pan" && name !== "zoom") continue;
+        if (from && name !== from && name !== to && name !== "pan" && name !== "zoom" && name !== "scroll") continue;
         const b = this.bindings(name, name === to);
         if (b.length) group.setToolActive(TOOLS[name].toolName, { bindings: b });
         else if (name === "crosshairs") group.setToolEnabled(TOOLS[name].toolName);
