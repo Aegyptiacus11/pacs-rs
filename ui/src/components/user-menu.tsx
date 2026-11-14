@@ -1,9 +1,9 @@
-// At the right of the top bar: who is signed in and with which role, their password, the
-// users for an administrator, and the way out. Nothing when the server asks for no login.
+// At the right of the top bar: who is signed in and with which role, their account in the
+// settings, and the way out. Nothing when the server asks for no login.
 
 import { useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Loader2, LogOut, Users } from "lucide-react";
+import { CircleUser, Loader2, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,11 +17,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { changePassword, may, signOut, useSession } from "@/lib/session";
+import { href } from "@/lib/route";
+import { changePassword, signOut, useSession } from "@/lib/session";
 
 export const MIN_PASSWORD = 12;
 
-function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
@@ -87,7 +88,6 @@ function PasswordDialog({ open, onClose }: { open: boolean; onClose: () => void 
 
 export function UserMenu() {
   const { user } = useSession();
-  const [password, setPassword] = useState(false);
   const queries = useQueryClient();
   if (!user) return null;
   return (
@@ -111,15 +111,10 @@ export function UserMenu() {
             </Badge>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          {may("admin", user) && (
-            <DropdownMenuItem asChild>
-              <a href="#/users">
-                <Users /> Users
-              </a>
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem onSelect={() => setPassword(true)}>
-            <KeyRound /> Change password
+          <DropdownMenuItem asChild>
+            <a href={href.settings("account")}>
+              <CircleUser /> Your account
+            </a>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -133,7 +128,6 @@ export function UserMenu() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <PasswordDialog open={password} onClose={() => setPassword(false)} />
     </>
   );
 }

@@ -1,4 +1,4 @@
-// The users, for an administrator: who may sign in, with which role, and whether they still
+// The users, in the settings, for an administrator: who may sign in, with which role, and whether they still
 // may. Roles: a reader reads, an editor also writes, a manager also deletes, an administrator
 // also manages users.
 
@@ -194,7 +194,7 @@ function ResetPassword({ user, onClose }: { user: Account | null; onClose: () =>
   );
 }
 
-export function UsersPage() {
+export function UsersSection() {
   const { user: me } = useSession();
   const queries = useQueryClient();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api<Account[]>("users") });
@@ -223,17 +223,17 @@ export function UsersPage() {
   });
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-5">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-base font-semibold tracking-tight">Users</h1>
-          {users.data && <span className="text-sm text-muted-foreground">{users.data.length}</span>}
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold tracking-tight">Users</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Who may sign in to this server, and what each of them may do.</p>
         </div>
         <Button size="sm" onClick={() => setAdding(true)}>
           <Plus /> Add user
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-2">
+      <div className="mt-5 rounded-lg border bg-card">
         {users.isError ? (
           <p className="py-10 text-center text-sm text-destructive">{users.error instanceof Error ? users.error.message : "The users could not be read."}</p>
         ) : (

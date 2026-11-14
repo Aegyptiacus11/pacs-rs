@@ -1,13 +1,15 @@
-// Hash routes: #/studies[?patient=ID][&open=STUDY], #/patients[?open=PATIENT], #/users,
+// Hash routes: #/studies[?patient=ID][&open=STUDY], #/patients[?open=PATIENT], #/settings[/users|roles|account|about],
 // #/view/STUDY[/SERIES][?compare=STUDY]: without a series the viewer hangs the study by
 // protocol; with another study, the two side by side.
 
 import { useSyncExternalStore } from "react";
 
+export type SettingsSection = "users" | "roles" | "account" | "about";
+
 export type Route =
   | { page: "studies"; patient: string | null; open: string | null }
   | { page: "patients"; open: string | null }
-  | { page: "users" }
+  | { page: "settings"; section: SettingsSection | null }
   | { page: "view"; study: string; series: string | null; compare: string | null };
 
 function parse(): Route {
@@ -15,7 +17,8 @@ function parse(): Route {
   const params = new URLSearchParams(query);
   const view = /^\/view\/([\w-]+)(?:\/([\w-]+))?$/.exec(path);
   if (view) return { page: "view", study: view[1], series: view[2] ?? null, compare: params.get("compare") };
-  if (path === "/users") return { page: "users" };
+  const settings = /^\/settings(?:\/(users|roles|account|about))?$/.exec(path);
+  if (settings) return { page: "settings", section: (settings[1] as SettingsSection) ?? null };
   if (path === "/patients") return { page: "patients", open: params.get("open") };
   return { page: "studies", patient: params.get("patient"), open: params.get("open") };
 }
@@ -36,6 +39,7 @@ export function useRoute() {
 
 export const go = (hash: string) => (location.hash = hash);
 export const href = {
+  settings: (section?: SettingsSection) => (section ? `#/settings/${section}` : "#/settings"),
   studies: (patient?: string | null, open?: string | null) => {
     const q = new URLSearchParams();
     if (patient) q.set("patient", patient);

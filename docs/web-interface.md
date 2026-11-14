@@ -38,12 +38,15 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   patient, or delete them.
 - **Signing in**: when the server asks for a [login](login.md), the interface opens on a
   sign-in page. The session survives a reload and lasts while it is used; the button with the
-  user's initials, at the right of the top bar, shows the login and the role, changes the
-  password and signs out. What a role may not do is not offered: no upload without the right
+  user's initials, at the right of the top bar, shows the login and the role, leads to the
+  account and signs out. What a role may not do is not offered: no upload without the right
   to write, no deletion without the right to delete. Downloads go through a
   [download token](login.md#links-a-browser-follows-itself).
-- **Users**: for an administrator, from the same button: the list of users, adding one,
-  changing a role, setting a new password, deactivating, activating and removing.
+- **Settings**: at the foot of the rail, in tabs. *Users*, for an administrator: the list,
+  adding one, changing a role, setting a new password, deactivating, activating and removing.
+  *Roles and permissions*: what each of the four roles may do. *Your account*: the login, the
+  role, changing the password, signing out. *About this server*: its version and the
+  addresses a viewer or a script connects to. Without a login only the last one is there.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.

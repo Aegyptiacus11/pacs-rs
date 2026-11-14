@@ -12,7 +12,7 @@ test that CI runs.
 ## 1. Safe to expose
 
 Built: the [login](login.md) (`PACS_AUTH`, off by default), with sessions, the roles reader,
-editor, manager and admin, users kept in the index, and the sign-in and users pages of the
+editor, manager and admin, users kept in the index, and the sign-in page and the settings (users, roles, account) of the
 [web interface](web-interface.md). Without it, anyone who reaches the
 server can read and delete everything. What remains:
 

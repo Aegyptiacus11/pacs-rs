@@ -1,11 +1,11 @@
 // The frame around the pages. Down the left, the rail: the name and the two lists, icons over
-// their names like the viewer's toolbar. Along the top, the bar: the search that finds a
+// their names like the viewer's toolbar, and at its foot the settings. Along the top, the bar: the search that finds a
 // patient or a study anywhere (Ctrl K, ⌘K on a Mac), light or dark, a warning when the
 // server doesn't answer, and the signed-in user's menu when the server asks for a login. / goes to the list's own filter.
 
 import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Moon, Sun, Users, WifiOff } from "lucide-react";
+import { FileStack, Moon, Settings, Sun, Users, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GlobalSearch } from "@/components/search-bar";
@@ -95,6 +95,9 @@ export function AppRail({ route }: { route: Route }) {
       </div>
       <RailItem label="Studies" Icon={FileStack} to={href.studies()} active={route.page === "studies"} />
       <RailItem label="Patients" Icon={Users} to={href.patients()} active={route.page === "patients"} />
+      <div className="mt-auto">
+        <RailItem label="Settings" Icon={Settings} to={href.settings()} active={route.page === "settings"} />
+      </div>
     </nav>
   );
 }

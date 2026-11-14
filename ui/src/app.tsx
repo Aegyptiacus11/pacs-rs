@@ -5,11 +5,11 @@ import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import { AppHeader, AppRail } from "@/components/app-header";
 import { useRoute } from "@/lib/route";
-import { may, useSession } from "@/lib/session";
+import { useSession } from "@/lib/session";
 import { PatientsPage } from "@/pages/patients-page";
 import { SignInPage } from "@/pages/sign-in-page";
 import { StudiesPage } from "@/pages/studies-page";
-import { UsersPage } from "@/pages/users-page";
+import { SettingsPage } from "@/pages/settings-page";
 
 // Cornerstone loads only when a series is opened
 const ViewerPage = lazy(() => import("@/viewer/viewer-page").then((m) => ({ default: m.ViewerPage })));
@@ -42,8 +42,8 @@ export function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <AppHeader route={route} />
         <main className="min-h-0 flex-1 overflow-hidden">
-          {route.page === "users" && may("admin", session.user) ? (
-            <UsersPage />
+          {route.page === "settings" ? (
+            <SettingsPage section={route.section} />
           ) : route.page === "patients" ? (
             <PatientsPage open={route.open} />
           ) : (
