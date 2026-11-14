@@ -897,3 +897,79 @@ async fn cors_preflight_passes_the_guard() {
         "https://viewer.example"
     );
 }
+
+async fn download_token(app: &Router, token: &str, path: &str) -> Reply {
+    post(app, "/auth/download-token", Some(token), json!({"path": path})).await
+}
+
+#[tokio::test]
+async fn a_download_token_is_good_for_one_path_and_only_in_the_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let tokens = one_of_each(&app, &admin).await;
+    let reader = tokens["reader"].as_str();
+    for seed in [95, 96] {
+        let bytes = SyntheticSeries::new(seed, 1).slice_bytes(0);
+        let upload = send(&app, Method::POST, "/instances", Some(&admin), None, Some(bytes)).await;
+        assert_eq!(upload.status, StatusCode::OK);
+    }
+    let studies = get(&app, "/studies", Some(reader)).await;
+    let ids: Vec<&str> = studies.body.as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
+    let archive = format!("/studies/{}/archive", ids[0]);
+    let other = format!("/studies/{}/archive", ids[1]);
+
+    assert_eq!(download_token(&app, "nonsense", &archive).await.status, StatusCode::UNAUTHORIZED);
+    let made = download_token(&app, reader, &archive).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.body);
+    assert_eq!(made.body["expires_in"], 60);
+    let token = made.body["token"].as_str().unwrap();
+
+    // In the URL, with no header, the browser gets the archive.
+    let raw = |method: Method, uri: String| {
+        let request = Request::builder().method(method).uri(uri).body(Body::empty()).unwrap();
+        app.clone().oneshot(request)
+    };
+    let zip = raw(Method::GET, format!("{archive}?token={token}")).await.unwrap();
+    assert_eq!(zip.status(), StatusCode::OK);
+    assert!(zip.headers()["content-type"].to_str().unwrap().contains("zip"));
+    let bytes = zip.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..2], b"PK");
+
+    // Not for another path, another method, the header, or once changed.
+    assert_eq!(raw(Method::GET, format!("{other}?token={token}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(raw(Method::GET, format!("/studies?token={token}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(raw(Method::GET, format!("{archive}?x=1&token={token}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(raw(Method::DELETE, format!("/studies/{}?token={token}", ids[0])).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(raw(Method::POST, format!("{archive}?token={token}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(raw(Method::GET, format!("{archive}?token={token}x")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(get(&app, &archive, Some(token)).await.status, StatusCode::UNAUTHORIZED, "as a Bearer");
+    assert_eq!(get(&app, "/studies", Some(token)).await.status, StatusCode::UNAUTHORIZED, "as a Bearer");
+    // An access token is never accepted from a URL.
+    assert_eq!(raw(Method::GET, format!("{archive}?token={reader}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(raw(Method::GET, format!("/studies?token={admin}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    // A path with a query is bound with its query.
+    let both = format!("/tools/create-archive?resources={},{}", ids[0], ids[1]);
+    let made = download_token(&app, reader, &both).await;
+    let token = made.body["token"].as_str().unwrap();
+    assert_eq!(raw(Method::GET, format!("{both}&token={token}")).await.unwrap().status(), StatusCode::OK);
+    let one = format!("/tools/create-archive?resources={}", ids[0]);
+    assert_eq!(raw(Method::GET, format!("{one}&token={token}")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    // No token for accounts, for what is open, for what the role may not read, or for what is no path.
+    for path in ["/users", "/auth/me", "/auth/logout-all", "/healthz", "/ui/"] {
+        assert_eq!(download_token(&app, &admin, path).await.status, StatusCode::FORBIDDEN, "{path}");
+    }
+    assert_eq!(download_token(&app, reader, "/modalities").await.status, StatusCode::FORBIDDEN);
+    assert_eq!(download_token(&app, &tokens["editor"], "/modalities").await.status, StatusCode::OK);
+    for path in ["studies", "", "https://evil.example/x", "/studies/a b", "/studies?token=x", "/studies#x"] {
+        let reply = download_token(&app, &admin, path).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{path:?}");
+    }
+    // A deactivated user's token still runs out by itself within the minute; a role is checked
+    // again when it is used.
+    let made = download_token(&app, &tokens["editor"], "/modalities").await;
+    let token = made.body["token"].as_str().unwrap();
+    assert_eq!(raw(Method::GET, format!("/modalities?token={token}")).await.unwrap().status(), StatusCode::OK);
+}

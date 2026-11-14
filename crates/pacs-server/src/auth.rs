@@ -14,6 +14,12 @@
 //! | `manager` | also delete |
 //! | `admin` | also manage users (`/users`) |
 //!
+//! A browser's own downloads (a link to an archive, a file) cannot carry the header. For
+//! those, `POST /auth/download-token` with `{"path": "/studies/<id>/archive"}` gives a token
+//! good for one minute and for `GET` on that path alone, sent as `?token=`. It is the only
+//! token a URL may carry: an access token in a query is refused, and so is a download token
+//! in the header.
+//!
 //! Open without a token: `/healthz`, the web interface's own files (not `/ui/api/`), the
 //! sign-in routes, and `OPTIONS`. Everything else, a route that does not exist included, is
 //! refused without one.
@@ -180,9 +186,16 @@ type Sessions = Auth<IndexUsers, SqlRefreshStore>;
 #[derive(Clone)]
 pub struct Login {
     sessions: Arc<Sessions>,
+    /// Signs download tokens: the sessions' secret, one minute.
+    downloads: AccessTokens,
     index: Index,
     cookie: CookieSettings,
 }
+
+/// How long a download token is good for: time for the browser to start the download.
+const DOWNLOAD_TOKEN_SECONDS: u64 = 60;
+/// The claim of a download token: the path, query included, it is good for.
+const DOWNLOAD_CLAIM: &str = "dl";
 
 /// Passwords shorter than this are refused when a user is made or changed.
 pub const MIN_PASSWORD_BYTES: usize = 12;
@@ -277,9 +290,14 @@ pub async fn open_login(
             .context("making the first administrator")?;
         tracing::info!(%login, "first administrator made; PACS_ADMIN_PASSWORD is no longer read");
     }
+    let downloads = access
+        .clone()
+        .with_ttl(std::time::Duration::from_secs(DOWNLOAD_TOKEN_SECONDS))
+        .context("the download tokens")?;
     let sessions = Arc::new(Auth::new(IndexUsers(index.clone()), access, refresh));
     Ok(Some(Login {
         sessions,
+        downloads,
         index: index.clone(),
         cookie,
     }))
@@ -341,24 +359,60 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     if is_open(&method, &path) {
         return next.run(request).await;
     }
-    let token = request
+    let invalid = || {
+        refused(StatusCode::UNAUTHORIZED, "Invalid or expired access token").into_response()
+    };
+    let bearer = request
         .headers()
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, token)| token.trim());
-    let Some(token) = token else {
-        return refused(StatusCode::UNAUTHORIZED, "Not authenticated").into_response();
-    };
-    let Ok(claims) = login.sessions.access.verify(token) else {
-        return refused(StatusCode::UNAUTHORIZED, "Invalid or expired access token")
-            .into_response();
+        .map(|(_, token)| token.trim().to_owned());
+    let (query_token, without_token) = split_token(request.uri().query());
+    let claims = match (bearer, query_token) {
+        (Some(token), _) => {
+            let Ok(claims) = login.sessions.access.verify(&token) else {
+                return invalid();
+            };
+            // a download token is for a URL, and for nothing else
+            if claims.get(DOWNLOAD_CLAIM).is_some() {
+                return invalid();
+            }
+            claims
+        }
+        (None, Some(token)) => {
+            let Ok(claims) = login.sessions.access.verify(&token) else {
+                return invalid();
+            };
+            // Only a download token may travel in a URL, only for GET, only for its own path.
+            let asked = match &without_token {
+                Some(query) => format!("{path}?{query}"),
+                None => path.clone(),
+            };
+            let for_this = claims.get(DOWNLOAD_CLAIM).and_then(Value::as_str) == Some(&asked);
+            if method != Method::GET || !for_this {
+                return invalid();
+            }
+            // the routes never see the token
+            let stripped = asked.parse().ok().and_then(|path_and_query| {
+                let mut parts = request.uri().clone().into_parts();
+                parts.path_and_query = Some(path_and_query);
+                axum::http::Uri::from_parts(parts).ok()
+            });
+            let Some(uri) = stripped else {
+                return invalid();
+            };
+            *request.uri_mut() = uri;
+            claims
+        }
+        (None, None) => {
+            return refused(StatusCode::UNAUTHORIZED, "Not authenticated").into_response();
+        }
     };
     // A token of ours without a role we know: made by another version, refuse it.
     let Some(user) = signed_in(&claims) else {
-        return refused(StatusCode::UNAUTHORIZED, "Invalid or expired access token")
-            .into_response();
+        return invalid();
     };
     if !user.role.allows(right_for(&method, &path)) {
         tracing::info!(login = %user.login, role = user.role.as_str(), %method, %path, "refused: role");
@@ -366,6 +420,74 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     }
     request.extensions_mut().insert(user);
     next.run(request).await
+}
+
+/// The `token` parameter of a query, and the query without it (`None` when nothing is left).
+fn split_token(query: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(query) = query else {
+        return (None, None);
+    };
+    let (mut token, mut rest) = (None, Vec::new());
+    for pair in query.split('&') {
+        match pair.strip_prefix("token=") {
+            Some(value) if token.is_none() => token = Some(value.to_owned()),
+            _ => rest.push(pair),
+        }
+    }
+    let rest = (!rest.is_empty()).then(|| rest.join("&"));
+    (token, rest)
+}
+
+/// `uri` for the log: a download token in it is a credential for a minute, so it is not
+/// written out.
+pub fn for_log(uri: &axum::http::Uri) -> String {
+    let (token, rest) = split_token(uri.query());
+    match (token, rest) {
+        (None, _) => uri.to_string(),
+        (Some(_), None) => format!("{}?token=...", uri.path()),
+        (Some(_), Some(rest)) => format!("{}?{rest}&token=...", uri.path()),
+    }
+}
+
+#[derive(Deserialize)]
+struct DownloadRequest {
+    path: String,
+}
+
+/// `POST /auth/download-token`: a token for one `GET` of `path` (with its query, if any), for
+/// a link the browser follows itself. Refused for a path the user may not read.
+async fn download_token(
+    State(login): State<Login>,
+    Extension(user): Extension<SignedIn>,
+    asked: Result<Json<DownloadRequest>, JsonRejection>,
+) -> Result<Json<Value>, Refusal> {
+    let asked = body(asked)?.path;
+    let path = asked.split('?').next().unwrap_or_default();
+    let usable = asked.starts_with('/')
+        && asked.len() <= 4096
+        && !asked.contains(['#', ' ', '\r', '\n'])
+        && split_token(asked.split_once('?').map(|(_, query)| query)).0.is_none()
+        && asked.parse::<axum::http::uri::PathAndQuery>().is_ok();
+    if !usable {
+        return Err(unprocessable("path: a path of this server, starting with /".into()));
+    }
+    // nothing of the accounts by URL, and nothing that needs no token anyway
+    let right = right_for(&Method::GET, path);
+    if matches!(right, Right::SignedIn | Right::Admin) || is_open(&Method::GET, path) {
+        return Err(refused(StatusCode::FORBIDDEN, "No download token for this path"));
+    }
+    if !user.role.allows(right) {
+        return Err(refused(StatusCode::FORBIDDEN, "Your role does not allow this"));
+    }
+    let mut claims = serde_json::Map::new();
+    claims.insert("role".into(), user.role.as_str().into());
+    claims.insert("login".into(), user.login.into());
+    claims.insert(DOWNLOAD_CLAIM.into(), asked.into());
+    let token = login
+        .downloads
+        .issue(&user.id, &claims)
+        .map_err(|e| internal("making a download token", e))?;
+    Ok(Json(json!({ "token": token, "expires_in": DOWNLOAD_TOKEN_SECONDS })))
 }
 
 fn shown(user: &StoredUser) -> Value {
@@ -574,6 +696,7 @@ impl Login {
         let own = Router::new()
             .route("/auth/me", get(me))
             .route("/auth/password", post(change_password))
+            .route("/auth/download-token", post(download_token))
             .route("/users", get(list_users).post(create_user))
             .route("/users/{id}", put(update_user).delete(delete_user))
             .with_state(self.clone());
@@ -684,6 +807,27 @@ mod tests {
         for (method, path, right) in cases {
             assert_eq!(right_for(&method, path), right, "{method} {path}");
         }
+    }
+
+    #[test]
+    fn the_token_of_a_query_and_the_log() {
+        let split = |q| split_token(Some(q));
+        assert_eq!(split_token(None), (None, None));
+        assert_eq!(split("a=1"), (None, Some("a=1".into())));
+        assert_eq!(split("token=T"), (Some("T".into()), None));
+        assert_eq!(split("a=1&token=T&b=2"), (Some("T".into()), Some("a=1&b=2".into())));
+        // only a parameter named token, and only the first
+        assert_eq!(split("mytoken=T"), (None, Some("mytoken=T".into())));
+        assert_eq!(split("token=T&token=U"), (Some("T".into()), Some("token=U".into())));
+
+        let log = |uri: &str| for_log(&uri.parse().unwrap());
+        assert_eq!(log("/studies?limit=2"), "/studies?limit=2");
+        assert_eq!(log("/studies/a/archive?token=SECRET"), "/studies/a/archive?token=...");
+        assert_eq!(
+            log("/tools/create-archive?resources=a,b&token=SECRET"),
+            "/tools/create-archive?resources=a,b&token=..."
+        );
+        assert!(!log("/x?token=SECRET&y=1").contains("SECRET"));
     }
 
     #[test]
