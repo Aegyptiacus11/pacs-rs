@@ -16,11 +16,13 @@ on:
 permissions:
   contents: read
 
-# github.workflow is the caller's name when release.yml calls this, so its tests and a ci run
-# on the same ref do not cancel each other.
+# A newer push to a pull request cancels the run of the older one. Nothing else is ever
+# cancelled: a push to main or a release has a group of its own (its commit), so a code change
+# is tested even when a documentation change, whose run skips the tests, follows it at once.
+# github.workflow is the caller's name when release.yml calls this.
 concurrency:
-  group: ${{ github.workflow }}-tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-tests-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
