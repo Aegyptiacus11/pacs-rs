@@ -1,0 +1,15 @@
+# The documentation site, https://aegyptiacus11.github.io/pacs-rs/, built by mdBook from docs/
+# (.github/workflows/docs.yml). `mdbook serve --open` shows it while writing.
+[book]
+title = "pacs-rs"
+description = "An open-source PACS written in Rust"
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "target/book"
+
+[output.html]
+site-url = "/pacs-rs/"
+git-repository-url = "https://github.com/Aegyptiacus11/pacs-rs"
+edit-url-template = "https://github.com/Aegyptiacus11/pacs-rs/edit/main/docs/{path}"

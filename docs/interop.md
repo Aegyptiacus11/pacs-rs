@@ -1,6 +1,6 @@
 # Hospital interfaces: the plan
 
-Steps 1 to 4 are built (`crates/pacs-dimse`, see the README's "DIMSE"), C-GET aside; the rest is
+Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside; the rest is
 not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today. It is
 a **research PACS** beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies
 them when the project asks for it, and serves them to the research tools (viewers, annotation platforms,

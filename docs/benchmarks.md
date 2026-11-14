@@ -1,7 +1,7 @@
 # Benchmarks
 
-`scripts/bench.sh` against pacs-rs and the reference server (see the README, "Comparing with a
-reference server"), with the same client and the same files.
+`scripts/bench.sh` against pacs-rs and the reference server (see [Comparing with a
+reference server](building.md#comparing-with-a-reference-server)), with the same client and the same files.
 
 ## 2026-11-04: well-formed files that cost far more to read than their size
 

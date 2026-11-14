@@ -2,7 +2,7 @@
 //! over DICOMweb and over the REST API; the answers compared tag by tag.
 //!
 //! Runs only when `PACS_TEST_REFERENCE_URL` names the reference server's DICOMweb root,
-//! e.g. `http://127.0.0.1:18042/dicom-web` (README, "Comparing with a reference server").
+//! e.g. `http://127.0.0.1:18042/dicom-web` (docs/building.md, "Comparing with a reference server").
 //! Differences that are deliberate are listed, with the reason, in `ALLOWED`; anything
 //! else fails the test with the full list of what differs.
 
