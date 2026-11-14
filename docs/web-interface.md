@@ -41,8 +41,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   study anywhere in the archive and shows it on the page already open: on the studies, the
   patient's studies or the study itself; on the patients, the patient's record. Each list has
   its own box (`/`) that filters that list as words are typed and never leaves the page.
-- **Patients**: a list (latest study first, by name or by number of studies, a page at a time
-  from `/ui/api/patients`) and the chosen patient's record: who they are, their totals
+- **Patients**: laid out as the studies are. A list (latest study first, by name or by number
+  of studies, a page at a time from `/ui/api/patients`, each with its modalities and images)
+  and, in the pane beside it, the chosen patient's record: who they are, their totals
   (studies, series, images, first study, modalities), and a timeline of their studies, newest
   first, each with its series as thumbnails. Tick two studies to compare them: the viewer shows
   each one's largest series side by side, scrolling together. Download everything of the
