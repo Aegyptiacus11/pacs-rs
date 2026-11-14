@@ -10,8 +10,14 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Narrow screens**: below 768 pixels the rail lies along the bottom, the study list shows
   two lines a study (who and what, when and how) and the patients list takes the whole width;
   a tap shows the study or the patient over the whole page, closed with its cross. Between
-  768 and 1024 pixels the chosen study opens the same way. The viewer is made for a wide
-  screen.
+  768 and 1024 pixels the chosen study opens the same way. In the viewer the tools stay on
+  one line, scrolled sideways, and the series list slides over the images and closes once a
+  series is chosen.
+- **Touch**: one finger runs the chosen tool; two fingers pinch to zoom and drag to pan. A drag
+  across the viewport takes the window through the image's whole range, whatever the size
+  of the screen. With a finger
+  there is no wheel, so a touch screen starts on the Scroll tool: a drag up or down goes
+  through the images. In a 3D view one finger turns it and two zoom.
 - **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:
   a filter box (`/`), the date, the modality (every DICOM imaging modality), the sex and the age
   at the study (0–17, 18–39, 40–64, 65+), each with how many studies it holds. The date opens
@@ -35,8 +41,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   study anywhere in the archive and shows it on the page already open: on the studies, the
   patient's studies or the study itself; on the patients, the patient's record. Each list has
   its own box (`/`) that filters that list as words are typed and never leaves the page.
-- **Patients**: a list (latest study first, by name or by number of studies, a page at a time
-  from `/ui/api/patients`) and the chosen patient's record: who they are, their totals
+- **Patients**: laid out as the studies are. A list (latest study first, by name or by number
+  of studies, a page at a time from `/ui/api/patients`, each with its modalities and images)
+  and, in the pane beside it, the chosen patient's record: who they are, their totals
   (studies, series, images, first study, modalities), and a timeline of their studies, newest
   first, each with its series as thumbnails. Tick two studies to compare them: the viewer shows
   each one's largest series side by side, scrolling together. Download everything of the
@@ -58,7 +65,7 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
 - **Viewer**: full screen and dark, laid out like a reading workstation. A toolbar of labelled
-  tools: window/level with presets and invert, pan, zoom, a magnifying glass (held over a spot, 1.5 to 8 times with the wheel), measurements
+  tools: window/level with presets and invert, scroll (a drag through the images; the wheel always does), pan, zoom, a magnifying glass (held over a spot, 1.5 to 8 times with the wheel), measurements
   (length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate
   and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
   series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), cine, DICOM
@@ -86,8 +93,13 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
 - **Measurements are kept**: each one is saved with its study as soon as it is drawn, changed
-  or removed, and is there again when the study is opened, in any browser. Clear removes them
-  all, with an undo.
+  or removed, and is there again when the study is opened, in any browser. A click or a tap on one,
+  or anywhere inside a rectangle or an ellipse, selects it; one on nothing lets go of the
+  selection. On a touch screen a measurement is drawn by dragging: a tap starts none. Delete (the key, the button, or on a touch or narrow screen the bar that
+  comes up under the image) removes it; Clear removes them all. Both can
+  be undone. Escape drops a measurement being drawn, then deselects, then goes back to the
+  tool the viewer starts with; it never leaves the viewer, which the arrow at the top left
+  does.
 
 The shared protocols are at `/ui/api/protocols`: `GET` lists them (most recently saved first),
 `PUT /ui/api/protocols/{id}` keeps one (a JSON object whose `id` is the path's, at most 64 KiB;

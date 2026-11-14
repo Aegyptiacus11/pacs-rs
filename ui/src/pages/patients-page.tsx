@@ -80,8 +80,9 @@ export function PatientsPage({ open }: { open: string | null }) {
 
   return (
     <div className="flex h-full">
-      <section className="flex w-full shrink-0 flex-col md:w-[26rem] md:border-r">
-        <div className="px-5 pt-5 pb-3">
+      {/* as on the studies page: the list is the page, and the chosen patient sits beside it */}
+      <section className="flex min-w-0 flex-1 flex-col">
+        <div className="px-4 pt-4 pb-3 md:px-6 md:pt-5">
           <div className="flex items-end justify-between gap-3">
             <div>
               <h1 className="text-lg font-semibold tracking-tight">Patients</h1>
@@ -103,9 +104,16 @@ export function PatientsPage({ open }: { open: string | null }) {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <FilterBox value={typed} onChange={setTyped} placeholder="Filter: name or patient ID…" className="mt-3" />
+          <FilterBox value={typed} onChange={setTyped} placeholder="Filter: name or patient ID…" className="mt-3 w-full sm:w-72" />
         </div>
         <div ref={list} tabIndex={0} onKeyDown={onListKey} aria-label="Patients" className="min-h-0 flex-1 overflow-y-auto border-t outline-none">
+          {/* what the columns are, where there is room for columns */}
+          <div className="sticky top-0 z-10 hidden h-9 items-center gap-3 border-b bg-background px-6 text-xs font-medium text-muted-foreground md:flex">
+            <span className="flex-1 pl-12">Patient</span>
+            <span className="w-44">Modalities</span>
+            <span className="w-20 text-right">Images</span>
+            <span className="w-28 text-right">Last study</span>
+          </div>
           {page.isPending &&
             Array.from({ length: 8 }, (_, i) => (
               <div key={i} className="flex items-center gap-3 border-b px-5 py-3">
@@ -121,7 +129,7 @@ export function PatientsPage({ open }: { open: string | null }) {
               // a second click on the chosen patient lets them go
               onClick={() => setCurrent((c) => (c === p.id ? null : p.id))}
               className={cn(
-                "flex w-full items-center gap-3 border-b px-5 py-2.5 text-left hover:bg-muted/50",
+                "flex w-full items-center gap-3 border-b px-4 py-2.5 text-left hover:bg-muted/50 md:px-6",
                 p.id === current && "bg-selection-soft shadow-[inset_3px_0_0_var(--selection)] hover:bg-selection-soft",
               )}
             >
@@ -130,7 +138,11 @@ export function PatientsPage({ open }: { open: string | null }) {
                 <span className="block truncate font-medium">{personName(p.name)}</span>
                 <span className="block truncate text-xs text-muted-foreground">{[p.patientId, sexAge(p.sex, p.birth)].filter(Boolean).join(" · ")}</span>
               </span>
-              <span className="shrink-0 text-right">
+              <span className="hidden w-44 shrink-0 md:block">
+                <Modalities list={p.modalities} />
+              </span>
+              <span className="tabular hidden w-20 shrink-0 text-right text-sm md:block">{p.instances.toLocaleString()}</span>
+              <span className="shrink-0 text-right md:w-28">
                 <span className="tabular block text-xs">{formatDate(p.last)}</span>
                 <span className="block text-[11px] text-muted-foreground">{plural(p.studies, "study", "studies")}</span>
               </span>
@@ -164,10 +176,10 @@ export function PatientsPage({ open }: { open: string | null }) {
         )}
       </section>
 
-      {/* beside the list on a wide screen; over the whole page on a narrow one, once a patient is chosen */}
-      <main
+      {/* beside the list on a wide screen; over the whole page on a narrower one, once a patient is chosen */}
+      <aside
         aria-label="The chosen patient"
-        className={cn("min-w-0 flex-1 overflow-y-auto bg-background md:static md:block", current ? "fixed inset-0 z-30" : "hidden")}
+        className={cn("overflow-y-auto bg-card lg:static lg:block lg:w-[400px] lg:shrink-0 lg:border-l", current ? "fixed inset-0 z-30" : "hidden")}
       >
         {current ? (
           <PatientRecord
@@ -191,7 +203,7 @@ export function PatientsPage({ open }: { open: string | null }) {
             </div>
           </div>
         )}
-      </main>
+      </aside>
     </div>
   );
 }
@@ -219,14 +231,14 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
   // two at most: a third replaces the first ticked
   const tick = (sid: string, on: boolean) => setCompare((c) => (on ? [...c.filter((x) => x !== sid), sid].slice(-2) : c.filter((x) => x !== sid)));
 
-  if (!who) return <div className="space-y-4 p-8">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-16" />)}</div>;
+  if (!who) return <div className="space-y-4 p-5">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-16" />)}</div>;
   return (
     <div className="flex min-h-full flex-col">
-      <header className="relative flex flex-wrap items-center gap-x-4 gap-y-3 border-b bg-card px-4 py-5 md:px-8 md:py-6">
-        <span className="grid size-14 shrink-0 place-items-center rounded-full bg-secondary text-lg font-medium text-muted-foreground ring-1 ring-border">{initials(who.name)}</span>
-        {/* on a narrow screen the name takes the first line, under the close button, and the actions the second */}
-        <div className="mr-auto min-w-0 flex-1 basis-48 pr-8 md:pr-0">
-          <h2 className="truncate text-xl font-semibold tracking-tight">{personName(who.name)}</h2>
+      <header className="relative flex flex-wrap items-center gap-x-3 gap-y-3 border-b px-5 py-5">
+        <span className="grid size-10 shrink-0 place-items-center rounded-full bg-secondary text-sm font-medium text-muted-foreground ring-1 ring-border">{initials(who.name)}</span>
+        {/* the name takes the first line, beside the close button, and the actions the second */}
+        <div className="mr-auto min-w-0 flex-1 basis-48 pr-8">
+          <h2 className="truncate text-lg font-semibold tracking-tight">{personName(who.name)}</h2>
           <div className="truncate text-sm text-muted-foreground">
             {[who.patientId, sexAge(who.sex, who.birth), isoDate(who.birth) && `born ${formatDate(who.birth)}`].filter(Boolean).join(" · ")}
           </div>
@@ -266,14 +278,14 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
           size="icon-sm"
           aria-label="Close the patient"
           title="Close (Esc)"
-          className="text-muted-foreground max-md:absolute max-md:top-4 max-md:right-3"
+          className="absolute top-4 right-3 text-muted-foreground"
           onClick={onClose}
         >
           <X />
         </Button>
       </header>
 
-      <section className="grid grid-cols-2 divide-x border-b bg-card sm:grid-cols-5">
+      <section className="grid grid-cols-2 border-b [&>*]:border-b [&>*:nth-child(odd)]:border-r [&>*:nth-last-child(1)]:col-span-2 [&>*:nth-last-child(1)]:border-r-0 [&>*:nth-last-child(1)]:border-b-0">
         <Fact label="Studies">{list.length || "…"}</Fact>
         <Fact label="Series">{series.toLocaleString()}</Fact>
         <Fact label="Images">{instances.toLocaleString()}</Fact>
@@ -283,10 +295,10 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
         </Fact>
       </section>
 
-      <section className="px-4 py-5 md:px-8 md:py-6">
+      <section className="px-5 py-5">
         <div className="mb-4 flex items-baseline justify-between">
           <h3 className="text-sm font-medium">Timeline</h3>
-          <span className="hidden text-xs text-muted-foreground sm:inline">Tick two studies to compare them side by side</span>
+          <span className="text-xs text-muted-foreground">Tick two to compare</span>
         </div>
         {studies.isPending && <Skeleton className="h-40" />}
         <ol className="relative">
@@ -302,7 +314,7 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
       </section>
 
       {picked.length > 0 && (
-        <div className="sticky bottom-0 mt-auto flex items-center gap-3 border-t bg-popover/95 px-4 py-3 backdrop-blur md:px-8 animate-in fade-in slide-in-from-bottom-2">
+        <div className="sticky bottom-0 mt-auto flex items-center gap-3 border-t bg-popover/95 px-5 py-3 backdrop-blur animate-in fade-in slide-in-from-bottom-2">
           <Columns2 className="size-4 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-sm">
             {picked.length === 1 ? (
@@ -345,7 +357,7 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
 function TimelineStudy({ study: s, newest, ticked, onTick }: { study: Study; newest: boolean; ticked: boolean; onTick: (on: boolean) => void }) {
   const details = useStudySeries(s.id);
   return (
-    <article className={cn("rounded-lg border bg-card p-4 transition-colors", ticked && "border-selection/50 bg-selection-soft/40")}>
+    <article className={cn("rounded-lg border bg-background p-3.5 transition-colors", ticked && "border-selection/50 bg-selection-soft/40")}>
       <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
         {/* wide enough to read: on a narrow screen Compare and Open go to the line below */}
         <div className="min-w-0 flex-1 basis-56">

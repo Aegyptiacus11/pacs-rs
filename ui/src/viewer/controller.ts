@@ -30,6 +30,7 @@ import { init as loaderInit, wadors } from "@cornerstonejs/dicom-image-loader";
 import {
   init as toolsInit,
   addTool,
+  cancelActiveManipulations,
   ToolGroupManager,
   WindowLevelTool,
   PanTool,
@@ -54,8 +55,31 @@ import { first, num, tag } from "@/lib/pixels";
 import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
 
+/** Cornerstone holds a quick click for 400 ms, in case a second one makes it a double click,
+ * before it acts on it; what a tap began is there to be dropped after that. */
+const TAP_SETTLED_MS = 450;
+
+/** A drag across this many pixels takes the window through the image's whole range. */
+const WINDOW_SWEEP = 1000;
+
+// Cornerstone's window tool changes the width and the level by a fixed amount a pixel, set
+// from the image's range so that about 1000 pixels cover it: right on a monitor, far too
+// slow on a phone, where the viewport is some 375 pixels wide and the same change takes
+// three swipes. Here a drag across the viewport covers the range whatever its size; on a
+// viewport of 1000 pixels or more nothing changes.
+class SizedWindowLevelTool extends WindowLevelTool {
+  getNewRange(args: any) {
+    const smaller = Math.min(args.viewport?.element?.clientWidth || WINDOW_SWEEP, args.viewport?.element?.clientHeight || WINDOW_SWEEP);
+    const gain = Math.max(1, WINDOW_SWEEP / Math.max(smaller, 1));
+    const [dx, dy] = args.deltaPointsCanvas;
+    return super.getNewRange({ ...args, deltaPointsCanvas: [dx * gain, dy * gain] });
+  }
+}
+
 export const TOOLS = {
-  windowLevel: WindowLevelTool,
+  // through the images: always on the wheel, and on the left button or one finger when chosen
+  scroll: StackScrollTool,
+  windowLevel: SizedWindowLevelTool,
   pan: PanTool,
   zoom: ZoomTool,
   magnify: MagnifyTool,
@@ -320,6 +344,8 @@ export type ViewerState = {
   index: number;
   count: number;
   instanceFile: string | null;
+  /** how many measurements are selected */
+  selected: number;
   meta: any;
   canMpr: boolean;
   canAdd: boolean;
@@ -340,7 +366,8 @@ export class Viewer {
   private linked = false;
   private syncing = false;
   private overlaysOn = true;
-  private tool: ToolName = "windowLevel";
+  // with a finger there is no wheel: going through the images is the tool one starts with
+  private tool: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
   private loadingVolume = false;
   private stackLayout = 0;
   private stackSeries: string[] = [];
@@ -355,6 +382,126 @@ export class Viewer {
   /** Called once when measurements could not be saved. */
   onSaveFailed: ((message: string) => void) | null = null;
   private saveFailed = false;
+  /** The measurements that were finished: one being drawn is not among them yet. */
+  private drawn = new Set<string>();
+  private onDrawn = (e: any) => {
+    const a = e.detail?.annotation;
+    const uid = a?.annotationUID;
+    if (!uid) return;
+    // A tap with a measuring tool chosen makes a measurement a few pixels across, which then
+    // sits on the image, almost invisible, and is what gets selected and deleted in place
+    // of the one meant. A drawing that small was not meant as one.
+    if (!this.drawn.has(uid) && this.tooSmall(a)) {
+      annotation.state.removeAnnotation(uid);
+      this.cells.forEach((c) => c.viewport.render());
+      return;
+    }
+    this.drawn.add(uid);
+  };
+
+  /** Whether a measurement with two points or more spans less than a tap does on screen. */
+  private tooSmall(a: any) {
+    const viewport: any = this.cells[this.current]?.viewport;
+    const points: number[][] = a.data?.handles?.points ?? [];
+    if (!viewport?.worldToCanvas || points.length < 2) return false;
+    const on = points.map((p) => viewport.worldToCanvas(p));
+    let span = 0;
+    for (const p of on) for (const q of on) span = Math.max(span, Math.hypot(p[0] - q[0], p[1] - q[1]));
+    return span < 8;
+  }
+
+  // ---- a tap or a click, on top of what Cornerstone does with it ----
+  // Cornerstone selects a measurement when the pointer comes down on its outline. A finger
+  // rarely lands on a line one pixel wide, so a tap anywhere inside a rectangle or an ellipse
+  // selects it too (the smallest one, when they overlap), and a tap on nothing lets go of the
+  // selection.
+  //
+  // Cornerstone also starts a measurement on a click without a drag: the shape then follows
+  // the mouse until the next click. A finger has nothing to follow, so on a touch screen a
+  // tap with a measuring tool left a shape waiting for its end, which the next tap anywhere
+  // gave it. There a tap starts nothing: a measurement is drawn by dragging.
+  private down = { x: 0, y: 0, at: 0, selected: "", drawing: false, finger: false };
+  private unfinished() {
+    return annotation.state.getAllAnnotations().filter((a: any) => !this.drawn.has(a.annotationUID));
+  }
+  private onPointerDown = (e: PointerEvent) => {
+    this.down = {
+      x: e.clientX,
+      y: e.clientY,
+      at: performance.now(),
+      selected: annotation.selection.getAnnotationsSelected().join(),
+      drawing: this.unfinished().length > 0,
+      finger: e.pointerType === "touch" || matchMedia("(pointer: coarse)").matches,
+    };
+  };
+  private onPointerUp = (e: PointerEvent) => {
+    if (Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 8 || performance.now() - this.down.at > 500) return;
+    const cell = this.cells.find((c) => c.element.contains(e.target as Node));
+    if (!cell || cell.kind === "3d") return;
+    const { selected: before, drawing, finger } = this.down;
+    this.tapped(cell, e.clientX, e.clientY, before);
+    if (!finger || drawing) return;
+    // what the tap selected or let go of, before a shape it begins takes the selection
+    const wanted = annotation.selection.getAnnotationsSelected();
+    setTimeout(() => this.dropBegun(wanted), TAP_SETTLED_MS);
+  };
+  /** What a tap began, if anything, goes: Cornerstone has started it by now. A tap that ends
+   * an angle's second arm began nothing and is not looked at here. */
+  private dropBegun(wanted: string[]) {
+    if (this.closed) return;
+    const begun = this.unfinished();
+    if (!begun.length) return;
+    for (const c of this.cells) cancelActiveManipulations(c.element);
+    for (const a of begun as any[]) {
+      this.drawn.delete(a.annotationUID);
+      annotation.state.removeAnnotation(a.annotationUID);
+    }
+    annotation.selection.deselectAnnotation();
+    for (const uid of wanted) if (annotation.state.getAnnotation(uid)) annotation.selection.setAnnotationSelected(uid, true, true);
+    this.cells.forEach((c) => c.viewport.render());
+    this.emit();
+  }
+  private tapped(cell: Cell, clientX: number, clientY: number, before: string) {
+    if (this.closed || !this.cells.includes(cell)) return;
+    const box = cell.element.getBoundingClientRect();
+    const at: [number, number] = [clientX - box.left, clientY - box.top];
+    const viewport: any = cell.viewport;
+    const shown = (name: ToolName): any[] => {
+      const tool: any = this.stackGroup.getToolInstance(TOOLS[name].toolName);
+      const all = annotation.state.getAnnotations(TOOLS[name].toolName, cell.element) ?? [];
+      return tool?.filterInteractableAnnotationsForElement?.(cell.element, all) ?? [];
+    };
+    let inside: { uid: string; area: number } | null = null;
+    for (const name of ["rectangle", "ellipse"] as const) {
+      for (const a of shown(name)) {
+        const on: number[][] = (a.data?.handles?.points ?? []).map((p: any) => viewport.worldToCanvas(p));
+        if (on.length < 2) continue;
+        const xs = on.map((p) => p[0]), ys = on.map((p) => p[1]);
+        const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+        if (at[0] < x0 || at[0] > x1 || at[1] < y0 || at[1] > y1) continue;
+        const area = (x1 - x0) * (y1 - y0);
+        if (!inside || area < inside.area) inside = { uid: a.annotationUID, area };
+      }
+    }
+    const now = annotation.selection.getAnnotationsSelected();
+    if (inside) {
+      if (now.length === 1 && now[0] === inside.uid) return;
+      annotation.selection.setAnnotationSelected(inside.uid, true, false);
+    } else if (now.length && now.join() === before) {
+      // the tap changed nothing: it was on nothing, unless it was on the outline of what is
+      // selected already
+      const onSelected = now.some((uid) => {
+        const a: any = annotation.state.getAnnotation(uid);
+        const tool: any = a && this.stackGroup.getToolInstance(a.metadata?.toolName);
+        return !!tool?.isPointNearTool?.(cell.element, a, at, 24, "touch");
+      });
+      if (onSelected) return;
+      annotation.selection.deselectAnnotation();
+    } else return;
+    this.cells.forEach((c) => c.viewport.render());
+    this.emit();
+  }
+  private onSelection = () => this.emit();
   private onAnnotation = (e: any) => {
     const a = e.detail?.annotation;
     // statistics worked out again on drawing are no change
@@ -382,7 +529,7 @@ export class Viewer {
     this.stackGroup = ToolGroupManager.createToolGroup(STACK_GROUP)!;
     this.mprGroup = ToolGroupManager.createToolGroup(MPR_GROUP)!;
     for (const group of [this.stackGroup, this.mprGroup]) {
-      for (const tool of [StackScrollTool, ...Object.values(TOOLS)]) {
+      for (const tool of Object.values(TOOLS)) {
         if (tool === CrosshairsTool && group === this.stackGroup) continue;
         if (tool === CrosshairsTool)
           group.addTool(tool.toolName, {
@@ -393,24 +540,31 @@ export class Viewer {
           });
         else group.addTool(tool.toolName);
       }
-      group.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: ToolEnums.MouseBindings.Wheel }] });
     }
     // a 3D view has its own mouse, whatever tool is chosen: left turns it, middle or
     // shift-left pans, right or the wheel zooms
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     this.vrGroup = ToolGroupManager.createToolGroup(VR_GROUP)!;
     for (const tool of [TrackballRotateTool, PanTool, ZoomTool]) this.vrGroup.addTool(tool.toolName);
+    // on a touch screen: one finger turns it (one touch is the left button), two pinch to zoom
     this.vrGroup.setToolActive(TrackballRotateTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
     this.vrGroup.setToolActive(PanTool.toolName, {
       bindings: [{ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }],
     });
-    this.vrGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }] });
-    this.applyTool(null, "windowLevel");
+    this.vrGroup.setToolActive(ZoomTool.toolName, {
+      bindings: [{ mouseButton: MouseBindings.Secondary }, { mouseButton: MouseBindings.Wheel }, { numTouchPoints: 2 }],
+    });
+    this.applyTool(null, this.tool);
+    this.grid.dataset.tool = this.tool;
     // what another viewing left; this one's come from the server, study by study
     annotation.state.removeAllAnnotations();
     eventTarget.addEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
     for (const event of [ToolEnums.Events.ANNOTATION_COMPLETED, ToolEnums.Events.ANNOTATION_MODIFIED, ToolEnums.Events.ANNOTATION_REMOVED])
       eventTarget.addEventListener(event, this.onAnnotation);
+    eventTarget.addEventListener(ToolEnums.Events.ANNOTATION_COMPLETED, this.onDrawn);
+    eventTarget.addEventListener(ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, this.onSelection);
+    grid.addEventListener("pointerdown", this.onPointerDown, true);
+    grid.addEventListener("pointerup", this.onPointerUp, true);
     this.resize = new ResizeObserver(() => this.refit());
     this.resize.observe(grid);
   }
@@ -427,6 +581,10 @@ export class Viewer {
     eventTarget.removeEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
     for (const event of [ToolEnums.Events.ANNOTATION_COMPLETED, ToolEnums.Events.ANNOTATION_MODIFIED, ToolEnums.Events.ANNOTATION_REMOVED])
       eventTarget.removeEventListener(event, this.onAnnotation);
+    eventTarget.removeEventListener(ToolEnums.Events.ANNOTATION_COMPLETED, this.onDrawn);
+    eventTarget.removeEventListener(ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, this.onSelection);
+    this.grid.removeEventListener("pointerdown", this.onPointerDown, true);
+    this.grid.removeEventListener("pointerup", this.onPointerUp, true);
     // what is waiting goes now
     for (const [study, timer] of this.saves) {
       clearTimeout(timer);
@@ -466,6 +624,7 @@ export class Viewer {
             this.studyOfAnnotation.set(a.annotationUID, study);
             a.invalidated = true;
             annotation.state.addAnnotation(a, undefined as any);
+            this.drawn.add(a.annotationUID);
           }
           this.annotationsIn.add(study);
           if (list.length) this.engine.render();
@@ -518,6 +677,7 @@ export class Viewer {
       index: cell?.index ?? 0,
       count: cell?.count ?? 0,
       instanceFile: slot ? `instances/${slot.instance.ID}/file` : null,
+      selected: annotation.selection.getAnnotationsSelected().length,
       meta: slot?.meta ?? null,
       canMpr: this.planesPossible(cell?.data ?? null),
       canAdd: this.cells.length < 6,
@@ -957,15 +1117,18 @@ export class Viewer {
   }
 
   // the left button runs the chosen tool; pan stays on the middle button and shift-drag,
-  // zoom on the right button, whatever is chosen
+  // zoom on the right button, scrolling on the wheel, whatever is chosen. On a touch screen
+  // one finger runs the chosen tool (Cornerstone takes one touch for the left button), and
+  // two zoom by pinching and pan by dragging (the zoom tool does both).
   private bindings(name: ToolName, left: boolean) {
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     const b: any[] = [];
     // the magnifying glass is ours (see `lens`), not Cornerstone's: no binding for it
     if (name === "magnify") return b;
     if (left) b.push({ mouseButton: MouseBindings.Primary });
+    if (name === "scroll") b.push({ mouseButton: MouseBindings.Wheel });
     if (name === "pan") b.push({ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift });
-    if (name === "zoom") b.push({ mouseButton: MouseBindings.Secondary });
+    if (name === "zoom") b.push({ mouseButton: MouseBindings.Secondary }, { numTouchPoints: 2 });
     return b;
   }
   private applyTool(from: ToolName | null, to: ToolName) {
@@ -973,11 +1136,19 @@ export class Viewer {
       for (const name of Object.keys(TOOLS) as ToolName[]) {
         // crosshairs need the three MPR views in place: enterMpr turns them on
         if (name === "crosshairs" && (group === this.stackGroup || this.mode !== "mpr")) continue;
-        if (from && name !== from && name !== to && name !== "pan" && name !== "zoom") continue;
+        if (from && name !== from && name !== to && name !== "pan" && name !== "zoom" && name !== "scroll") continue;
         const b = this.bindings(name, name === to);
-        if (b.length) group.setToolActive(TOOLS[name].toolName, { bindings: b });
-        else if (name === "crosshairs") group.setToolEnabled(TOOLS[name].toolName);
-        else group.setToolPassive(TOOLS[name].toolName);
+        const toolName = TOOLS[name].toolName;
+        if (!b.length && name === "crosshairs") {
+          group.setToolEnabled(toolName);
+          continue;
+        }
+        // Cornerstone adds the bindings it is given to the ones a tool already has, so a tool
+        // that keeps one whatever is chosen (scroll its wheel, pan, zoom) would also keep the
+        // left button from when it was the chosen one, and run together with the next tool.
+        // Start each from none.
+        group.setToolPassive(toolName, { removeAllBindings: true });
+        if (b.length) group.setToolActive(toolName, { bindings: b });
       }
     }
   }
@@ -1332,6 +1503,57 @@ export class Viewer {
     this.cells.forEach((c) => c.viewport.render());
     return removed;
   }
+  /** Remove the selected measurements; what was removed, for `restoreMeasurements`. */
+  removeSelected() {
+    const removed: any[] = annotation.selection
+      .getAnnotationsSelected()
+      .map((uid) => annotation.state.getAnnotation(uid))
+      .filter(Boolean);
+    for (const a of removed) {
+      this.studyOf(a);
+      annotation.state.removeAnnotation(a.annotationUID);
+    }
+    // what is gone is no longer selected
+    annotation.selection.deselectAnnotation();
+    this.cells.forEach((c) => c.viewport.render());
+    this.emit();
+    return removed;
+  }
+
+  /** What Escape leaves, the innermost first: a measurement being drawn (it is dropped; a
+   * handle being moved just stops), then the selection, then a tool other than the one the
+   * viewer starts with. `null` when there was nothing to leave. */
+  escape(): "drawing" | "selection" | "tool" | null {
+    const finished = new Set(this.drawn);
+    let stopped = false;
+    for (const cell of this.cells) {
+      const uid = cancelActiveManipulations(cell.element);
+      if (!uid) continue;
+      stopped = true;
+      // Cornerstone ends a drawing by keeping it as it stands; an unfinished one is not wanted
+      if (!finished.has(uid)) {
+        this.drawn.delete(uid);
+        annotation.state.removeAnnotation(uid);
+      }
+    }
+    if (stopped) {
+      this.cells.forEach((c) => c.viewport.render());
+      return "drawing";
+    }
+    if (annotation.selection.getAnnotationsSelected().length) {
+      annotation.selection.deselectAnnotation();
+      this.cells.forEach((c) => c.viewport.render());
+      this.emit();
+      return "selection";
+    }
+    const first: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
+    if (this.tool !== first && !(this.tool === "crosshairs" && this.mode === "mpr")) {
+      this.useTool(first);
+      return "tool";
+    }
+    return null;
+  }
+
   /** Put measurements back, as `clearMeasurements` returned them. */
   restoreMeasurements(list: any[]) {
     const studies = new Set<string>();
@@ -1339,6 +1561,7 @@ export class Viewer {
       if (annotation.state.getAnnotation(a.annotationUID)) continue;
       a.invalidated = true;
       annotation.state.addAnnotation(a, undefined as any);
+      this.drawn.add(a.annotationUID);
       const study = this.studyOf(a);
       if (study) studies.add(study);
     }
