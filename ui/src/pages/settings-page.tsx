@@ -25,8 +25,8 @@ const ROLE_MAY: Record<string, string> = {
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-6 px-4 py-3">
-      <span className="text-sm text-muted-foreground">{label}</span>
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1.5 px-4 py-3">
+      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center gap-2 text-sm">{children}</span>
     </div>
   );
@@ -54,7 +54,7 @@ function AccountSection() {
           <span className="font-medium">{user.login}</span>
         </Row>
         <Row label="Role">
-          <span className="text-muted-foreground">{ROLE_MAY[user.role]}</span>
+          <span className="hidden text-muted-foreground sm:inline">{ROLE_MAY[user.role]}</span>
           <Badge variant="secondary" className="capitalize">
             {user.role}
           </Badge>
@@ -108,7 +108,7 @@ function RolesSection() {
             <TableRow>
               <TableHead>Permission</TableHead>
               {ROLES.map((role) => (
-                <TableHead key={role} className={cn("w-24 text-center capitalize", role === user?.role && "text-selection")}>
+                <TableHead key={role} className={cn("w-16 px-1 text-center capitalize md:w-24", role === user?.role && "text-selection")}>
                   {role}
                   {role === user?.role && <span className="block text-[10.5px] font-normal normal-case">your role</span>}
                 </TableHead>
@@ -118,9 +118,9 @@ function RolesSection() {
           <TableBody>
             {PERMISSIONS.map(({ what, detail, from }) => (
               <TableRow key={what}>
-                <TableCell>
+                <TableCell className="whitespace-normal">
                   <div className="font-medium">{what}</div>
-                  <div className="text-xs text-muted-foreground">{detail}</div>
+                  <div className="hidden text-xs text-muted-foreground sm:block">{detail}</div>
                 </TableCell>
                 {ROLES.map((role) => {
                   const allowed = ROLES.indexOf(role) >= ROLES.indexOf(from);
@@ -187,16 +187,17 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
   const current = sections.find((s) => s.id === section) ?? sections[0];
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b bg-card px-8 pt-5">
+      <div className="shrink-0 border-b bg-card px-4 pt-4 md:px-8 md:pt-5">
         <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
-        <nav aria-label="Settings" className="mt-3 flex gap-1">
+        {/* on a narrow screen the tabs scroll sideways, each on one line */}
+        <nav aria-label="Settings" className="-mx-4 mt-3 flex gap-1 overflow-x-auto px-4 md:mx-0 md:px-0">
           {sections.map(({ id, label, Icon }) => (
             <a
               key={id}
               href={href.settings(id)}
               aria-current={id === current.id ? "page" : undefined}
               className={cn(
-                "-mb-px flex h-10 items-center gap-2 border-b-2 border-transparent px-3 text-sm text-muted-foreground transition-colors hover:text-foreground",
+                "-mb-px flex h-10 shrink-0 items-center gap-2 border-b-2 border-transparent px-3 text-sm whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
                 id === current.id && "border-selection font-medium text-selection hover:text-selection",
               )}
             >
@@ -207,7 +208,7 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
         </nav>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="max-w-4xl px-8 py-6">
+        <div className="max-w-4xl px-4 py-5 md:px-8 md:py-6">
           {current.id === "users" ? (
             <UsersSection />
           ) : current.id === "roles" ? (

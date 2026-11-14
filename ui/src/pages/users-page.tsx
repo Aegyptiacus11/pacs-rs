@@ -224,7 +224,7 @@ export function UsersSection() {
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div>
           <h2 className="text-base font-semibold tracking-tight">Users</h2>
           <p className="mt-1 text-sm text-muted-foreground">Who may sign in to this server, and what each of them may do.</p>
@@ -241,9 +241,9 @@ export function UsersSection() {
             <TableHeader>
               <TableRow>
                 <TableHead>Login</TableHead>
-                <TableHead className="w-40">Role</TableHead>
-                <TableHead className="w-32">Status</TableHead>
-                <TableHead className="w-36">Added</TableHead>
+                <TableHead className="w-28 md:w-40">Role</TableHead>
+                <TableHead className="hidden w-32 sm:table-cell">Status</TableHead>
+                <TableHead className="hidden w-36 md:table-cell">Added</TableHead>
                 <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
@@ -258,9 +258,11 @@ export function UsersSection() {
                 ))}
               {users.data?.map((u) => (
                 <TableRow key={u.id} className={u.active ? undefined : "text-muted-foreground"}>
-                  <TableCell className="font-medium">
+                  <TableCell className="max-w-40 truncate font-medium">
                     {u.login}
                     {u.id === me?.id && <span className="ml-2 text-xs font-normal text-muted-foreground">you</span>}
+                    {/* the status column is hidden on a narrow screen */}
+                    {!u.active && <span className="ml-2 text-xs font-normal sm:hidden">deactivated</span>}
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -269,7 +271,7 @@ export function UsersSection() {
                           {u.role}
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-80">
+                      <DropdownMenuContent align="start" className="w-[min(20rem,calc(100vw-2rem))]">
                         <DropdownMenuRadioGroup value={u.role} onValueChange={(role) => role !== u.role && change.mutate({ id: u.id, role: role as Role })}>
                           {ROLES.map(({ role, may }) => (
                             <DropdownMenuRadioItem key={role} value={role} className="items-baseline">
@@ -281,8 +283,8 @@ export function UsersSection() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
-                  <TableCell>{u.active ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Deactivated</Badge>}</TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums">{created.format(new Date(u.created_ms))}</TableCell>
+                  <TableCell className="hidden sm:table-cell">{u.active ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Deactivated</Badge>}</TableCell>
+                  <TableCell className="hidden text-muted-foreground tabular-nums md:table-cell">{created.format(new Date(u.created_ms))}</TableCell>
                   <TableCell>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>

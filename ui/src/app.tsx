@@ -37,9 +37,10 @@ export function App() {
       </Suspense>
     );
   return (
-    <div className="flex h-dvh">
+    // on a narrow screen the rail lies along the bottom
+    <div className="flex h-dvh flex-col-reverse md:flex-row">
       <AppRail route={route} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <AppHeader route={route} />
         <main className="min-h-0 flex-1 overflow-hidden">
           {route.page === "settings" ? (

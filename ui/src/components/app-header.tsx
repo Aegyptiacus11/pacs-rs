@@ -86,16 +86,19 @@ function RailItem({ label, Icon, active, to }: { label: string; Icon: typeof Use
 
 export function AppRail({ route }: { route: Route }) {
   return (
-    <nav aria-label="pacs-rs" className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r bg-card pb-3">
+    <nav
+      aria-label="pacs-rs"
+      className="flex h-16 w-full shrink-0 items-center justify-around gap-1 border-t bg-card md:h-auto md:w-[72px] md:flex-col md:justify-start md:border-t-0 md:border-r md:pb-3"
+    >
       {/* as tall as the top bar, its line carried across */}
-      <div className="mb-2 grid h-14 w-full shrink-0 place-items-center border-b">
+      <div className="mb-2 hidden h-14 w-full shrink-0 place-items-center border-b md:grid">
         <a href={href.studies()} aria-label="pacs-rs: the studies" className="grid size-10 place-items-center rounded-lg hover:bg-accent">
           <Logo className="size-6" />
         </a>
       </div>
       <RailItem label="Studies" Icon={FileStack} to={href.studies()} active={route.page === "studies"} />
       <RailItem label="Patients" Icon={Users} to={href.patients()} active={route.page === "patients"} />
-      <div className="mt-auto">
+      <div className="md:mt-auto">
         <RailItem label="Settings" Icon={Settings} to={href.settings()} active={route.page === "settings"} />
       </div>
     </nav>
@@ -120,10 +123,10 @@ export function AppHeader({ route }: { route: Route }) {
     return () => removeEventListener("keydown", key);
   }, []);
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b bg-card px-5">
-      <span className="w-32 shrink-0 font-semibold tracking-tight">pacs-rs</span>
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-card px-3 md:gap-4 md:px-5">
+      <span className="hidden w-32 shrink-0 font-semibold tracking-tight md:block">pacs-rs</span>
       <GlobalSearch page={route.page === "patients" ? "patients" : "studies"} className="mx-auto w-full max-w-xl" />
-      <div className="flex w-32 shrink-0 items-center justify-end gap-2">
+      <div className="flex shrink-0 items-center justify-end gap-1 md:w-32 md:gap-2">
         <ServerStatus />
         <ThemeToggle />
         <UserMenu />
