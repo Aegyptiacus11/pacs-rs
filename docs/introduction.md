@@ -13,6 +13,7 @@ pull them in, de-identified on the way in when a project asks for it.
 | To | Read |
 |---|---|
 | start a server and set it up | [Running](running.md) |
+| ask for a login, and manage users and roles | [Login](login.md) |
 | browse and view studies | [Web interface](web-interface.md) |
 | connect a viewer or a pipeline over HTTP | [DICOMweb](dicomweb.md), [REST API](rest-api.md) |
 | connect a hospital's PACS or a workstation | [DIMSE](dimse.md) |

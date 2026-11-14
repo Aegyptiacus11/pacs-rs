@@ -29,8 +29,8 @@ logged and left in the store, unindexed. Uploads wait while a deletion runs, so 
 again during a deletion is not lost. This holds within one server process: two pacs-rs
 processes on one index do not coordinate yet.
 
-**There is no login yet:** anyone who can reach the REST API can delete. Keep it on a private
-network (see [Running](running.md)).
+**The [login](login.md) is off by default:** anyone who can reach the REST API can then delete.
+Turn it on, or keep the server on a private network (see [Running](running.md)).
 
 An instance sent again is kept as first stored (`AlreadyStored`) unless `PACS_OVERWRITE_INSTANCES`
 is set. Lists of a study's series and a series' instances come in Series and Instance Number
