@@ -351,7 +351,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   return (
     <div className="flex h-full">
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-4 px-6 pt-5 pb-3">
+        <div className="flex items-center gap-4 px-4 pt-4 pb-3 md:px-6 md:pt-5">
           <div className="mr-auto min-w-0">
             <h1 className="truncate text-lg font-semibold tracking-tight">{owner ? personName(owner.name) : "Studies"}</h1>
             <p className="text-sm text-muted-foreground">
@@ -370,8 +370,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         </div>
 
         {/* the filters in one row, right above what they filter: words, when, what, who */}
-        <div className="flex flex-wrap items-center gap-2 px-6 pb-3">
-          <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-72 min-w-0" />
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-3 md:px-6">
+          <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-full min-w-0 sm:w-72" />
           <DateFilter span={span} dates={facets.dates} count={facets.count} total={facets.all} onApply={setSpan} />
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
           <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
@@ -406,7 +406,37 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         </div>
 
         <div ref={list} tabIndex={0} onKeyDown={onListKey} aria-label="Studies" className="min-h-0 flex-1 overflow-auto border-t outline-none">
-          <Table className="table-fixed">
+          {/* on a narrow screen, two lines a study: who and what, when and how; a tap shows it whole */}
+          <ul className="md:hidden">
+            {page.isPending &&
+              Array.from({ length: 8 }, (_, i) => (
+                <li key={i} className="flex items-center justify-between gap-6 border-b px-4 py-3.5">
+                  <Skeleton className="h-3 w-40" />
+                  <Skeleton className="h-3 w-14" />
+                </li>
+              ))}
+            {visible.map(({ id, original: s }) => (
+              <li key={id}>
+                <button
+                  aria-current={id === current ? "true" : undefined}
+                  onClick={() => setCurrent(id)}
+                  className="flex w-full items-start justify-between gap-3 border-b px-4 py-2.5 text-left active:bg-muted/60"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{personName(s.name)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[s.description || "No description", plural(s.series, "series", "series")].join(" · ")}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="tabular text-xs">{formatDate(s.date)}</span>
+                    <Modalities list={s.modalities} />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <Table className="table-fixed max-md:hidden">
             <colgroup>
               <col className="w-11" />
               <col className="w-32" />
@@ -518,7 +548,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         )}
       </section>
 
-      <aside aria-label="The chosen study" className="hidden w-[400px] shrink-0 overflow-y-auto border-l bg-card lg:block">
+      {/* beside the list on a wide screen; over the whole page on a narrower one, once a study is chosen */}
+      <aside
+        aria-label="The chosen study"
+        className={cn("overflow-y-auto bg-card lg:static lg:block lg:w-[400px] lg:shrink-0 lg:border-l", shown ? "fixed inset-0 z-30" : "hidden")}
+      >
         {shown ? (
           <StudyPane key={shown.id} study={shown} onPick={setCurrent} onClose={() => setCurrent(null)} onDelete={setPending} />
         ) : (

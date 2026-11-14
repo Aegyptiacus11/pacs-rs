@@ -7,6 +7,11 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Layout**: a rail down the left side to go places (Studies, Patients), a bar along the top
   for the tools (the search, light or dark, a warning when the server doesn't answer), the page
   in between.
+- **Narrow screens**: below 768 pixels the rail lies along the bottom, the study list shows
+  two lines a study (who and what, when and how) and the patients list takes the whole width;
+  a tap shows the study or the patient over the whole page, closed with its cross. Between
+  768 and 1024 pixels the chosen study opens the same way. The viewer is made for a wide
+  screen.
 - **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:
   a filter box (`/`), the date, the modality (every DICOM imaging modality), the sex and the age
   at the study (0–17, 18–39, 40–64, 65+), each with how many studies it holds. The date opens
