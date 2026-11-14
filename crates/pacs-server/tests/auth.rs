@@ -1100,3 +1100,237 @@ async fn a_download_token_is_good_for_one_path_and_only_in_the_url() {
         StatusCode::OK
     );
 }
+
+#[tokio::test]
+async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let put = async |path: String, body: Value| {
+        send(&app, Method::PUT, &path, Some(&admin), Some(body), None).await
+    };
+    let ids = |reply: &Reply| -> Vec<String> {
+        reply
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // A server starts with four roles; only admin is locked.
+    let roles = get(&app, "/roles", Some(&admin)).await;
+    assert_eq!(ids(&roles), ["reader", "editor", "manager", "admin"]);
+    assert_eq!(
+        roles.body[0],
+        json!({"id": "reader", "name": "Reader", "permissions": ["read"], "locked": false})
+    );
+    assert_eq!(roles.body[3]["locked"], true);
+    assert_eq!(
+        roles.body[3]["permissions"],
+        json!(["read", "write", "remote", "delete", "users"])
+    );
+    let me = get(&app, "/auth/me", Some(&admin)).await;
+    assert_eq!(
+        me.body["permissions"],
+        json!(["read", "write", "remote", "delete", "users"])
+    );
+
+    // A new role: its id comes from its name, its permissions are stored in one order.
+    let made = post(
+        &app,
+        "/roles",
+        Some(&admin),
+        json!({"name": "Night shift", "permissions": ["delete", "read"]}),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    assert_eq!(
+        made.body,
+        json!({"id": "night-shift", "name": "Night shift", "permissions": ["read", "delete"], "locked": false})
+    );
+    let again = post(&app, "/roles", Some(&admin), json!({"name": "night shift"})).await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    for body in [
+        json!({"name": "", "permissions": ["read"]}),
+        json!({"name": "---"}),
+        json!({"name": "Student", "permissions": ["read", "everything"]}),
+        json!({"permissions": ["read"]}),
+    ] {
+        let reply = post(&app, "/roles", Some(&admin), body.clone()).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+
+    // A user with it reads and deletes, and cannot upload: permissions do not include one another.
+    let nina = post(
+        &app,
+        "/users",
+        Some(&admin),
+        json!({"login": "nina", "password": "nina-password-1", "role": "night-shift"}),
+    )
+    .await;
+    assert_eq!(nina.status, StatusCode::CREATED, "{}", nina.body);
+    let unknown = post(
+        &app,
+        "/users",
+        Some(&admin),
+        json!({"login": "x", "password": "long-enough-password", "role": "owner"}),
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let session = sign_in(&app, "nina", "nina-password-1").await;
+    let token = session.token();
+    assert_eq!(
+        get(&app, "/auth/me", Some(&token)).await.body["permissions"],
+        json!(["read", "delete"])
+    );
+    let series = SyntheticSeries::new(97, 1);
+    let upload = async |token: String| {
+        send(
+            &app,
+            Method::POST,
+            "/instances",
+            Some(&token),
+            None,
+            Some(series.slice_bytes(0)),
+        )
+        .await
+        .status
+    };
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(upload(token.clone()).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        get(&app, "/modalities", Some(&token)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    // every signed-in user sees the roles; only who manages users changes them
+    assert_eq!(
+        get(&app, "/roles", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/roles",
+            Some(&token),
+            json!({"name": "Mine", "permissions": ["users"]})
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let self_promote = send(
+        &app,
+        Method::PUT,
+        "/roles/night-shift",
+        Some(&token),
+        Some(json!({"permissions": ["users"]})),
+        None,
+    )
+    .await;
+    assert_eq!(self_promote.status, StatusCode::FORBIDDEN);
+
+    // The role gains a permission: the user has it at their next refresh, not before.
+    let widened = put(
+        "/roles/night-shift".into(),
+        json!({"permissions": ["read", "write", "delete"]}),
+    )
+    .await;
+    assert_eq!(
+        widened.body["permissions"],
+        json!(["read", "write", "delete"])
+    );
+    assert_eq!(
+        upload(token.clone()).await,
+        StatusCode::FORBIDDEN,
+        "the old token still says what it said"
+    );
+    let renewed = refresh(&app, &session.cookie()).await;
+    assert_eq!(upload(renewed.token()).await, StatusCode::OK);
+    // It loses everything: the user stays signed in and may do nothing but see their account.
+    put("/roles/night-shift".into(), json!({"permissions": []})).await;
+    let renewed = refresh(&app, &renewed.cookie()).await;
+    let token = renewed.token();
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get(&app, "/auth/me", Some(&token)).await.body["permissions"],
+        json!([])
+    );
+
+    // Renaming keeps the id, so the users keep their role.
+    let renamed = put("/roles/night-shift".into(), json!({"name": "On call"})).await;
+    assert_eq!(
+        (renamed.body["id"].as_str(), renamed.body["name"].as_str()),
+        (Some("night-shift"), Some("On call"))
+    );
+    assert_eq!(
+        put("/roles/night-shift".into(), json!({"permissions": ["fly"]}))
+            .await
+            .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        put("/roles/nobody".into(), json!({"name": "x"}))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+
+    // A role someone has cannot be removed; a free one can, a built-in one too.
+    let remove = async |id: &str| {
+        send(
+            &app,
+            Method::DELETE,
+            &format!("/roles/{id}"),
+            Some(&admin),
+            None,
+            None,
+        )
+        .await
+        .status
+    };
+    assert_eq!(remove("night-shift").await, StatusCode::CONFLICT);
+    let nina_id = nina.body["id"].as_str().unwrap();
+    send(
+        &app,
+        Method::PUT,
+        &format!("/users/{nina_id}"),
+        Some(&admin),
+        Some(json!({"role": "reader"})),
+        None,
+    )
+    .await;
+    assert_eq!(remove("night-shift").await, StatusCode::NO_CONTENT);
+    assert_eq!(remove("night-shift").await, StatusCode::NOT_FOUND);
+    assert_eq!(remove("manager").await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        ids(&get(&app, "/roles", Some(&admin)).await),
+        ["reader", "editor", "admin"]
+    );
+
+    // The admin role is as it is, for good: there is always a role that can manage the rest.
+    assert_eq!(remove("admin").await, StatusCode::CONFLICT);
+    assert_eq!(
+        put("/roles/admin".into(), json!({"permissions": ["read"]}))
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        put("/roles/admin".into(), json!({"name": "Root"}))
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        get(&app, "/users", Some(&admin)).await.status,
+        StatusCode::OK
+    );
+}

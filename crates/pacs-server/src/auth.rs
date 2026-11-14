@@ -7,12 +7,19 @@
 //! is authorised by a cookie alone, so no route needs protection against forged cross-site
 //! requests.
 //!
-//! | Role | May |
+//! A user has one role, and a role gives permissions:
+//!
+//! | Permission | Allows |
 //! |---|---|
-//! | `reader` | read: studies, images, metadata, archives, searches of this archive |
-//! | `editor` | also write: uploads, measurements, hanging protocols, and everything about remote AEs (`/modalities`, `/jobs`), which reaches the hospital's PACS |
-//! | `manager` | also delete |
-//! | `admin` | also manage users (`/users`) |
+//! | `read` | studies, images, metadata, archives, searches of this archive |
+//! | `write` | uploads, measurements, hanging protocols |
+//! | `remote` | everything about remote AEs (`/modalities`, `/jobs`), which reaches the hospital's PACS |
+//! | `delete` | deleting patients, studies, series and instances |
+//! | `users` | managing users and roles (`/users`, `/roles`) |
+//!
+//! Roles are in the index and can be changed (`/roles`). A server starts with four: `reader`
+//! (read), `editor` (read, write, remote), `manager` (also delete) and `admin` (everything).
+//! `admin` cannot be changed or removed, so there is always a role that can manage the rest.
 //!
 //! A browser's own downloads (a link to an archive, a file) cannot carry the header. For
 //! those, `POST /auth/download-token` with `{"path": "/studies/<id>/archive"}` gives a token
@@ -51,45 +58,51 @@ use serde_json::{Value, json};
 
 use crate::Settings;
 
-/// What a user may do; each role includes the ones before it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Role {
-    Reader,
-    Editor,
-    Manager,
-    Admin,
+/// One thing a role may allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    Read,
+    Write,
+    Remote,
+    Delete,
+    Users,
 }
 
-impl Role {
+impl Permission {
+    pub const ALL: [Permission; 5] = [
+        Permission::Read,
+        Permission::Write,
+        Permission::Remote,
+        Permission::Delete,
+        Permission::Users,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
-            Role::Reader => "reader",
-            Role::Editor => "editor",
-            Role::Manager => "manager",
-            Role::Admin => "admin",
-        }
-    }
-
-    pub fn allows(self, right: Right) -> bool {
-        match right {
-            Right::SignedIn | Right::Read => true,
-            Right::Write => self >= Role::Editor,
-            Right::Delete => self >= Role::Manager,
-            Right::Admin => self == Role::Admin,
+            Permission::Read => "read",
+            Permission::Write => "write",
+            Permission::Remote => "remote",
+            Permission::Delete => "delete",
+            Permission::Users => "users",
         }
     }
 }
 
-impl FromStr for Role {
+impl FromStr for Permission {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        [Role::Reader, Role::Editor, Role::Manager, Role::Admin]
+        Permission::ALL
             .into_iter()
-            .find(|role| role.as_str() == text)
-            .ok_or_else(|| format!("{text:?} is not a role: reader, editor, manager or admin"))
+            .find(|permission| permission.as_str() == text)
+            .ok_or_else(|| {
+                format!("{text:?} is not a permission: read, write, remote, delete or users")
+            })
     }
 }
+
+/// The role that always has every permission and cannot be changed or removed.
+pub const ADMIN_ROLE: &str = "admin";
 
 /// What a request needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,8 +111,25 @@ pub enum Right {
     SignedIn,
     Read,
     Write,
+    /// Remote AEs: a search there lists the hospital's patients, identified.
+    Remote,
     Delete,
+    /// Users and roles.
     Admin,
+}
+
+impl Right {
+    /// The permission this right asks of a role; none for a user's own account.
+    pub fn permission(self) -> Option<Permission> {
+        match self {
+            Right::SignedIn => None,
+            Right::Read => Some(Permission::Read),
+            Right::Write => Some(Permission::Write),
+            Right::Remote => Some(Permission::Remote),
+            Right::Delete => Some(Permission::Delete),
+            Right::Admin => Some(Permission::Users),
+        }
+    }
 }
 
 /// Whether a request passes without a token.
@@ -123,13 +153,22 @@ pub fn right_for(method: &Method, path: &str) -> Right {
     if under("/users") {
         return Right::Admin;
     }
+    // every signed-in user may see the roles (what their own allows); changing them is for
+    // who manages users
+    if under("/roles") {
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            Right::SignedIn
+        } else {
+            Right::Admin
+        };
+    }
     if under("/auth") {
         return Right::SignedIn;
     }
     // Remote AEs: a search there lists the hospital's patients, identified, and a move brings
     // their studies in. Not for someone who may only read this archive.
     if under("/modalities") || under("/jobs") {
-        return Right::Write;
+        return Right::Remote;
     }
     match *method {
         Method::GET | Method::HEAD => Right::Read,
@@ -143,20 +182,27 @@ pub fn right_for(method: &Method, path: &str) -> Right {
     }
 }
 
-/// The index's users, as the session library reads them. The role and the login travel in the
-/// access token.
+/// The index's users, as the session library reads them. The login, the role and what the
+/// role allows travel in the access token: a change to a role reaches a user at their next
+/// refresh, within the token's 15 minutes.
 #[derive(Debug, Clone)]
 pub struct IndexUsers(Index);
 
-fn auth_user(user: StoredUser) -> AuthUser {
-    let mut claims = serde_json::Map::new();
-    claims.insert("role".into(), user.role.into());
-    claims.insert("login".into(), user.login.into());
-    AuthUser {
-        id: user.id,
-        password_hash: user.password_hash,
-        active: user.active,
-        claims,
+impl IndexUsers {
+    async fn auth_user(&self, user: StoredUser) -> Result<AuthUser, StoreError> {
+        // a role that is gone allows nothing
+        let role = self.0.role(&user.role).await.map_err(StoreError::new)?;
+        let permissions = role.map(|role| role.permissions).unwrap_or_default();
+        let mut claims = serde_json::Map::new();
+        claims.insert("role".into(), user.role.into());
+        claims.insert("login".into(), user.login.into());
+        claims.insert("perms".into(), permissions.into());
+        Ok(AuthUser {
+            id: user.id,
+            password_hash: user.password_hash,
+            active: user.active,
+            claims,
+        })
     }
 }
 
@@ -167,16 +213,17 @@ impl UserStore for IndexUsers {
             .user_by_login(&login.to_lowercase())
             .await
             .map_err(StoreError::new)?;
-        Ok(user.map(auth_user))
+        match user {
+            Some(user) => Ok(Some(self.auth_user(user).await?)),
+            None => Ok(None),
+        }
     }
 
     async fn by_id(&self, user_id: &str) -> Result<Option<AuthUser>, StoreError> {
-        Ok(self
-            .0
-            .user(user_id)
-            .await
-            .map_err(StoreError::new)?
-            .map(auth_user))
+        match self.0.user(user_id).await.map_err(StoreError::new)? {
+            Some(user) => Ok(Some(self.auth_user(user).await?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -280,12 +327,7 @@ pub async fn open_login(
         let login = normal_login(&settings.admin_login)
             .map_err(|e| anyhow::anyhow!("PACS_ADMIN_LOGIN: {e}"))?;
         index
-            .create_user(
-                &new_id()?,
-                &login,
-                &hashed(password).await?,
-                Role::Admin.as_str(),
-            )
+            .create_user(&new_id()?, &login, &hashed(password).await?, ADMIN_ROLE)
             .await
             .context("making the first administrator")?;
         tracing::info!(%login, "first administrator made; PACS_ADMIN_PASSWORD is no longer read");
@@ -341,14 +383,31 @@ fn internal(what: &str, error: impl std::fmt::Display) -> Refusal {
 pub struct SignedIn {
     pub id: String,
     pub login: String,
-    pub role: Role,
+    /// The id of their role.
+    pub role: String,
+    pub permissions: Vec<Permission>,
+}
+
+impl SignedIn {
+    pub fn may(&self, right: Right) -> bool {
+        right
+            .permission()
+            .is_none_or(|needed| self.permissions.contains(&needed))
+    }
 }
 
 fn signed_in(claims: &Claims) -> Option<SignedIn> {
     Some(SignedIn {
         id: claims.sub().to_owned(),
         login: claims.get("login")?.as_str()?.to_owned(),
-        role: claims.get("role")?.as_str()?.parse().ok()?,
+        role: claims.get("role")?.as_str()?.to_owned(),
+        // a permission this version does not know is left out, not trusted
+        permissions: claims
+            .get("perms")?
+            .as_array()?
+            .iter()
+            .filter_map(|p| p.as_str()?.parse().ok())
+            .collect(),
     })
 }
 
@@ -413,8 +472,8 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     let Some(user) = signed_in(&claims) else {
         return invalid();
     };
-    if !user.role.allows(right_for(&method, &path)) {
-        tracing::info!(login = %user.login, role = user.role.as_str(), %method, %path, "refused: role");
+    if !user.may(right_for(&method, &path)) {
+        tracing::info!(login = %user.login, role = %user.role, %method, %path, "refused: role");
         return refused(StatusCode::FORBIDDEN, "Your role does not allow this").into_response();
     }
     request.extensions_mut().insert(user);
@@ -482,14 +541,16 @@ async fn download_token(
             "No download token for this path",
         ));
     }
-    if !user.role.allows(right) {
+    if !user.may(right) {
         return Err(refused(
             StatusCode::FORBIDDEN,
             "Your role does not allow this",
         ));
     }
     let mut claims = serde_json::Map::new();
-    claims.insert("role".into(), user.role.as_str().into());
+    let permissions: Vec<&str> = user.permissions.iter().map(|p| p.as_str()).collect();
+    claims.insert("role".into(), user.role.into());
+    claims.insert("perms".into(), permissions.into());
     claims.insert("login".into(), user.login.into());
     claims.insert(DOWNLOAD_CLAIM.into(), asked.into());
     let token = login
@@ -529,7 +590,10 @@ fn from_index(what: &str, error: pacs_index::Error) -> Refusal {
 }
 
 async fn me(Extension(user): Extension<SignedIn>) -> Json<Value> {
-    Json(json!({ "id": user.id, "login": user.login, "role": user.role.as_str() }))
+    let permissions: Vec<&str> = user.permissions.iter().map(|p| p.as_str()).collect();
+    Json(
+        json!({ "id": user.id, "login": user.login, "role": user.role, "permissions": permissions }),
+    )
 }
 
 #[derive(Deserialize)]
@@ -579,7 +643,7 @@ async fn change_password(
     };
     login
         .index
-        .update_user(&user.id, &change, Role::Admin.as_str())
+        .update_user(&user.id, &change, ADMIN_ROLE)
         .await
         .map_err(|e| from_index("changing a password", e))?;
     end_sessions(&login, &user.id).await?;
@@ -617,7 +681,7 @@ async fn create_user(
 ) -> Result<Response, Refusal> {
     let new = body(new)?;
     let name = normal_login(&new.login).map_err(unprocessable)?;
-    let role: Role = new.role.parse().map_err(unprocessable)?;
+    let role = known_role(&login, &new.role).await?;
     check_new_password(&new.password).map_err(unprocessable)?;
     let id = new_id().map_err(|e| internal("making a user id", e))?;
     let hash = hashed(new.password)
@@ -625,7 +689,7 @@ async fn create_user(
         .map_err(|e| internal("hashing a password", e))?;
     let user = login
         .index
-        .create_user(&id, &name, &hash, role.as_str())
+        .create_user(&id, &name, &hash, &role)
         .await
         .map_err(|e| from_index("making a user", e))?;
     Ok((StatusCode::CREATED, Json(shown(&user))).into_response())
@@ -647,12 +711,10 @@ async fn update_user(
     update: Result<Json<UserUpdate>, JsonRejection>,
 ) -> Result<Response, Refusal> {
     let update = body(update)?;
-    let role = update
-        .role
-        .as_deref()
-        .map(Role::from_str)
-        .transpose()
-        .map_err(unprocessable)?;
+    let role = match update.role.as_deref() {
+        Some(role) => Some(known_role(&login, role).await?),
+        None => None,
+    };
     let password_hash = match update.password {
         Some(password) => {
             check_new_password(&password).map_err(unprocessable)?;
@@ -667,12 +729,12 @@ async fn update_user(
     let ends_sessions = password_hash.is_some() || update.active == Some(false);
     let change = UserChange {
         password_hash,
-        role: role.map(|r| r.as_str().to_owned()),
+        role,
         active: update.active,
     };
     let user = login
         .index
-        .update_user(&id, &change, Role::Admin.as_str())
+        .update_user(&id, &change, ADMIN_ROLE)
         .await
         .map_err(|e| from_index("changing a user", e))?
         .ok_or_else(|| refused(StatusCode::NOT_FOUND, "No such user"))?;
@@ -688,7 +750,7 @@ async fn delete_user(
 ) -> Result<Response, Refusal> {
     let deleted = login
         .index
-        .delete_user(&id, Role::Admin.as_str())
+        .delete_user(&id, ADMIN_ROLE)
         .await
         .map_err(|e| from_index("removing a user", e))?;
     if !deleted {
@@ -698,9 +760,164 @@ async fn delete_user(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// The id of an existing role, or the 422 that says there is none.
+async fn known_role(login: &Login, role: &str) -> Result<String, Refusal> {
+    match login.index.role(role).await {
+        Ok(Some(found)) => Ok(found.id),
+        Ok(None) => Err(unprocessable(format!(
+            "{role:?} is not a role of this server"
+        ))),
+        Err(e) => Err(from_index("reading a role", e)),
+    }
+}
+
+fn shown_role(role: &pacs_index::StoredRole) -> Value {
+    json!({
+        "id": role.id,
+        "name": role.name,
+        "permissions": role.permissions,
+        // the one role that cannot be changed or removed
+        "locked": role.id == ADMIN_ROLE,
+    })
+}
+
+async fn list_roles(State(login): State<Login>) -> Result<Json<Value>, Refusal> {
+    let roles = login
+        .index
+        .roles()
+        .await
+        .map_err(|e| from_index("listing roles", e))?;
+    Ok(Json(Value::Array(roles.iter().map(shown_role).collect())))
+}
+
+/// A role's name as shown: 1 to 40 characters, none of them a control character.
+fn role_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(char::is_control) {
+        return Err("a role's name is 1 to 40 characters".into());
+    }
+    Ok(name.to_owned())
+}
+
+/// The id made from a role's name: its letters and digits in lower case, the rest as `-`.
+fn role_id(name: &str) -> Result<String, String> {
+    let id: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let id = id
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if id.is_empty() {
+        return Err("a role's name needs at least one letter or digit (a to z, 0 to 9)".into());
+    }
+    Ok(id)
+}
+
+/// Permissions as stored: each one known, none twice, in the order of [`Permission::ALL`].
+fn permission_list(asked: &[String]) -> Result<Vec<String>, String> {
+    let asked = asked
+        .iter()
+        .map(|p| p.parse::<Permission>())
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Permission::ALL
+        .into_iter()
+        .filter(|p| asked.contains(p))
+        .map(|p| p.as_str().to_owned())
+        .collect())
+}
+
+#[derive(Deserialize)]
+struct NewRole {
+    name: String,
+    #[serde(default)]
+    permissions: Vec<String>,
+}
+
+async fn create_role(
+    State(login): State<Login>,
+    new: Result<Json<NewRole>, JsonRejection>,
+) -> Result<Response, Refusal> {
+    let new = body(new)?;
+    let name = role_name(&new.name).map_err(unprocessable)?;
+    let id = role_id(&name).map_err(unprocessable)?;
+    let permissions = permission_list(&new.permissions).map_err(unprocessable)?;
+    let role = login
+        .index
+        .create_role(&id, &name, &permissions)
+        .await
+        .map_err(|e| from_index("making a role", e))?;
+    Ok((StatusCode::CREATED, Json(shown_role(&role))).into_response())
+}
+
+#[derive(Deserialize)]
+struct RoleUpdate {
+    name: Option<String>,
+    permissions: Option<Vec<String>>,
+}
+
+/// `PUT /roles/{id}`: a new name, new permissions, or both. The users who have the role get
+/// the change at their next refresh, within 15 minutes.
+async fn update_role(
+    State(login): State<Login>,
+    Path(id): Path<String>,
+    update: Result<Json<RoleUpdate>, JsonRejection>,
+) -> Result<Response, Refusal> {
+    let update = body(update)?;
+    if id == ADMIN_ROLE {
+        return Err(refused(
+            StatusCode::CONFLICT,
+            "The admin role always has every permission and cannot be changed",
+        ));
+    }
+    let name = update
+        .name
+        .as_deref()
+        .map(role_name)
+        .transpose()
+        .map_err(unprocessable)?;
+    let permissions = update
+        .permissions
+        .as_deref()
+        .map(permission_list)
+        .transpose()
+        .map_err(unprocessable)?;
+    let role = login
+        .index
+        .update_role(&id, name.as_deref(), permissions.as_deref())
+        .await
+        .map_err(|e| from_index("changing a role", e))?
+        .ok_or_else(|| refused(StatusCode::NOT_FOUND, "No such role"))?;
+    Ok(Json(shown_role(&role)).into_response())
+}
+
+async fn delete_role(
+    State(login): State<Login>,
+    Path(id): Path<String>,
+) -> Result<Response, Refusal> {
+    if id == ADMIN_ROLE {
+        return Err(refused(
+            StatusCode::CONFLICT,
+            "The admin role cannot be removed",
+        ));
+    }
+    let deleted = login
+        .index
+        .delete_role(&id)
+        .await
+        .map_err(|e| from_index("removing a role", e))?;
+    if !deleted {
+        return Err(refused(StatusCode::NOT_FOUND, "No such role"));
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 impl Login {
     /// The sign-in routes (`/auth/login`, `/auth/refresh`, `/auth/logout`,
-    /// `/auth/logout-all`), `GET /auth/me`, `POST /auth/password` and `/users`.
+    /// `/auth/logout-all`), `GET /auth/me`, `POST /auth/password`, `/users` and `/roles`.
     pub fn router(&self) -> anyhow::Result<Router> {
         let sessions: Router = auth_router(self.sessions.clone(), self.cookie.clone())
             .context("the refresh cookie")?;
@@ -710,6 +927,8 @@ impl Login {
             .route("/auth/download-token", post(download_token))
             .route("/users", get(list_users).post(create_user))
             .route("/users/{id}", put(update_user).delete(delete_user))
+            .route("/roles", get(list_roles).post(create_role))
+            .route("/roles/{id}", put(update_role).delete(delete_role))
             .with_state(self.clone());
         Ok(sessions.merge(own))
     }
@@ -725,18 +944,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_role_includes_the_ones_before() {
-        use Right::*;
-        let allowed = |role: Role| [SignedIn, Read, Write, Delete, Admin].map(|r| role.allows(r));
-        assert_eq!(allowed(Role::Reader), [true, true, false, false, false]);
-        assert_eq!(allowed(Role::Editor), [true, true, true, false, false]);
-        assert_eq!(allowed(Role::Manager), [true, true, true, true, false]);
-        assert_eq!(allowed(Role::Admin), [true, true, true, true, true]);
-        for role in [Role::Reader, Role::Editor, Role::Manager, Role::Admin] {
-            assert_eq!(role.as_str().parse(), Ok(role));
+    fn a_right_asks_for_a_permission_and_a_user_has_it_or_not() {
+        let user = |permissions: &[Permission]| super::SignedIn {
+            id: "u1".into(),
+            login: "ada".into(),
+            role: "custom".into(),
+            permissions: permissions.to_vec(),
+        };
+        let rights = [
+            Right::SignedIn,
+            Right::Read,
+            Right::Write,
+            Right::Remote,
+            Right::Delete,
+            Right::Admin,
+        ];
+        let allowed = |permissions: &[Permission]| rights.map(|r| user(permissions).may(r));
+        // their own account is every signed-in user's, whatever the role allows
+        assert_eq!(allowed(&[]), [true, false, false, false, false, false]);
+        assert_eq!(
+            allowed(&[Permission::Read]),
+            [true, true, false, false, false, false]
+        );
+        // permissions do not include one another: this role deletes but cannot upload
+        assert_eq!(
+            allowed(&[Permission::Read, Permission::Delete]),
+            [true, true, false, false, true, false]
+        );
+        assert_eq!(allowed(&Permission::ALL), [true; 6]);
+        for permission in Permission::ALL {
+            assert_eq!(permission.as_str().parse(), Ok(permission));
         }
-        assert!("Admin".parse::<Role>().is_err());
-        assert!("".parse::<Role>().is_err());
+        assert!("Read".parse::<Permission>().is_err());
+        assert!("admin".parse::<Permission>().is_err());
+        assert!("".parse::<Permission>().is_err());
+    }
+
+    #[test]
+    fn role_names_ids_and_permission_lists() {
+        assert_eq!(role_name("  Night shift "), Ok("Night shift".into()));
+        for bad in ["", "   ", "a\u{0}b", &"x".repeat(41)] {
+            assert!(role_name(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(role_id("Night shift"), Ok("night-shift".into()));
+        assert_eq!(role_id("  R&D / PhD 2 "), Ok("r-d-phd-2".into()));
+        assert!(role_id("---").is_err());
+        assert!(role_id("\u{e9}t\u{e9}").is_ok());
+        assert!(role_id("\u{4e2d}\u{6587}").is_err());
+
+        let list = |asked: &[&str]| {
+            permission_list(&asked.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>())
+        };
+        // stored once each, in one order, whatever was sent
+        assert_eq!(
+            list(&["delete", "read", "read"]),
+            Ok(vec!["read".into(), "delete".into()])
+        );
+        assert_eq!(list(&[]), Ok(vec![]));
+        assert!(list(&["read", "everything"]).is_err());
     }
 
     #[test]
@@ -797,10 +1062,14 @@ mod tests {
             (Method::PUT, "/ui/api/protocols/p1", Write),
             (Method::DELETE, "/ui/api/protocols/p1", Write),
             (Method::PATCH, "/studies/abc", Write),
-            (Method::GET, "/modalities", Write),
-            (Method::GET, "/modalities/hospital/studies", Write),
-            (Method::POST, "/modalities/hospital/move", Write),
-            (Method::GET, "/jobs/1", Write),
+            (Method::GET, "/modalities", Remote),
+            (Method::GET, "/modalities/hospital/studies", Remote),
+            (Method::POST, "/modalities/hospital/move", Remote),
+            (Method::GET, "/jobs/1", Remote),
+            (Method::GET, "/roles", SignedIn),
+            (Method::POST, "/roles", Admin),
+            (Method::PUT, "/roles/editor", Admin),
+            (Method::DELETE, "/roles/editor", Admin),
             (Method::DELETE, "/studies/abc", Delete),
             (Method::DELETE, "/patients/abc", Delete),
             (Method::GET, "/users", Admin),
