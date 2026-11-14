@@ -19,26 +19,46 @@ pacs-server
 - A start with the login on and something missing (the secret, a first password of 12 bytes
   or more) stops with the reason; it never starts unguarded.
 
-**The web interface has no sign-in page yet.** With the login on, `/ui/` loads and its
-requests are refused; use the REST API and DICOMweb with a token until it has one.
-`/ui/config.json` says `"auth": true`.
+The [web interface](web-interface.md) then opens on a sign-in page, and `/ui/config.json` says
+`"auth": true`.
 
 DIMSE has no login here: `PACS_DIMSE_KNOWN_CALLERS_ONLY` and the network decide who may open
 an association.
 
-## Roles
+## Roles and permissions
 
-Each role includes the ones before it.
+A user has one role, and a role gives permissions. No permission includes another: a role has
+the ones it is given.
 
-| Role | May |
+| Permission | Allows |
 |---|---|
-| `reader` | read: studies, images, metadata, archives, searches of this archive (`/tools/find`, `/tools/create-archive`) |
-| `editor` | also write: uploads, STOW-RS, measurements, hanging protocols, and everything about remote AEs (`/modalities`, `/jobs`) |
-| `manager` | also delete patients, studies, series and instances |
-| `admin` | also manage users |
+| `read` | studies, images, metadata, archives, searches of this archive (`/tools/find`, `/tools/create-archive`) |
+| `write` | uploads, STOW-RS, measurements, hanging protocols |
+| `remote` | everything about remote AEs (`/modalities`, `/jobs`) |
+| `delete` | deleting patients, studies, series and instances |
+| `users` | managing users and roles |
 
-Remote AEs need `editor` even to list or search: a search there shows the hospital's
-patients, identified, which someone who may only read a de-identified archive must not see.
+`remote` is apart from `read` because a search on a remote AE shows the hospital's patients,
+identified, which someone who may only read a de-identified archive must not see.
+
+A server starts with four roles, which can be changed or removed, and others added:
+
+| Role | Permissions |
+|---|---|
+| `reader` | `read` |
+| `editor` | `read`, `write`, `remote` |
+| `manager` | `read`, `write`, `remote`, `delete` |
+| `admin` | all of them, for good: this role cannot be changed or removed |
+
+| Request | |
+|---|---|
+| `GET /roles` | every role: `id`, `name`, `permissions`, `locked`; for any signed-in user |
+| `POST /roles` | `{"name", "permissions"}`: 201 with the role, whose `id` is made from the name; 409 when it exists |
+| `PUT /roles/{id}` | `{"name"}`, `{"permissions"}` or both: the role after the change |
+| `DELETE /roles/{id}` | 204; 409 while a user has the role |
+
+Changing roles needs `users`. A change reaches the users who have the role at their next
+refresh, within 15 minutes; `GET /auth/me` gives a user's `role` and `permissions`.
 
 Open without a token: `/healthz`, the web interface's own files (not `/ui/api/`), the three
 sign-in routes below, and `OPTIONS` (CORS preflight). Everything else answers 401 without a
@@ -56,7 +76,7 @@ crate.
 | `POST /auth/refresh` | the refresh cookie | a new access token and the rotated cookie |
 | `POST /auth/logout` | the refresh cookie | 204; that session ends |
 | `POST /auth/logout-all` | `Authorization: Bearer` | 204; every session of the user ends |
-| `GET /auth/me` | `Authorization: Bearer` | `{"id", "login", "role"}` |
+| `GET /auth/me` | `Authorization: Bearer` | `{"id", "login", "role", "permissions"}` |
 | `POST /auth/password` | `{"current_password", "new_password"}` | 204; the password is changed and every session of the user ends |
 
 - **The access token** is a JWT valid for 15 minutes, sent as `Authorization: Bearer <token>`
@@ -79,13 +99,27 @@ curl -H "Authorization: Bearer <access_token>" https://pacs.example/dicom-web/st
 curl -b jar -c jar -X POST https://pacs.example/auth/refresh
 ```
 
+### Links a browser follows itself
+
+A browser cannot send the header on a link it follows: a download, a page opened in a tab.
+For those:
+
+| Request | | |
+|---|---|---|
+| `POST /auth/download-token` | `{"path": "/studies/<id>/archive"}` | `{"token", "expires_in"}` |
+
+The token is good for one minute and for `GET` on that path alone, query included, sent as
+`?token=`. The user must be allowed to read the path; there is none for `/users` or `/auth`.
+It is the only token a URL may carry: an access token in a query is refused, and so is a
+download token in the header. The request log leaves it out.
+
 Behind a proxy that serves pacs-rs under a prefix, set `PACS_AUTH_COOKIE_PATH` to the path of
 `/auth` as the browser sees it (`/pacs/auth`). The cookie is `Secure`: over plain HTTP on
 localhost, `PACS_AUTH_COOKIE_SECURE=false` lets a browser keep it.
 
 ## Users
 
-For the administrator.
+For a role with `users`.
 
 | Request | |
 |---|---|
@@ -97,11 +131,11 @@ For the administrator.
 - A password is 12 to 1024 bytes, stored as an argon2id hash.
 - A new password, a deactivation or a removal ends the user's sessions at once. Their access
   token, and a new role, last until that token runs out: 15 minutes at most.
-- The last active administrator cannot be removed, deactivated or given another role (409).
+- The last active user with the `admin` role cannot be removed, deactivated or given another
+  role (409).
 
 ## Not yet
 
-- A sign-in page in the web interface.
 - Tokens for tools that cannot hold a session (a viewer, a pipeline), revocable one by one.
 - Signing in through an identity provider (OpenID Connect).
 - Rights per project.

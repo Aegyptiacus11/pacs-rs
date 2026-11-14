@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, bytes, plural } from "@/lib/api";
+import { may } from "@/lib/session";
 import { href } from "@/lib/route";
 import { cn } from "@/lib/utils";
 
@@ -112,7 +113,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   // the whole window takes drops
   useEffect(() => {
     let depth = 0;
-    const hasFiles = (e: DragEvent) => [...(e.dataTransfer?.types || [])].includes("Files");
+    // a role that may not write gets no drop zone: the server would refuse every file
+    const hasFiles = (e: DragEvent) => may("write") && [...(e.dataTransfer?.types || [])].includes("Files");
     const enter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();

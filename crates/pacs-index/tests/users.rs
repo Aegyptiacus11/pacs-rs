@@ -147,3 +147,69 @@ async fn the_refresh_tables_are_there() {
         }
     }
 }
+
+#[tokio::test]
+async fn roles_start_as_four_and_are_made_changed_and_removed() {
+    for index in common::indexes().await {
+        let perms = |list: &[&str]| list.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        let roles = index.roles().await.unwrap();
+        let ids: Vec<&str> = roles.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["reader", "editor", "manager", "admin"]);
+        assert_eq!(roles[0].permissions, perms(&["read"]));
+        assert_eq!(
+            roles[3].permissions,
+            perms(&["read", "write", "remote", "delete", "users"])
+        );
+        assert_eq!(index.role("nobody").await.unwrap(), None);
+
+        let student = index
+            .create_role("student", "Student", &perms(&["read"]))
+            .await
+            .unwrap();
+        assert_eq!(index.role("student").await.unwrap(), Some(student.clone()));
+        assert_eq!(index.roles().await.unwrap().last(), Some(&student));
+        let again = index.create_role("student", "Other", &[]).await;
+        assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
+
+        let renamed = index
+            .update_role("student", Some("Students"), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (renamed.name.as_str(), &renamed.permissions),
+            ("Students", &perms(&["read"]))
+        );
+        let widened = index
+            .update_role("student", None, Some(&perms(&["read", "write"])))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (widened.name.as_str(), &widened.permissions),
+            ("Students", &perms(&["read", "write"]))
+        );
+        let emptied = index
+            .update_role("student", None, Some(&[]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(emptied.permissions, perms(&[]));
+        assert_eq!(index.role("student").await.unwrap(), Some(emptied));
+        assert_eq!(
+            index.update_role("nobody", Some("x"), None).await.unwrap(),
+            None
+        );
+
+        // a role someone has stays
+        index
+            .create_user("u1", "ada", "h", "student")
+            .await
+            .unwrap();
+        let in_use = index.delete_role("student").await;
+        assert!(matches!(in_use, Err(Error::Conflict(_))), "{in_use:?}");
+        index.delete_user("u1", "admin").await.unwrap();
+        assert!(index.delete_role("student").await.unwrap());
+        assert!(!index.delete_role("student").await.unwrap());
+    }
+}

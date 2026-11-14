@@ -17,7 +17,7 @@ use pacs_dimse::{AeTitle, RemoteAe};
 use pacs_index::Index;
 use pacs_store::{S3Config, Store};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod annotations;
@@ -458,7 +458,15 @@ pub fn app_with_login(
     }
     // one line per request at INFO; tower-http's default is DEBUG
     let trace = TraceLayer::new_for_http()
-        .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+        // as tower-http's default span at INFO, but without a download token in the URI
+        .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+            tracing::info_span!(
+                "request",
+                method = %request.method(),
+                uri = %auth::for_log(request.uri()),
+                version = ?request.version(),
+            )
+        })
         .on_response(DefaultOnResponse::new().level(Level::INFO));
     Ok(app.layer(trace))
 }

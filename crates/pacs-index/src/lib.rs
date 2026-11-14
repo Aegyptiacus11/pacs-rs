@@ -20,11 +20,13 @@ mod annotations;
 mod delete;
 mod protocols;
 mod rest;
+mod roles;
 mod users;
 mod worklist;
 pub use delete::{Deleted, Level};
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
+pub use roles::StoredRole;
 pub use users::{StoredUser, UserChange};
 pub use worklist::{
     PatientQuery, PatientSort, WorklistFacets, WorklistPatient, WorklistQuery, WorklistSort,

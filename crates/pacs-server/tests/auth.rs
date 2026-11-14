@@ -897,3 +897,440 @@ async fn cors_preflight_passes_the_guard() {
         "https://viewer.example"
     );
 }
+
+async fn download_token(app: &Router, token: &str, path: &str) -> Reply {
+    post(
+        app,
+        "/auth/download-token",
+        Some(token),
+        json!({"path": path}),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_download_token_is_good_for_one_path_and_only_in_the_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let tokens = one_of_each(&app, &admin).await;
+    let reader = tokens["reader"].as_str();
+    for seed in [95, 96] {
+        let bytes = SyntheticSeries::new(seed, 1).slice_bytes(0);
+        let upload = send(
+            &app,
+            Method::POST,
+            "/instances",
+            Some(&admin),
+            None,
+            Some(bytes),
+        )
+        .await;
+        assert_eq!(upload.status, StatusCode::OK);
+    }
+    let studies = get(&app, "/studies", Some(reader)).await;
+    let ids: Vec<&str> = studies
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    let archive = format!("/studies/{}/archive", ids[0]);
+    let other = format!("/studies/{}/archive", ids[1]);
+
+    assert_eq!(
+        download_token(&app, "nonsense", &archive).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let made = download_token(&app, reader, &archive).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.body);
+    assert_eq!(made.body["expires_in"], 60);
+    let token = made.body["token"].as_str().unwrap();
+
+    // In the URL, with no header, the browser gets the archive.
+    let raw = |method: Method, uri: String| {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(request)
+    };
+    let zip = raw(Method::GET, format!("{archive}?token={token}"))
+        .await
+        .unwrap();
+    assert_eq!(zip.status(), StatusCode::OK);
+    assert!(
+        zip.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("zip")
+    );
+    let bytes = zip.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..2], b"PK");
+
+    // Not for another path, another method, the header, or once changed.
+    assert_eq!(
+        raw(Method::GET, format!("{other}?token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        raw(Method::GET, format!("/studies?token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        raw(Method::GET, format!("{archive}?x=1&token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        raw(Method::DELETE, format!("/studies/{}?token={token}", ids[0]))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        raw(Method::POST, format!("{archive}?token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        raw(Method::GET, format!("{archive}?token={token}x"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        get(&app, &archive, Some(token)).await.status,
+        StatusCode::UNAUTHORIZED,
+        "as a Bearer"
+    );
+    assert_eq!(
+        get(&app, "/studies", Some(token)).await.status,
+        StatusCode::UNAUTHORIZED,
+        "as a Bearer"
+    );
+    // An access token is never accepted from a URL.
+    assert_eq!(
+        raw(Method::GET, format!("{archive}?token={reader}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        raw(Method::GET, format!("/studies?token={admin}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // A path with a query is bound with its query.
+    let both = format!("/tools/create-archive?resources={},{}", ids[0], ids[1]);
+    let made = download_token(&app, reader, &both).await;
+    let token = made.body["token"].as_str().unwrap();
+    assert_eq!(
+        raw(Method::GET, format!("{both}&token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let one = format!("/tools/create-archive?resources={}", ids[0]);
+    assert_eq!(
+        raw(Method::GET, format!("{one}&token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // No token for accounts, for what is open, for what the role may not read, or for what is no path.
+    for path in ["/users", "/auth/me", "/auth/logout-all", "/healthz", "/ui/"] {
+        assert_eq!(
+            download_token(&app, &admin, path).await.status,
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        download_token(&app, reader, "/modalities").await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        download_token(&app, &tokens["editor"], "/modalities")
+            .await
+            .status,
+        StatusCode::OK
+    );
+    for path in [
+        "studies",
+        "",
+        "https://evil.example/x",
+        "/studies/a b",
+        "/studies?token=x",
+        "/studies#x",
+    ] {
+        let reply = download_token(&app, &admin, path).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{path:?}");
+    }
+    // A deactivated user's token still runs out by itself within the minute; a role is checked
+    // again when it is used.
+    let made = download_token(&app, &tokens["editor"], "/modalities").await;
+    let token = made.body["token"].as_str().unwrap();
+    assert_eq!(
+        raw(Method::GET, format!("/modalities?token={token}"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let put = async |path: String, body: Value| {
+        send(&app, Method::PUT, &path, Some(&admin), Some(body), None).await
+    };
+    let ids = |reply: &Reply| -> Vec<String> {
+        reply
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // A server starts with four roles; only admin is locked.
+    let roles = get(&app, "/roles", Some(&admin)).await;
+    assert_eq!(ids(&roles), ["reader", "editor", "manager", "admin"]);
+    assert_eq!(
+        roles.body[0],
+        json!({"id": "reader", "name": "Reader", "permissions": ["read"], "locked": false})
+    );
+    assert_eq!(roles.body[3]["locked"], true);
+    assert_eq!(
+        roles.body[3]["permissions"],
+        json!(["read", "write", "remote", "delete", "users"])
+    );
+    let me = get(&app, "/auth/me", Some(&admin)).await;
+    assert_eq!(
+        me.body["permissions"],
+        json!(["read", "write", "remote", "delete", "users"])
+    );
+
+    // A new role: its id comes from its name, its permissions are stored in one order.
+    let made = post(
+        &app,
+        "/roles",
+        Some(&admin),
+        json!({"name": "Night shift", "permissions": ["delete", "read"]}),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    assert_eq!(
+        made.body,
+        json!({"id": "night-shift", "name": "Night shift", "permissions": ["read", "delete"], "locked": false})
+    );
+    let again = post(&app, "/roles", Some(&admin), json!({"name": "night shift"})).await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    for body in [
+        json!({"name": "", "permissions": ["read"]}),
+        json!({"name": "---"}),
+        json!({"name": "Student", "permissions": ["read", "everything"]}),
+        json!({"permissions": ["read"]}),
+    ] {
+        let reply = post(&app, "/roles", Some(&admin), body.clone()).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+
+    // A user with it reads and deletes, and cannot upload: permissions do not include one another.
+    let nina = post(
+        &app,
+        "/users",
+        Some(&admin),
+        json!({"login": "nina", "password": "nina-password-1", "role": "night-shift"}),
+    )
+    .await;
+    assert_eq!(nina.status, StatusCode::CREATED, "{}", nina.body);
+    let unknown = post(
+        &app,
+        "/users",
+        Some(&admin),
+        json!({"login": "x", "password": "long-enough-password", "role": "owner"}),
+    )
+    .await;
+    assert_eq!(unknown.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let session = sign_in(&app, "nina", "nina-password-1").await;
+    let token = session.token();
+    assert_eq!(
+        get(&app, "/auth/me", Some(&token)).await.body["permissions"],
+        json!(["read", "delete"])
+    );
+    let series = SyntheticSeries::new(97, 1);
+    let upload = async |token: String| {
+        send(
+            &app,
+            Method::POST,
+            "/instances",
+            Some(&token),
+            None,
+            Some(series.slice_bytes(0)),
+        )
+        .await
+        .status
+    };
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(upload(token.clone()).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        get(&app, "/modalities", Some(&token)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    // every signed-in user sees the roles; only who manages users changes them
+    assert_eq!(
+        get(&app, "/roles", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/roles",
+            Some(&token),
+            json!({"name": "Mine", "permissions": ["users"]})
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let self_promote = send(
+        &app,
+        Method::PUT,
+        "/roles/night-shift",
+        Some(&token),
+        Some(json!({"permissions": ["users"]})),
+        None,
+    )
+    .await;
+    assert_eq!(self_promote.status, StatusCode::FORBIDDEN);
+
+    // The role gains a permission: the user has it at their next refresh, not before.
+    let widened = put(
+        "/roles/night-shift".into(),
+        json!({"permissions": ["read", "write", "delete"]}),
+    )
+    .await;
+    assert_eq!(
+        widened.body["permissions"],
+        json!(["read", "write", "delete"])
+    );
+    assert_eq!(
+        upload(token.clone()).await,
+        StatusCode::FORBIDDEN,
+        "the old token still says what it said"
+    );
+    let renewed = refresh(&app, &session.cookie()).await;
+    assert_eq!(upload(renewed.token()).await, StatusCode::OK);
+    // It loses everything: the user stays signed in and may do nothing but see their account.
+    put("/roles/night-shift".into(), json!({"permissions": []})).await;
+    let renewed = refresh(&app, &renewed.cookie()).await;
+    let token = renewed.token();
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get(&app, "/auth/me", Some(&token)).await.body["permissions"],
+        json!([])
+    );
+
+    // Renaming keeps the id, so the users keep their role.
+    let renamed = put("/roles/night-shift".into(), json!({"name": "On call"})).await;
+    assert_eq!(
+        (renamed.body["id"].as_str(), renamed.body["name"].as_str()),
+        (Some("night-shift"), Some("On call"))
+    );
+    assert_eq!(
+        put("/roles/night-shift".into(), json!({"permissions": ["fly"]}))
+            .await
+            .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        put("/roles/nobody".into(), json!({"name": "x"}))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+
+    // A role someone has cannot be removed; a free one can, a built-in one too.
+    let remove = async |id: &str| {
+        send(
+            &app,
+            Method::DELETE,
+            &format!("/roles/{id}"),
+            Some(&admin),
+            None,
+            None,
+        )
+        .await
+        .status
+    };
+    assert_eq!(remove("night-shift").await, StatusCode::CONFLICT);
+    let nina_id = nina.body["id"].as_str().unwrap();
+    send(
+        &app,
+        Method::PUT,
+        &format!("/users/{nina_id}"),
+        Some(&admin),
+        Some(json!({"role": "reader"})),
+        None,
+    )
+    .await;
+    assert_eq!(remove("night-shift").await, StatusCode::NO_CONTENT);
+    assert_eq!(remove("night-shift").await, StatusCode::NOT_FOUND);
+    assert_eq!(remove("manager").await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        ids(&get(&app, "/roles", Some(&admin)).await),
+        ["reader", "editor", "admin"]
+    );
+
+    // The admin role is as it is, for good: there is always a role that can manage the rest.
+    assert_eq!(remove("admin").await, StatusCode::CONFLICT);
+    assert_eq!(
+        put("/roles/admin".into(), json!({"permissions": ["read"]}))
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        put("/roles/admin".into(), json!({"name": "Root"}))
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        get(&app, "/users", Some(&admin)).await.status,
+        StatusCode::OK
+    );
+}

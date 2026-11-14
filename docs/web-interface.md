@@ -36,6 +36,19 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   first, each with its series as thumbnails. Tick two studies to compare them: the viewer shows
   each one's largest series side by side, scrolling together. Download everything of the
   patient, or delete them.
+- **Signing in**: when the server asks for a [login](login.md), the interface opens on a
+  sign-in page. The session survives a reload and lasts while it is used; the button with the
+  user's initials, at the right of the top bar, shows the login and the role, leads to the
+  account and signs out. What a role may not do is not offered: no upload without the right
+  to write, no deletion without the right to delete. Downloads go through a
+  [download token](login.md#links-a-browser-follows-itself).
+- **Settings**: at the foot of the rail (along the bottom on a narrow screen), in tabs. *Users*, for an administrator: the list,
+  adding one, changing a role, setting a new password, deactivating, activating and removing.
+  *Roles and permissions*: one column a role, one row a permission; who manages users ticks
+  what each role permits, adds roles, renames and removes them, and everyone else sees the
+  table read-only. *Your account*: the login, the
+  role, changing the password, signing out. *About this server*: its version and the
+  addresses a viewer or a script connects to. Without a login only the last one is there.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.
@@ -94,4 +107,4 @@ empty one removes it), for a study the server has. They are Cornerstone3D annota
 received in the `ui_annotations` table; deleting the study deletes them.
 
 Without the [login](login.md), whoever reaches it can delete, and change the shared protocols and
-the measurements. With it, the interface cannot be used yet: it has no sign-in page. `PACS_UI=false` turns it off, protocols and measurements included.
+the measurements. `PACS_UI=false` turns it off, protocols and measurements included.

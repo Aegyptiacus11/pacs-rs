@@ -1,10 +1,9 @@
 // Where the server is, requests to it, and DICOM values formatted for people.
 
-export const config: { dicomweb: string; version: string } = await fetch("config.json").then((r) => r.json());
-/** The REST API: the server's root, next to this page's folder. */
-export const ROOT = new URL("../", location.href);
-/** DICOMweb, wherever the server serves it. */
-export const WEB = new URL(config.dicomweb.replace(/^\/+|\/+$/g, "") + "/", ROOT);
+import { ROOT } from "@/lib/config";
+import { authFetch } from "@/lib/session";
+
+export { config, ROOT, WEB } from "@/lib/config";
 
 export class HttpError extends Error {
   constructor(
@@ -16,12 +15,12 @@ export class HttpError extends Error {
 }
 
 export async function api<T = any>(path: string, options: RequestInit = {}, base: URL = ROOT): Promise<T> {
-  const response = await fetch(new URL(path, base), options);
+  const response = await authFetch(new URL(path, base), options);
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {
       const body = await response.json();
-      message = body.Message || body.Details || message;
+      message = body.Message || body.Details || body.detail || message;
     } catch {}
     throw new HttpError(response.status, message);
   }

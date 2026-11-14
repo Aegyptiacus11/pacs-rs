@@ -3,6 +3,7 @@
 
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { authFetch } from "@/lib/session";
 
 export type Study = {
   id: string;
@@ -97,7 +98,7 @@ function search(query: Partial<StudyQuery>, extra: Record<string, string> = {}) 
 }
 
 async function get(url: URL) {
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await authFetch(url, { cache: "no-store" });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {

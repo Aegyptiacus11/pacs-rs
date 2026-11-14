@@ -5,13 +5,14 @@
 // which are worked out again on drawing, and without the pointer's hover over them.
 
 import { WEB } from "@/lib/api";
+import { authFetch } from "@/lib/session";
 
 const HERE = "{dicomweb}/";
 const LEFT_OUT = new Set(["cachedStats", "highlighted"]);
 const url = (study: string) => new URL(`api/annotations/${encodeURIComponent(study)}`, location.href);
 
 export async function fetchAnnotations(study: string): Promise<any[]> {
-  const response = await fetch(url(study), { cache: "no-store" });
+  const response = await authFetch(url(study), { cache: "no-store" });
   if (!response.ok) return [];
   const text = (await response.text()).replaceAll(JSON.stringify(HERE).slice(1, -1), JSON.stringify(WEB.href).slice(1, -1));
   const list = JSON.parse(text);
@@ -26,7 +27,7 @@ export async function saveAnnotations(study: string, list: any[]) {
     JSON.stringify(WEB.href).slice(1, -1),
     JSON.stringify(HERE).slice(1, -1),
   );
-  const response = await fetch(url(study), { method: "PUT", headers: { "Content-Type": "application/json" }, body: text });
+  const response = await authFetch(url(study), { method: "PUT", headers: { "Content-Type": "application/json" }, body: text });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {

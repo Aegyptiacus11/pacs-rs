@@ -63,6 +63,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { toast } from "sonner";
 import { Logo } from "@/components/app-header";
 import { api } from "@/lib/api";
+import { DownloadLink } from "@/components/download-link";
 import { tagRows } from "@/lib/dicom-tags";
 import { href } from "@/lib/route";
 import { applyTheme } from "@/lib/theme";
@@ -539,9 +540,9 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
                   <ImageDown /> This view as PNG
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild disabled={!s.instanceFile}>
-                  <a href={s.instanceFile ?? undefined} download>
+                  <DownloadLink path={s.instanceFile}>
                     <Download /> This image as DICOM
-                  </a>
+                  </DownloadLink>
                 </DropdownMenuItem>
               </ToolMenu>
               <ToolBtn label={fullscreen ? "Exit full" : "Full screen"} Icon={fullscreen ? Minimize : Maximize} shortcut="F" onClick={toggleFullscreen} />
@@ -560,9 +561,9 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
                   <ImageDown /> This view as PNG
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild disabled={!s.instanceFile}>
-                  <a href={s.instanceFile ?? undefined} download>
+                  <DownloadLink path={s.instanceFile}>
                     <Download /> This image as DICOM
-                  </a>
+                  </DownloadLink>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={toggleFullscreen}>
