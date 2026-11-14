@@ -5,6 +5,7 @@
 // (/ui/api/protocols), shared by every browser, and come first when they match.
 
 import { api } from "@/lib/api";
+import { authFetch } from "@/lib/session";
 import { sortSeries } from "@/lib/studies";
 import { LAYOUTS } from "@/viewer/controller";
 
@@ -86,7 +87,7 @@ const OLD_KEY = "pacs-rs-protocols";
 const AUTO_KEY = "pacs-rs-protocols-auto";
 
 async function send(method: string, id: string, body?: Protocol) {
-  const response = await fetch(new URL(`api/protocols/${encodeURIComponent(id)}`, location.href), {
+  const response = await authFetch(new URL(`api/protocols/${encodeURIComponent(id)}`, location.href), {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -111,7 +112,7 @@ export async function fetchUserProtocols(): Promise<Protocol[]> {
       localStorage.removeItem(OLD_KEY);
     }
   } catch {}
-  const response = await fetch(PROTOCOLS, { cache: "no-store" });
+  const response = await authFetch(PROTOCOLS, { cache: "no-store" });
   if (!response.ok) return [];
   const list = await response.json();
   return Array.isArray(list) ? list.filter((p) => p && typeof p.id === "string" && Array.isArray(p.viewports)) : [];

@@ -1,6 +1,7 @@
 // Pixels for thumbnails: one frame fetched as Explicit VR Little Endian and windowed onto a canvas.
 
 import { HttpError, WEB } from "@/lib/api";
+import { authFetch } from "@/lib/session";
 
 export const tag = (meta, t) => meta[t]?.Value;
 export const first = (meta, t, fallback) => {
@@ -52,7 +53,7 @@ export const FRAME_ACCEPT = 'multipart/related; type="application/octet-stream";
 
 // one frame, as modality values (mono) or RGB bytes
 export async function loadFrame(instanceUrl, frame, info) {
-  const response = await fetch(new URL(`${instanceUrl}/frames/${frame}`, WEB), { headers: { Accept: FRAME_ACCEPT } });
+  const response = await authFetch(new URL(`${instanceUrl}/frames/${frame}`, WEB), { headers: { Accept: FRAME_ACCEPT } });
   if (!response.ok) throw new HttpError(response.status, `frame: ${response.status}`);
   const raw = firstPart(await response.arrayBuffer(), response.headers.get("content-type") || "");
   const { rows, columns, samples, bitsAllocated, signed, slope, intercept } = info;
