@@ -37,13 +37,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { FacetedFilter } from "@/components/faceted-filter";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
+import { DownloadLink } from "@/components/download-link";
 import { SeriesThumb } from "@/components/series-thumb";
 import { useUpload } from "@/components/upload";
+import { may } from "@/lib/session";
 import { Modalities } from "@/components/modalities";
 import { FilterBox } from "@/components/search-bar";
 import { PAGE_SIZE, Pager } from "@/components/pager";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
-import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge, url } from "@/lib/api";
+import { bytes, formatDate, formatTime, initials, isoDate, parseDate, personName, plural, sexAge } from "@/lib/api";
 import { go, href } from "@/lib/route";
 import {
   deleteStudies,
@@ -360,9 +362,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                   : `${plural(total, "study", "studies")}${summary.data ? ` from ${plural(summary.data.patients, "patient")}` : ""}${filtered ? " match" : ""}`}
             </p>
           </div>
-          <Button onClick={upload.open} title="Or drop DICOM files or folders anywhere on the page">
-            <Upload /> Upload
-          </Button>
+          {may("write") && (
+            <Button onClick={upload.open} title="Or drop DICOM files or folders anywhere on the page">
+              <Upload /> Upload
+            </Button>
+          )}
         </div>
 
         {/* the filters in one row, right above what they filter: words, when, what, who */}
@@ -474,10 +478,16 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               {facets.all === 0 && !patient ? (
                 <>
                   <div className="font-medium">No studies yet</div>
-                  <p className="mt-1 max-w-sm text-sm text-muted-foreground">Upload DICOM files or folders, or send them with STOW-RS or POST /instances.</p>
-                  <Button className="mt-5" onClick={upload.open}>
-                    <Upload /> Upload studies
-                  </Button>
+                  {may("write") ? (
+                    <>
+                      <p className="mt-1 max-w-sm text-sm text-muted-foreground">Upload DICOM files or folders, or send them with STOW-RS or POST /instances.</p>
+                      <Button className="mt-5" onClick={upload.open}>
+                        <Upload /> Upload studies
+                      </Button>
+                    </>
+                  ) : (
+                    <p className="mt-1 max-w-sm text-sm text-muted-foreground">Studies appear here once someone uploads or sends them.</p>
+                  )}
                 </>
               ) : (
                 <>
@@ -522,11 +532,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             <span className="text-sm font-medium">{plural(selected.length, "study", "studies")} selected</span>
             <span className="mr-2 ml-2 text-sm text-muted-foreground">{selected.reduce((n, s) => n + s.instances, 0).toLocaleString()} images</span>
             <Button variant="ghost" size="sm" asChild>
-              <a href={url(`tools/create-archive?resources=${selected.map((s) => s.id).join(",")}`)} download>
+              <DownloadLink path={`tools/create-archive?resources=${selected.map((s) => s.id).join(",")}`}>
                 <Download /> Download ZIP
-              </a>
+              </DownloadLink>
             </Button>
-            <Button
+            {may("delete") && <Button
               variant="ghost"
               size="sm"
               className="text-destructive hover:text-destructive"
@@ -539,7 +549,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               }
             >
               <Trash2 /> Delete
-            </Button>
+            </Button>}
             <Button variant="ghost" size="icon-sm" aria-label="Clear selection" onClick={() => setSelection({})}>
               <X />
             </Button>
@@ -800,9 +810,9 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
             <Eye /> Open
           </Item>
           <Item asChild>
-            <a href={url(`studies/${s.id}/archive`)} download>
+            <DownloadLink path={`studies/${s.id}/archive`}>
               <Download /> Download ZIP
-            </a>
+            </DownloadLink>
           </Item>
         </>
       )}
@@ -814,10 +824,11 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
         <User /> All studies of this patient
       </Item>
       <Item asChild>
-        <a href={url(`patients/${s.patient}/archive`)} download>
+        <DownloadLink path={`patients/${s.patient}/archive`}>
           <Download /> Download all of this patient
-        </a>
+        </DownloadLink>
       </Item>
+      {may("delete") && <>
       <Separator />
       <Item variant="destructive" onSelect={() => onDelete(deleteOne(s))}>
         <Trash2 /> Delete study…
@@ -835,6 +846,7 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
       >
         <Trash2 /> Delete patient…
       </Item>
+      </>}
     </>
   );
 }
@@ -891,9 +903,9 @@ function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPi
             <Eye /> Open
           </Button>
           <Button variant="outline" asChild>
-            <a href={url(`studies/${s.id}/archive`)} download>
+            <DownloadLink path={`studies/${s.id}/archive`}>
               <Download /> Download
-            </a>
+            </DownloadLink>
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

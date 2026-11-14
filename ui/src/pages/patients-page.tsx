@@ -11,11 +11,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
+import { may } from "@/lib/session";
+import { DownloadLink } from "@/components/download-link";
 import { Modalities } from "@/components/modalities";
 import { PAGE_SIZE, Pager } from "@/components/pager";
 import { FilterBox } from "@/components/search-bar";
 import { SeriesThumb } from "@/components/series-thumb";
-import { formatDate, formatTime, initials, isoDate, personName, plural, sexAge, url } from "@/lib/api";
+import { formatDate, formatTime, initials, isoDate, personName, plural, sexAge } from "@/lib/api";
 import { go, href } from "@/lib/route";
 import { deleteStudies, usePatientPage, usePatientStudies, useRefreshStudies, useStudySeries, type Patient, type PatientQuery, type Study } from "@/lib/studies";
 import { cn } from "@/lib/utils";
@@ -228,11 +230,11 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
           <FileStack /> In the study list
         </Button>
         <Button variant="outline" asChild>
-          <a href={url(`patients/${id}/archive`)} download>
+          <DownloadLink path={`patients/${id}/archive`}>
             <Download /> Download all
-          </a>
+          </DownloadLink>
         </Button>
-        <DropdownMenu>
+        {may("delete") && <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="More actions">
               <Ellipsis />
@@ -253,7 +255,7 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
               <Trash2 /> Delete patient…
             </DropdownMenuItem>
           </DropdownMenuContent>
-        </DropdownMenu>
+        </DropdownMenu>}
         <Button variant="ghost" size="icon-sm" aria-label="Close the patient" title="Close (Esc)" className="text-muted-foreground" onClick={onClose}>
           <X />
         </Button>

@@ -49,8 +49,9 @@ import {
   Enums as ToolEnums,
   utilities as toolUtilities,
 } from "@cornerstonejs/tools";
-import { api, formatDate, formatTime, personName, ROOT, sexAge, WEB } from "@/lib/api";
+import { api, formatDate, formatTime, personName, sexAge, WEB } from "@/lib/api";
 import { first, num, tag } from "@/lib/pixels";
+import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
 
 export const TOOLS = {
@@ -207,7 +208,11 @@ export function initCornerstone() {
       if (renderingMode() === "cpu") setUseCPURendering(true);
       else if (document.createElement("canvas").getContext("webgl2")) setUseCPURendering(false);
     } catch {}
-    loaderInit({ maxWebWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) });
+    loaderInit({
+      maxWebWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)),
+      // every frame request carries the session's token, when the server asks for a login
+      beforeSend: async () => authHeaders(),
+    });
     volumeLoader.registerUnknownVolumeLoader(cornerstoneStreamingImageVolumeLoader as any);
     volumeLoader.registerVolumeLoader("cornerstoneStreamingImageVolume", cornerstoneStreamingImageVolumeLoader as any);
     toolsInit();
@@ -512,7 +517,7 @@ export class Viewer {
       playing: cell?.playing ?? false,
       index: cell?.index ?? 0,
       count: cell?.count ?? 0,
-      instanceFile: slot ? new URL(`instances/${slot.instance.ID}/file`, ROOT).href : null,
+      instanceFile: slot ? `instances/${slot.instance.ID}/file` : null,
       meta: slot?.meta ?? null,
       canMpr: this.planesPossible(cell?.data ?? null),
       canAdd: this.cells.length < 6,
