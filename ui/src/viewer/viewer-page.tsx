@@ -114,7 +114,7 @@ const SHORTCUTS: [string, string][] = [
   ["Middle drag, Shift drag", "Pan, whatever tool is chosen"],
   ["Right drag", "Zoom, whatever tool is chosen"],
   ["In a 3D view", "Drag to turn it, wheel or right drag to zoom"],
-  ["On a touch screen", "One finger runs the chosen tool, two pinch to zoom, three pan"],
+  ["On a touch screen", "One finger runs the chosen tool; two fingers pinch to zoom and drag to pan"],
   [", .", "Previous or next hanging protocol"],
   ["Esc", "Back to the studies"],
 ];

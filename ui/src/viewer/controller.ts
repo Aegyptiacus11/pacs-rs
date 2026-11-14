@@ -402,8 +402,8 @@ export class Viewer {
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     this.vrGroup = ToolGroupManager.createToolGroup(VR_GROUP)!;
     for (const tool of [TrackballRotateTool, PanTool, ZoomTool]) this.vrGroup.addTool(tool.toolName);
-    // on a touch screen: one finger turns it, two pinch to zoom
-    this.vrGroup.setToolActive(TrackballRotateTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }, { numTouchPoints: 1 }] });
+    // on a touch screen: one finger turns it (one touch is the left button), two pinch to zoom
+    this.vrGroup.setToolActive(TrackballRotateTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary }] });
     this.vrGroup.setToolActive(PanTool.toolName, {
       bindings: [{ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }],
     });
@@ -964,15 +964,16 @@ export class Viewer {
 
   // the left button runs the chosen tool; pan stays on the middle button and shift-drag,
   // zoom on the right button, scrolling on the wheel, whatever is chosen. On a touch screen
-  // one finger runs the chosen tool, two pinch to zoom, three pan.
+  // one finger runs the chosen tool (Cornerstone takes one touch for the left button), and
+  // two zoom by pinching and pan by dragging (the zoom tool does both).
   private bindings(name: ToolName, left: boolean) {
     const { MouseBindings, KeyboardBindings } = ToolEnums;
     const b: any[] = [];
     // the magnifying glass is ours (see `lens`), not Cornerstone's: no binding for it
     if (name === "magnify") return b;
-    if (left) b.push({ mouseButton: MouseBindings.Primary }, { numTouchPoints: 1 });
+    if (left) b.push({ mouseButton: MouseBindings.Primary });
     if (name === "scroll") b.push({ mouseButton: MouseBindings.Wheel });
-    if (name === "pan") b.push({ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }, { numTouchPoints: 3 });
+    if (name === "pan") b.push({ mouseButton: MouseBindings.Auxiliary }, { mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift });
     if (name === "zoom") b.push({ mouseButton: MouseBindings.Secondary }, { numTouchPoints: 2 });
     return b;
   }
@@ -983,9 +984,17 @@ export class Viewer {
         if (name === "crosshairs" && (group === this.stackGroup || this.mode !== "mpr")) continue;
         if (from && name !== from && name !== to && name !== "pan" && name !== "zoom" && name !== "scroll") continue;
         const b = this.bindings(name, name === to);
-        if (b.length) group.setToolActive(TOOLS[name].toolName, { bindings: b });
-        else if (name === "crosshairs") group.setToolEnabled(TOOLS[name].toolName);
-        else group.setToolPassive(TOOLS[name].toolName);
+        const toolName = TOOLS[name].toolName;
+        if (!b.length && name === "crosshairs") {
+          group.setToolEnabled(toolName);
+          continue;
+        }
+        // Cornerstone adds the bindings it is given to the ones a tool already has, so a tool
+        // that keeps one whatever is chosen (scroll its wheel, pan, zoom) would also keep the
+        // left button from when it was the chosen one, and run together with the next tool.
+        // Start each from none.
+        group.setToolPassive(toolName, { removeAllBindings: true });
+        if (b.length) group.setToolActive(toolName, { bindings: b });
       }
     }
   }
