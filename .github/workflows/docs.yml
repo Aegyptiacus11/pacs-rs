@@ -1,0 +1,82 @@
+# The documentation site, https://aegyptiacus11.github.io/pacs-rs/: the mdBook in docs/
+# (book.toml). A pull request checks the links and builds the book; a push to main also
+# publishes it to GitHub Pages. GitHub's own runners only, like ci.yml.
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - book.toml
+      - README.md
+      - scripts/check-doc-links.py
+      - scripts/test_check_doc_links.py
+      - .github/workflows/docs.yml
+  pull_request:
+    paths:
+      - docs/**
+      - book.toml
+      - README.md
+      - scripts/check-doc-links.py
+      - scripts/test_check_doc_links.py
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MDBOOK_VERSION: "0.5.4"
+  # of mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz, from the release's own digest
+  MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The link checker's own tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Links
+        run: python3 scripts/check-doc-links.py
+      - name: mdBook
+        run: |
+          set -euo pipefail
+          archive="mdbook-v$MDBOOK_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSLO "https://github.com/rust-lang/mdBook/releases/download/v$MDBOOK_VERSION/$archive"
+          echo "$MDBOOK_SHA256  $archive" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/mdbook"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/mdbook"
+          rm "$archive"
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
+      - name: Build the book
+        run: |
+          set -euo pipefail
+          mdbook build
+          test -s target/book/index.html
+          test -s target/book/roadmap.html
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          path: target/book
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
