@@ -13,7 +13,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   768 and 1024 pixels the chosen study opens the same way. In the viewer the tools stay on
   one line, scrolled sideways, and the series list slides over the images and closes once a
   series is chosen.
-- **Touch**: one finger runs the chosen tool; two fingers pinch to zoom and drag to pan. With a finger
+- **Touch**: one finger runs the chosen tool; two fingers pinch to zoom and drag to pan. A drag
+  across the viewport takes the window through the image's whole range, whatever the size
+  of the screen. With a finger
   there is no wheel, so a touch screen starts on the Scroll tool: a drag up or down goes
   through the images. In a 3D view one finger turns it and two zoom.
 - **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:

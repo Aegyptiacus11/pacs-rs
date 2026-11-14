@@ -54,10 +54,27 @@ import { first, num, tag } from "@/lib/pixels";
 import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
 
+/** A drag across this many pixels takes the window through the image's whole range. */
+const WINDOW_SWEEP = 1000;
+
+// Cornerstone's window tool changes the width and the level by a fixed amount a pixel, set
+// from the image's range so that about 1000 pixels cover it: right on a monitor, far too
+// slow on a phone, where the viewport is some 375 pixels wide and the same change takes
+// three swipes. Here a drag across the viewport covers the range whatever its size; on a
+// viewport of 1000 pixels or more nothing changes.
+class SizedWindowLevelTool extends WindowLevelTool {
+  getNewRange(args: any) {
+    const smaller = Math.min(args.viewport?.element?.clientWidth || WINDOW_SWEEP, args.viewport?.element?.clientHeight || WINDOW_SWEEP);
+    const gain = Math.max(1, WINDOW_SWEEP / Math.max(smaller, 1));
+    const [dx, dy] = args.deltaPointsCanvas;
+    return super.getNewRange({ ...args, deltaPointsCanvas: [dx * gain, dy * gain] });
+  }
+}
+
 export const TOOLS = {
   // through the images: always on the wheel, and on the left button or one finger when chosen
   scroll: StackScrollTool,
-  windowLevel: WindowLevelTool,
+  windowLevel: SizedWindowLevelTool,
   pan: PanTool,
   zoom: ZoomTool,
   magnify: MagnifyTool,
