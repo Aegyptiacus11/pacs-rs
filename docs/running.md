@@ -10,7 +10,7 @@ docker compose up -d --wait
 The web interface is then at `http://127.0.0.1:8080/ui/` and DICOMweb at
 `http://127.0.0.1:8080/dicom-web`; the index and files stay in the `pacs-data` volume. Settings go
 in the file's `environment` (the table below). To stay on one version instead of `latest`, run
-`PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.5.2 docker compose up -d`. The [login](login.md) is off by default, so the file publishes the port on 127.0.0.1 only: turn it on, or put an
+`PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.6.0 docker compose up -d`. The [login](login.md) is off by default, so the file publishes the port on 127.0.0.1 only: turn it on, or put an
 authenticating proxy in front, before opening it to a network.
 
 From source:
@@ -59,7 +59,7 @@ Every flag has a `PACS_*` environment variable:
 | `RUST_LOG` | `info` | log filter |
 
 The image is `ghcr.io/aegyptiacus11/pacs-rs` (linux/amd64 and linux/arm64; `:latest` or a
-version such as `:0.5.2`), or build it with `docker build -t pacs-rs .`: a static binary on an
+version such as `:0.6.0`), or build it with `docker build -t pacs-rs .`: a static binary on an
 empty image, about 40 MB with the web interface, run as
 an unprivileged user (uid 10001). It listens on `0.0.0.0:8080` and keeps the index and files in
 the `/data` volume unless `PACS_STORAGE` says otherwise. There is no shell or curl inside, so the
