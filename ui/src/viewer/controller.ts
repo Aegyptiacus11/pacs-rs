@@ -30,6 +30,7 @@ import { init as loaderInit, wadors } from "@cornerstonejs/dicom-image-loader";
 import {
   init as toolsInit,
   addTool,
+  cancelActiveManipulations,
   ToolGroupManager,
   WindowLevelTool,
   PanTool,
@@ -339,6 +340,8 @@ export type ViewerState = {
   index: number;
   count: number;
   instanceFile: string | null;
+  /** how many measurements are selected */
+  selected: number;
   meta: any;
   canMpr: boolean;
   canAdd: boolean;
@@ -375,6 +378,13 @@ export class Viewer {
   /** Called once when measurements could not be saved. */
   onSaveFailed: ((message: string) => void) | null = null;
   private saveFailed = false;
+  /** The measurements that were finished: one being drawn is not among them yet. */
+  private drawn = new Set<string>();
+  private onDrawn = (e: any) => {
+    const uid = e.detail?.annotation?.annotationUID;
+    if (uid) this.drawn.add(uid);
+  };
+  private onSelection = () => this.emit();
   private onAnnotation = (e: any) => {
     const a = e.detail?.annotation;
     // statistics worked out again on drawing are no change
@@ -434,6 +444,8 @@ export class Viewer {
     eventTarget.addEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
     for (const event of [ToolEnums.Events.ANNOTATION_COMPLETED, ToolEnums.Events.ANNOTATION_MODIFIED, ToolEnums.Events.ANNOTATION_REMOVED])
       eventTarget.addEventListener(event, this.onAnnotation);
+    eventTarget.addEventListener(ToolEnums.Events.ANNOTATION_COMPLETED, this.onDrawn);
+    eventTarget.addEventListener(ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, this.onSelection);
     this.resize = new ResizeObserver(() => this.refit());
     this.resize.observe(grid);
   }
@@ -450,6 +462,8 @@ export class Viewer {
     eventTarget.removeEventListener(Enums.Events.IMAGE_LOAD_FAILED, this.onLoadFailed);
     for (const event of [ToolEnums.Events.ANNOTATION_COMPLETED, ToolEnums.Events.ANNOTATION_MODIFIED, ToolEnums.Events.ANNOTATION_REMOVED])
       eventTarget.removeEventListener(event, this.onAnnotation);
+    eventTarget.removeEventListener(ToolEnums.Events.ANNOTATION_COMPLETED, this.onDrawn);
+    eventTarget.removeEventListener(ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, this.onSelection);
     // what is waiting goes now
     for (const [study, timer] of this.saves) {
       clearTimeout(timer);
@@ -489,6 +503,8 @@ export class Viewer {
             this.studyOfAnnotation.set(a.annotationUID, study);
             a.invalidated = true;
             annotation.state.addAnnotation(a, undefined as any);
+            this.drawn.add(a.annotationUID);
+            this.drawn.add(a.annotationUID);
           }
           this.annotationsIn.add(study);
           if (list.length) this.engine.render();
@@ -541,6 +557,7 @@ export class Viewer {
       index: cell?.index ?? 0,
       count: cell?.count ?? 0,
       instanceFile: slot ? `instances/${slot.instance.ID}/file` : null,
+      selected: annotation.selection.getAnnotationsSelected().length,
       meta: slot?.meta ?? null,
       canMpr: this.planesPossible(cell?.data ?? null),
       canAdd: this.cells.length < 6,
@@ -1366,6 +1383,57 @@ export class Viewer {
     this.cells.forEach((c) => c.viewport.render());
     return removed;
   }
+  /** Remove the selected measurements; what was removed, for `restoreMeasurements`. */
+  removeSelected() {
+    const removed: any[] = annotation.selection
+      .getAnnotationsSelected()
+      .map((uid) => annotation.state.getAnnotation(uid))
+      .filter(Boolean);
+    for (const a of removed) {
+      this.studyOf(a);
+      annotation.state.removeAnnotation(a.annotationUID);
+    }
+    // what is gone is no longer selected
+    annotation.selection.deselectAnnotation();
+    this.cells.forEach((c) => c.viewport.render());
+    this.emit();
+    return removed;
+  }
+
+  /** What Escape leaves, the innermost first: a measurement being drawn (it is dropped; a
+   * handle being moved just stops), then the selection, then a tool other than the one the
+   * viewer starts with. `null` when there was nothing to leave. */
+  escape(): "drawing" | "selection" | "tool" | null {
+    const finished = new Set(this.drawn);
+    let stopped = false;
+    for (const cell of this.cells) {
+      const uid = cancelActiveManipulations(cell.element);
+      if (!uid) continue;
+      stopped = true;
+      // Cornerstone ends a drawing by keeping it as it stands; an unfinished one is not wanted
+      if (!finished.has(uid)) {
+        this.drawn.delete(uid);
+        annotation.state.removeAnnotation(uid);
+      }
+    }
+    if (stopped) {
+      this.cells.forEach((c) => c.viewport.render());
+      return "drawing";
+    }
+    if (annotation.selection.getAnnotationsSelected().length) {
+      annotation.selection.deselectAnnotation();
+      this.cells.forEach((c) => c.viewport.render());
+      this.emit();
+      return "selection";
+    }
+    const first: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
+    if (this.tool !== first && !(this.tool === "crosshairs" && this.mode === "mpr")) {
+      this.useTool(first);
+      return "tool";
+    }
+    return null;
+  }
+
   /** Put measurements back, as `clearMeasurements` returned them. */
   restoreMeasurements(list: any[]) {
     const studies = new Set<string>();
@@ -1373,6 +1441,7 @@ export class Viewer {
       if (annotation.state.getAnnotation(a.annotationUID)) continue;
       a.invalidated = true;
       annotation.state.addAnnotation(a, undefined as any);
+      this.drawn.add(a.annotationUID);
       const study = this.studyOf(a);
       if (study) studies.add(study);
     }

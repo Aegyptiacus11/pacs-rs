@@ -92,8 +92,11 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
 - **Measurements are kept**: each one is saved with its study as soon as it is drawn, changed
-  or removed, and is there again when the study is opened, in any browser. Clear removes them
-  all, with an undo.
+  or removed, and is there again when the study is opened, in any browser. A click or a tap on one
+  selects it, and Delete (the key, or the button) removes it; Clear removes them all. Both can
+  be undone. Escape drops a measurement being drawn, then deselects, then goes back to the
+  tool the viewer starts with; it never leaves the viewer, which the arrow at the top left
+  does.
 
 The shared protocols are at `/ui/api/protocols`: `GET` lists them (most recently saved first),
 `PUT /ui/api/protocols/{id}` keeps one (a JSON object whose `id` is the path's, at most 64 KiB;

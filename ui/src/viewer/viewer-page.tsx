@@ -43,6 +43,7 @@ import {
   Tags,
   ZoomIn,
   GalleryVerticalEnd,
+  Trash2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -96,6 +97,7 @@ const SHORTCUTS: [string, string][] = [
   ["L A C B", "Length, angle, Cobb angle, bidirectional"],
   ["E, ⇧ E", "Ellipse ROI, rectangle ROI"],
   ["D", "Pixel value (density, HU)"],
+  ["Delete", "Remove the selected measurement (click or tap one to select it)"],
   ["⇧ Delete", "Remove all measurements"],
   ["R, ⇧ R", "Rotate right, left"],
   ["H, V", "Flip horizontal, vertical"],
@@ -116,7 +118,7 @@ const SHORTCUTS: [string, string][] = [
   ["In a 3D view", "Drag to turn it, wheel or right drag to zoom"],
   ["On a touch screen", "One finger runs the chosen tool; two fingers pinch to zoom and drag to pan"],
   [", .", "Previous or next hanging protocol"],
-  ["Esc", "Back to the studies"],
+  ["Esc", "Drop the measurement being drawn, then deselect, then go back to the starting tool"],
 ];
 
 type Tb = { label: string; tip?: string; Icon: typeof Ruler; shortcut?: string; active?: boolean; disabled?: boolean; onClick?: () => void };
@@ -323,6 +325,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
       } else if (e.key === "Home") v.first();
       else if (e.key === "End") v.last();
       else if (e.key === "Delete" && e.shiftKey) clearMeasurements();
+      else if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
       else if (tool[e.key]) v.useTool(tool[e.key]);
       else if (e.key >= "1" && e.key <= String(PRESETS.length)) v.setPreset(Number(e.key) - 1);
       else if (e.key === "i") v.toggleInvert();
@@ -347,7 +350,9 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         const at = protocols.findIndex((p) => p.protocol.id === protocol);
         applyPlan(protocols[at < 0 ? 0 : at + (e.key === "," ? -1 : 1)]);
       }
-      else if (e.key === "Escape" && !document.fullscreenElement) location.hash = href.studies(null, studyId);
+      // Escape leaves what one is in the middle of, never the viewer: the arrow at the top
+      // left goes back to the studies
+      else if (e.key === "Escape") v.escape();
     };
     addEventListener("keydown", keys);
     return () => removeEventListener("keydown", keys);
@@ -365,6 +370,14 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         duration: 8000,
       });
   }
+  function deleteSelected() {
+    const removed = viewer.current?.removeSelected() ?? [];
+    if (removed.length)
+      toast(`${removed.length === 1 ? "Measurement" : `${removed.length} measurements`} removed`, {
+        action: { label: "Undo", onClick: () => viewer.current?.restoreMeasurements(removed) },
+        duration: 8000,
+      });
+  }
   function startMpr() {
     viewer.current?.enterMpr().then((error) => error && toast.error("Couldn't open MPR", { description: error }));
   }
@@ -378,7 +391,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
     <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground">
       {/* the tools wrap on a wide screen; on a narrow one they stay on one line, scrolled sideways */}
       <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-0.5 border-b bg-card px-2 py-1 max-md:flex-nowrap max-md:overflow-x-auto max-md:[&>*]:shrink-0">
-        <Tip label="Back to the studies" shortcut="Esc">
+        <Tip label="Back to the studies">
           <a href={href.studies(null, studyId)} className="mr-1 flex h-12 shrink-0 items-center gap-2 rounded-md px-2 hover:bg-accent" aria-label="Back to the studies">
             <ArrowLeft className="size-4 text-muted-foreground" />
             <Logo className="size-5" />
@@ -427,6 +440,14 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
             {MEASURE.map((m) => (
               <ToolBtn key={m.tool} label={m.short} tip={`${m.label}: ${m.hint}`} Icon={m.Icon} shortcut={m.key} active={s.tool === m.tool} onClick={() => v.useTool(m.tool)} />
             ))}
+            <ToolBtn
+              label="Delete"
+              tip={s.selected ? "Remove the selected measurement" : "Click or tap a measurement to select it, then remove it here"}
+              Icon={Trash2}
+              shortcut="Del"
+              disabled={!s.selected}
+              onClick={deleteSelected}
+            />
             <ToolBtn label="Clear" tip="Remove all measurements (they are saved with the study)" Icon={Eraser} shortcut="⇧ Del" onClick={clearMeasurements} />
             <Sep />
             <ToolMenu label="Rotate" menuLabel="Rotate and flip" tip="Rotate right 90°" Icon={RotateCw} shortcut="R" onClick={() => v.rotate(90)}>
