@@ -10,12 +10,11 @@
 import { useSyncExternalStore } from "react";
 import { config, ROOT } from "@/lib/config";
 
-export type Role = "reader" | "editor" | "manager" | "admin";
-export type User = { id: string; login: string; role: Role };
+/** `role` is the id of the user's role; `permissions` what that role gives. */
+export type User = { id: string; login: string; role: string; permissions: string[] };
 type State = { status: "loading" | "out" | "in"; user: User | null };
 
 export const authOn = config.auth === true;
-const RANK: Record<Role, number> = { reader: 0, editor: 1, manager: 2, admin: 3 };
 
 let state: State = authOn ? { status: "loading", user: null } : { status: "in", user: null };
 let token: string | null = null;
@@ -38,10 +37,10 @@ export function useSession() {
 }
 
 /** What the signed-in user may do; everything when the server asks for no login. */
-export function may(right: "write" | "delete" | "admin", user: User | null = state.user) {
+export function may(right: "write" | "remote" | "delete" | "admin", user: User | null = state.user) {
   if (!authOn) return right !== "admin";
   if (!user) return false;
-  return RANK[user.role] >= { write: 1, delete: 2, admin: 3 }[right];
+  return user.permissions.includes(right === "admin" ? "users" : right);
 }
 
 const endpoint = (name: string) => new URL(`auth/${name}`, ROOT);

@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { useRoles } from "@/lib/roles";
 import { href } from "@/lib/route";
 import { changePassword, signOut, useSession } from "@/lib/session";
 
@@ -89,6 +90,7 @@ export function PasswordDialog({ open, onClose }: { open: boolean; onClose: () =
 export function UserMenu() {
   const { user } = useSession();
   const queries = useQueryClient();
+  const roles = useRoles();
   if (!user) return null;
   return (
     <>
@@ -106,9 +108,7 @@ export function UserMenu() {
         <DropdownMenuContent align="end" className="w-56">
           <DropdownMenuLabel className="flex items-center justify-between gap-3 font-normal">
             <span className="truncate font-medium">{user.login}</span>
-            <Badge variant="secondary" className="capitalize">
-              {user.role}
-            </Badge>
+            <Badge variant="secondary">{roles.data?.find((r) => r.id === user.role)?.name ?? user.role}</Badge>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>

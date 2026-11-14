@@ -4,24 +4,18 @@
 
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, CircleUser, Copy, Info, KeyRound, LogOut, Minus, ShieldCheck, Users } from "lucide-react";
+import { CircleUser, Copy, Info, KeyRound, LogOut, ShieldCheck, Users } from "lucide-react";
 import { toast } from "sonner";
 import { PasswordDialog } from "@/components/user-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { config, ROOT, WEB } from "@/lib/api";
 import { href, type SettingsSection } from "@/lib/route";
-import { authOn, may, signOut, useSession, type Role } from "@/lib/session";
+import { summary, useRoles, type Permission } from "@/lib/roles";
+import { authOn, may, signOut, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { RolesSection } from "@/pages/roles-section";
 import { UsersSection } from "@/pages/users-page";
-
-const ROLE_MAY: Record<string, string> = {
-  reader: "You read studies and images.",
-  editor: "You read, upload, measure, and pull studies from remote archives.",
-  manager: "You read, upload, measure, pull studies from remote archives, and delete.",
-  admin: "You do everything, managing users included.",
-};
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -46,7 +40,9 @@ function AccountSection() {
   const { user } = useSession();
   const queries = useQueryClient();
   const [password, setPassword] = useState(false);
+  const roles = useRoles();
   if (!user) return null;
+  const role = roles.data?.find((r) => r.id === user.role);
   return (
     <>
       <Section title="Your account" about="How you sign in to this server.">
@@ -54,10 +50,8 @@ function AccountSection() {
           <span className="font-medium">{user.login}</span>
         </Row>
         <Row label="Role">
-          <span className="hidden text-muted-foreground sm:inline">{ROLE_MAY[user.role]}</span>
-          <Badge variant="secondary" className="capitalize">
-            {user.role}
-          </Badge>
+          <span className="hidden text-muted-foreground sm:inline">{summary(user.permissions as Permission[])}</span>
+          <Badge variant="secondary">{role?.name ?? user.role}</Badge>
         </Row>
         <Row label="Password">
           <Button variant="outline" size="sm" onClick={() => setPassword(true)}>
@@ -79,67 +73,6 @@ function AccountSection() {
       </Section>
       <PasswordDialog open={password} onClose={() => setPassword(false)} />
     </>
-  );
-}
-
-const ROLES: Role[] = ["reader", "editor", "manager", "admin"];
-/** What the server lets each role do (`auth::right_for`): the lowest role that has it. */
-const PERMISSIONS: { what: string; detail: string; from: Role }[] = [
-  { what: "See studies and images", detail: "The lists, the viewer, metadata", from: "reader" },
-  { what: "Search and download", detail: "Find in this archive, ZIP archives, DICOM files", from: "reader" },
-  { what: "Upload studies", detail: "From the interface, STOW-RS or POST /instances", from: "editor" },
-  { what: "Save measurements and hanging protocols", detail: "Shared with everyone on this server", from: "editor" },
-  { what: "Use remote archives", detail: "Search another PACS and pull studies from it", from: "editor" },
-  { what: "Delete", detail: "Patients, studies, series and instances", from: "manager" },
-  { what: "Manage users", detail: "Add, change role, set passwords, deactivate, remove", from: "admin" },
-];
-
-function RolesSection() {
-  const { user } = useSession();
-  return (
-    <div>
-      <h2 className="text-base font-semibold tracking-tight">Roles and permissions</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Every user has one role. Each role permits what the one before it does, and more. The roles are fixed by the server.
-      </p>
-      <div className="mt-5 rounded-lg border bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Permission</TableHead>
-              {ROLES.map((role) => (
-                <TableHead key={role} className={cn("w-16 px-1 text-center capitalize md:w-24", role === user?.role && "text-selection")}>
-                  {role}
-                  {role === user?.role && <span className="block text-[10.5px] font-normal normal-case">your role</span>}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {PERMISSIONS.map(({ what, detail, from }) => (
-              <TableRow key={what}>
-                <TableCell className="whitespace-normal">
-                  <div className="font-medium">{what}</div>
-                  <div className="hidden text-xs text-muted-foreground sm:block">{detail}</div>
-                </TableCell>
-                {ROLES.map((role) => {
-                  const allowed = ROLES.indexOf(role) >= ROLES.indexOf(from);
-                  return (
-                    <TableCell key={role} className={cn("text-center", role === user?.role && "bg-selection-soft/50")}>
-                      {allowed ? (
-                        <Check className="mx-auto size-4" aria-label="Allowed" />
-                      ) : (
-                        <Minus className="mx-auto size-4 text-muted-foreground/50" aria-label="Not allowed" />
-                      )}
-                    </TableCell>
-                  );
-                })}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
   );
 }
 

@@ -1,6 +1,5 @@
-// The users, in the settings, for an administrator: who may sign in, with which role, and whether they still
-// may. Roles: a reader reads, an editor also writes, a manager also deletes, an administrator
-// also manages users.
+// The users, in the settings, for who manages them: who may sign in, with which role, and
+// whether they still may. The roles are the server's (Settings, Roles and permissions).
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,34 +32,29 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import { useSession, type Role } from "@/lib/session";
+import { summary, useRoles, type RoleInfo } from "@/lib/roles";
+import { useSession } from "@/lib/session";
 
-type Account = { id: string; login: string; role: Role; active: boolean; created_ms: number };
+type Account = { id: string; login: string; role: string; active: boolean; created_ms: number };
 
-const ROLES: { role: Role; may: string }[] = [
-  { role: "reader", may: "Reads studies and images" },
-  { role: "editor", may: "Also uploads, measures, and pulls from remote archives" },
-  { role: "manager", may: "Also deletes" },
-  { role: "admin", may: "Also manages users" },
-];
 const created = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
 const json = (body: unknown): RequestInit => ({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const tooShort = (password: string) => new TextEncoder().encode(password).length < MIN_PASSWORD;
 
-function RoleChoice({ value, onChange }: { value: Role; onChange: (role: Role) => void }) {
+function RoleChoice({ roles, value, onChange }: { roles: RoleInfo[]; value: string; onChange: (role: string) => void }) {
   return (
-    <div role="radiogroup" aria-label="Role" className="grid gap-1.5">
-      {ROLES.map(({ role, may }) => (
+    <div role="radiogroup" aria-label="Role" className="grid max-h-64 gap-1.5 overflow-auto">
+      {roles.map((role) => (
         <button
-          key={role}
+          key={role.id}
           type="button"
           role="radio"
-          aria-checked={value === role}
-          onClick={() => onChange(role)}
+          aria-checked={value === role.id}
+          onClick={() => onChange(role.id)}
           className="flex items-baseline gap-3 rounded-md border px-3 py-2 text-left text-sm outline-none transition-colors hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-checked:border-selection aria-checked:bg-selection-soft"
         >
-          <span className="w-16 shrink-0 font-medium capitalize">{role}</span>
-          <span className="text-muted-foreground">{may}</span>
+          <span className="w-24 shrink-0 truncate font-medium">{role.name}</span>
+          <span className="text-muted-foreground">{summary(role.permissions)}</span>
         </button>
       ))}
     </div>
@@ -76,16 +70,18 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function AddUser({ open, onClose }: { open: boolean; onClose: () => void }) {
+function AddUser({ open, roles, onClose }: { open: boolean; roles: RoleInfo[]; onClose: () => void }) {
   const queries = useQueryClient();
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>("reader");
+  // the first role is the one that permits least on a new server
+  const [chosen, setRole] = useState<string | null>(null);
+  const role = chosen ?? roles[0]?.id ?? "";
   const [error, setError] = useState<string | null>(null);
   const close = () => {
     setLogin("");
     setPassword("");
-    setRole("reader");
+    setRole(null);
     setError(null);
     onClose();
   };
@@ -121,7 +117,7 @@ function AddUser({ open, onClose }: { open: boolean; onClose: () => void }) {
           </Field>
           <div className="grid gap-1.5 text-sm font-medium">
             Role
-            <RoleChoice value={role} onChange={setRole} />
+            <RoleChoice roles={roles} value={role} onChange={setRole} />
           </div>
           <p role="alert" className="min-h-5 text-sm text-destructive">
             {error}
@@ -198,6 +194,8 @@ export function UsersSection() {
   const { user: me } = useSession();
   const queries = useQueryClient();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api<Account[]>("users") });
+  const roles = useRoles().data ?? [];
+  const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id;
   const [adding, setAdding] = useState(false);
   const [resetting, setResetting] = useState<Account | null>(null);
   const [removing, setRemoving] = useState<Account | null>(null);
@@ -205,7 +203,7 @@ export function UsersSection() {
   const done = () => queries.invalidateQueries({ queryKey: ["users"] });
   const failed = (e: unknown) => toast.error(e instanceof Error ? e.message : "The change was not made.");
   const change = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; role?: Role; active?: boolean }) => api(`users/${id}`, { method: "PUT", ...json(body) }),
+    mutationFn: ({ id, ...body }: { id: string; role?: string; active?: boolean }) => api(`users/${id}`, { method: "PUT", ...json(body) }),
     onSuccess: done,
     onError: failed,
   });
@@ -267,16 +265,16 @@ export function UsersSection() {
                   <TableCell>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="-ml-2.5 capitalize" aria-label={`Role of ${u.login}: ${u.role}`}>
-                          {u.role}
+                        <Button variant="ghost" size="sm" className="-ml-2.5" aria-label={`Role of ${u.login}: ${roleName(u.role)}`}>
+                          {roleName(u.role)}
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-[min(20rem,calc(100vw-2rem))]">
-                        <DropdownMenuRadioGroup value={u.role} onValueChange={(role) => role !== u.role && change.mutate({ id: u.id, role: role as Role })}>
-                          {ROLES.map(({ role, may }) => (
-                            <DropdownMenuRadioItem key={role} value={role} className="items-baseline">
-                              <span className="w-16 shrink-0 capitalize">{role}</span>
-                              <span className="text-xs text-muted-foreground">{may}</span>
+                        <DropdownMenuRadioGroup value={u.role} onValueChange={(role) => role !== u.role && change.mutate({ id: u.id, role })}>
+                          {roles.map((role) => (
+                            <DropdownMenuRadioItem key={role.id} value={role.id} className="items-baseline">
+                              <span className="w-24 shrink-0 truncate">{role.name}</span>
+                              <span className="text-xs text-muted-foreground">{summary(role.permissions)}</span>
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
@@ -312,7 +310,7 @@ export function UsersSection() {
           </Table>
         )}
       </div>
-      <AddUser open={adding} onClose={() => setAdding(false)} />
+      <AddUser open={adding} roles={roles} onClose={() => setAdding(false)} />
       <ResetPassword user={resetting} onClose={() => setResetting(null)} />
       <AlertDialog open={!!removing} onOpenChange={(o) => !o && !remove.isPending && setRemoving(null)}>
         <AlertDialogContent>
