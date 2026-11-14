@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-archive"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "dicom-dictionary-std",
@@ -1976,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "charls",
  "dicom-core",
@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-deid"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "dicom-core",
  "dicom-dictionary-std",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-dicomweb"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "axum",
  "bytes",
@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-dimse"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "dicom-core",
@@ -2051,7 +2051,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-index"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "dicom-core",
  "dicom-dictionary-std",
@@ -2065,7 +2065,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-rest"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "axum",
  "bytes",
@@ -2085,7 +2085,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-server"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "pacs-store"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "futures",

@@ -12,7 +12,7 @@ name: pacs-rs
 
 services:
   pacs:
-    # A release tag (e.g. ghcr.io/aegyptiacus11/pacs-rs:0.5.2) keeps the version fixed.
+    # A release tag (e.g. ghcr.io/aegyptiacus11/pacs-rs:0.6.0) keeps the version fixed.
     image: ${PACS_IMAGE:-ghcr.io/aegyptiacus11/pacs-rs:latest}
     restart: unless-stopped
     ports:
