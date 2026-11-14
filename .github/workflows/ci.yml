@@ -1,7 +1,8 @@
-# Checks every push to main and every pull request: the web interface, formatting, clippy, and
-# the tests on Linux (SQLite, Postgres, S3, the reference server and DIMSE interoperability)
-# and on Windows. GitHub's own runners only: this repository is public, so it never gets a
-# self-hosted runner.
+# Checks every push to main and every pull request: the workflows themselves, the web
+# interface, formatting, clippy, and the tests on Linux (SQLite, Postgres, S3, the reference
+# server and DIMSE interoperability) and on Windows. A job runs only when the change touches
+# what it checks (scripts/ci-changes.sh): documentation alone runs none of the builds.
+# GitHub's own runners only: this repository is public, so it never gets a self-hosted runner.
 name: ci
 
 on:
@@ -20,7 +21,61 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.changes.outputs.rust }}
+      ui: ${{ steps.changes.outputs.ui }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the commit a push started from, to compare with
+      - name: The filter's own tests
+        run: bash scripts/test-ci-changes.sh
+      # A pull request is checked out as its merge into the base, whose first parent is the
+      # base. A push to main is compared with where main was. Anything else runs every job.
+      - id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/paths"
+            bash scripts/ci-changes.sh < "$RUNNER_TEMP/paths" | tee -a "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] &&
+            git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
+            git diff --name-only "$BEFORE" HEAD > "$RUNNER_TEMP/paths"
+            bash scripts/ci-changes.sh < "$RUNNER_TEMP/paths" | tee -a "$GITHUB_OUTPUT"
+          else
+            bash scripts/ci-changes.sh --all | tee -a "$GITHUB_OUTPUT"
+          fi
+
+  # actionlint (with shellcheck on the scripts inside) over every workflow. Its list of
+  # GitHub's runners is older than Ubuntu 26.04, so that one message is ignored; drop the
+  # -ignore once an actionlint release knows the labels.
+  workflows:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      # of actionlint_1.7.12_linux_amd64.tar.gz, from the release's own digest
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO --output-dir "$RUNNER_TEMP" \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$archive"
+          (cd "$RUNNER_TEMP" && echo "$ACTIONLINT_SHA256  $archive" | sha256sum --check)
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color -ignore 'label "ubuntu-26\.04(-arm)?" is unknown'
+
   ui:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     defaults:
@@ -38,6 +93,8 @@ jobs:
       - run: npm run build
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -49,6 +106,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test-linux:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
@@ -91,6 +150,8 @@ jobs:
         run: for c in pg s3 ref; do echo "== $c"; docker logs --tail 50 "$c"; done
 
   test-windows:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-2025
     timeout-minutes: 60
     env:
