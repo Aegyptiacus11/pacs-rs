@@ -22,7 +22,8 @@ A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
 ```
 
-`.github/workflows/release.yml` then publishes, once every build has passed:
+`.github/workflows/release.yml` first runs every job of `ci.yml` on the tagged commit, and stops
+there if one fails. Then it publishes, once every build has passed:
 
 - `pacs-rs-<version>-linux-amd64.tar.gz` and `-linux-arm64.tar.gz`: the static
   `pacs-server` binary, no dependencies;
@@ -31,5 +32,5 @@ git tag -a v0.5.2 -m v0.5.2 && git push origin v0.5.2
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
 - a GitHub release with those files and `SHA256SUMS`.
 
-Started by hand (Actions, *release*, *Run workflow*), the same workflow is a dry run: it builds
-and smoke-tests everything at the workspace version and publishes nothing.
+Started by hand (Actions, *release*, *Run workflow*), the same workflow is a dry run: it tests,
+builds and smoke-tests everything at the workspace version and publishes nothing.
