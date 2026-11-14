@@ -96,7 +96,7 @@ jobs:
     env:
       RUSTFLAGS: -C target-feature=+crt-static
       # CharLS must use the same static C runtime (see the file).
-      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/ci/msvc-static-crt.cmake
+      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/cmake/msvc-static-crt.cmake
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain (rust-toolchain.toml)

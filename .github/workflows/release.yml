@@ -138,7 +138,7 @@ jobs:
       # Static C runtime: the .exe runs without the Visual C++ redistributable.
       RUSTFLAGS: -C target-feature=+crt-static
       # CharLS must use the same static C runtime (see the file).
-      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/ci/msvc-static-crt.cmake
+      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/cmake/msvc-static-crt.cmake
     defaults:
       run:
         shell: bash
