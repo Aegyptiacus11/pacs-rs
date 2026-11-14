@@ -82,10 +82,12 @@ pub(crate) fn built() -> bool {
 }
 
 /// `/ui/` and its files; `/` and `/ui` redirect there. `dicomweb_path` is where DICOMweb is
-/// served, e.g. `/dicom-web`.
-pub fn router(dicomweb_path: &str) -> Router {
+/// served, e.g. `/dicom-web`; `auth` says whether the server asks for a login.
+pub fn router(dicomweb_path: &str, auth: bool) -> Router {
     let config = serde_json::json!({
         "dicomweb": dicomweb_path,
+        // whether the server asks for a login
+        "auth": auth,
         "version": env!("CARGO_PKG_VERSION"),
     })
     .to_string();

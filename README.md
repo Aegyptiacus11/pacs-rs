@@ -27,14 +27,16 @@ The web interface is then at `http://127.0.0.1:8080/ui/` and DICOMweb at
 cargo run --release -p pacs-server
 ```
 
-**There is no login yet:** anyone who can reach the server can delete. The compose file publishes
-the port on 127.0.0.1 only; put an authenticating proxy in front before opening it to a network.
+**The login is off by default:** anyone who can reach the server can then delete. The compose
+file publishes the port on 127.0.0.1 only; turn the [login](docs/login.md) on (`PACS_AUTH`) or put
+an authenticating proxy in front before opening it to a network.
 
 ## Documentation
 
 | | |
 |---|---|
 | [Running](docs/running.md) | Docker, the image, every `PACS_*` setting |
+| [Login](docs/login.md) | `PACS_AUTH`: signing in, roles, users |
 | [Web interface](docs/web-interface.md) | the worklist, patients, the viewer, hanging protocols, measurements |
 | [DICOMweb](docs/dicomweb.md) | QIDO-RS, WADO-RS, STOW-RS; compression, transcoding, caching |
 | [REST API](docs/rest-api.md) | resources by public ID, uploads, deletion, find, archives, remote AEs |

@@ -10,8 +10,8 @@ docker compose up -d --wait
 The web interface is then at `http://127.0.0.1:8080/ui/` and DICOMweb at
 `http://127.0.0.1:8080/dicom-web`; the index and files stay in the `pacs-data` volume. Settings go
 in the file's `environment` (the table below). To stay on one version instead of `latest`, run
-`PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.5.2 docker compose up -d`. pacs-rs has no login yet, so the file publishes the port on 127.0.0.1 only: put an
-authenticating proxy in front before opening it to a network.
+`PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.5.2 docker compose up -d`. The [login](login.md) is off by default, so the file publishes the port on 127.0.0.1 only: turn it on, or put an
+authenticating proxy in front, before opening it to a network.
 
 From source:
 
@@ -39,6 +39,12 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_MAX_READ_BYTES` | 512 MiB | memory that reading files may take at once beyond the files themselves, by estimate (see [costly files](dicomweb.md#elements-in-un-wrong-lengths-and-costly-files)) |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
 | `PACS_UI` | `true` | serve the web interface at `/ui/` |
+| `PACS_AUTH` | `false` | ask for a [login](login.md) on every HTTP route but `/healthz` and the web interface's files |
+| `PACS_AUTH_SECRET` | | the secret that signs access tokens, at least 32 bytes; environment only, or `..._FILE` naming a file |
+| `PACS_ADMIN_LOGIN` | `admin` | the first administrator's login, made when there is no user yet |
+| `PACS_ADMIN_PASSWORD` | | the first administrator's password, 12 bytes or more, read only when there is no user yet; environment only, or `..._FILE` |
+| `PACS_AUTH_COOKIE_SECURE` | `true` | send the refresh cookie over HTTPS only |
+| `PACS_AUTH_COOKIE_PATH` | `/auth` | the cookie's path as the browser sees it, behind a proxy that adds a prefix |
 | `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
 | `PACS_DIMSE_AE_TITLE` | `PACSRS` | pacs-rs's AE title, called and calling |
 | `PACS_DIMSE_EXTRA_AE_TITLES` | none | further called AE titles accepted, comma-separated |
