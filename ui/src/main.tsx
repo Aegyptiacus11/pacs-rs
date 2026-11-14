@@ -7,10 +7,14 @@ import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UploadProvider } from "@/components/upload";
 import { App } from "@/app";
+import { restore } from "@/lib/session";
 import { applyTheme } from "@/lib/theme";
 
 // before the first paint, so a dark choice never flashes light
 applyTheme();
+
+// the session, if this browser has one; the app shows a spinner until it is known
+void restore();
 
 const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } } });
 
