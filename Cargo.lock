@@ -2111,6 +2111,7 @@ dependencies = [
  "jwt-sessions",
  "mimalloc",
  "pacs-archive",
+ "pacs-audit",
  "pacs-core",
  "pacs-deid",
  "pacs-dicomweb",

@@ -491,7 +491,8 @@ fn client_refused(error: &'static str, detail: &str) -> Response {
 }
 
 /// Before every route: let open requests through, refuse the others without a valid access
-/// token (401) or with a role that does not allow them (403).
+/// token (401) or with a role that does not allow them (403). The answer to a request that
+/// came with a valid token carries its [`SignedIn`], refused or not.
 async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> Response {
     let (method, path) = (request.method().clone(), request.uri().path().to_owned());
     if is_open(&method, &path) {
@@ -525,13 +526,17 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
                 let right = right_for(&method, &path);
                 if right.permission().is_none() || !client.may(right) {
                     tracing::info!(client = %client.login, role = %client.role, %method, %path, "refused: scope");
-                    return client_refused(
+                    let mut response = client_refused(
                         "insufficient_scope",
                         "This token's scope does not allow this",
                     );
+                    response.extensions_mut().insert(client);
+                    return response;
                 }
-                request.extensions_mut().insert(client);
-                return next.run(request).await;
+                request.extensions_mut().insert(client.clone());
+                let mut response = next.run(request).await;
+                response.extensions_mut().insert(client);
+                return response;
             };
             // a download token is for a URL, and for nothing else
             if claims.get(DOWNLOAD_CLAIM).is_some() {
@@ -574,10 +579,16 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     };
     if !user.may(right_for(&method, &path)) {
         tracing::info!(login = %user.login, role = %user.role, %method, %path, "refused: role");
-        return refused(StatusCode::FORBIDDEN, "Your role does not allow this").into_response();
+        let mut response =
+            refused(StatusCode::FORBIDDEN, "Your role does not allow this").into_response();
+        response.extensions_mut().insert(user);
+        return response;
     }
-    request.extensions_mut().insert(user);
-    next.run(request).await
+    request.extensions_mut().insert(user.clone());
+    let mut response = next.run(request).await;
+    // who asked, for the audit trail around the guard
+    response.extensions_mut().insert(user);
+    response
 }
 
 /// The `token` parameter of a query, and the query without it (`None` when nothing is left).
@@ -1048,7 +1059,7 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// The id and secret of `Authorization: Basic`, as a client sends them to the token route.
-fn basic_credentials(header: Option<&HeaderValue>) -> Option<(String, String)> {
+pub(crate) fn basic_credentials(header: Option<&HeaderValue>) -> Option<(String, String)> {
     let (scheme, encoded) = header?.to_str().ok()?.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("basic") {
         return None;

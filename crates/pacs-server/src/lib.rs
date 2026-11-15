@@ -21,6 +21,7 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod annotations;
+pub mod audit;
 pub mod auth;
 mod modalities;
 pub mod projects;
@@ -119,6 +120,16 @@ pub struct Settings {
     /// and audience (`aud`), and what a tool may name as `resource` when it asks for one.
     #[arg(long, env = "PACS_AUTH_ISSUER", default_value = "pacs-rs")]
     pub auth_issuer: String,
+
+    /// Keep an audit trail in this file (see `pacs_server::audit`): one line per event,
+    /// appended, in the format a hospital's audit repository reads. None by default: no
+    /// trail. A file that cannot be opened stops the start.
+    #[arg(long, env = "PACS_AUDIT_FILE")]
+    pub audit_file: Option<PathBuf>,
+
+    /// The name this server reports under in its audit messages (`AuditSourceID`).
+    #[arg(long, env = "PACS_AUDIT_SOURCE_ID", default_value = "pacs-rs")]
+    pub audit_source_id: String,
 
     /// Address DIMSE (C-ECHO, C-STORE) listens on, e.g. `0.0.0.0:11112`. None by default:
     /// no DIMSE port is opened.
@@ -406,14 +417,33 @@ pub fn app(archive: Archive, settings: &Settings) -> anyhow::Result<Router> {
 }
 
 /// [`app`] behind `login`, when there is one: its routes are added and every route is
-/// guarded (see [`auth`]).
+/// guarded (see [`auth`]). Without an audit trail: with `PACS_AUDIT_FILE` set, use
+/// [`app_with_audit`], and this refuses.
 pub fn app_with_login(
     archive: Archive,
     settings: &Settings,
     login: Option<auth::Login>,
 ) -> anyhow::Result<Router> {
+    if settings.audit_file.is_some() {
+        bail!(
+            "PACS_AUDIT_FILE is set: the application needs its audit trail (open_audit, app_with_audit)"
+        );
+    }
+    app_with_audit(archive, settings, login, audit::Audit::off())
+}
+
+/// [`app_with_login`] with `audit` around every route (see [`audit`]).
+pub fn app_with_audit(
+    archive: Archive,
+    settings: &Settings,
+    login: Option<auth::Login>,
+    audit: audit::Audit,
+) -> anyhow::Result<Router> {
     if settings.auth != login.is_some() {
         bail!("PACS_AUTH and the login given to the application disagree");
+    }
+    if settings.audit_file.is_some() != audit.is_on() {
+        bail!("PACS_AUDIT_FILE and the audit trail given to the application disagree");
     }
     let path = format!("/{}", settings.dicomweb_path.trim_matches('/'));
     if path == "/" {
@@ -458,6 +488,8 @@ pub fn app_with_login(
         // preflight requests itself
         app = login.protect(app.merge(login.router()?));
     }
+    // outside the guard, which it watches; inside CORS, whose preflights are no events
+    app = audit.observe(app);
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }
@@ -504,6 +536,8 @@ pub async fn serve(
     app: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
+    // with each caller's address, for the audit trail
+    let app = app.into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await?;
