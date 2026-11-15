@@ -40,6 +40,7 @@ mimalloc = { version = "0.1.52", default-features = false }
 object_store = { version = "0.14.2", features = ["aws"] }
 pacs-archive = { path = "crates/pacs-archive" }
 pacs-core = { path = "crates/pacs-core" }
+pacs-audit = { path = "crates/pacs-audit" }
 pacs-deid = { path = "crates/pacs-deid" }
 pacs-dicomweb = { path = "crates/pacs-dicomweb" }
 pacs-dimse = { path = "crates/pacs-dimse" }

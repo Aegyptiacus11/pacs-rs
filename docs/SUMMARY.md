@@ -6,6 +6,7 @@
 
 - [Running](running.md)
 - [Login](login.md)
+- [Audit trail](audit.md)
 - [Web interface](web-interface.md)
 - [DICOMweb](dicomweb.md)
 - [REST API](rest-api.md)

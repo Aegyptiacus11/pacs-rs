@@ -1,6 +1,6 @@
 use clap::Parser;
 use pacs_server::{
-    Settings, StorageLocation, app_with_login, dimse_config, open_archive, serve, serve_dimse,
+    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve, serve_dimse,
     shutdown_signal,
 };
 use tracing_subscriber::EnvFilter;
@@ -35,7 +35,8 @@ async fn main() -> anyhow::Result<()> {
             "no login (PACS_AUTH is off): anyone who reaches this server can read and delete"
         );
     }
-    let app = app_with_login(archive.clone(), &settings, login)?;
+    let audit = pacs_server::audit::open_audit(&settings)?;
+    let app = app_with_audit(archive.clone(), &settings, login, audit.clone())?;
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;
     // one shutdown signal for both servers
     let (stop, stopped) = tokio::sync::watch::channel(false);
@@ -49,8 +50,10 @@ async fn main() -> anyhow::Result<()> {
             let _ = stopped.wait_for(|s| *s).await;
         }
     };
+    let mut ae_titles = Vec::new();
     if let Some(dimse_listen) = settings.dimse_listen {
         let config = dimse_config(&settings)?;
+        ae_titles.push(config.ae_title.to_string());
         let projects = pacs_server::projects::open_projects_from_env(&settings, &archive)?;
         let dimse = tokio::net::TcpListener::bind(dimse_listen).await?;
         tracing::info!(
@@ -76,5 +79,8 @@ async fn main() -> anyhow::Result<()> {
         "pacs-server {} ready",
         env!("CARGO_PKG_VERSION"),
     );
-    serve(listener, app, until_stopped()).await
+    audit.application(true, &ae_titles);
+    let served = serve(listener, app, until_stopped()).await;
+    audit.application(false, &ae_titles);
+    served
 }

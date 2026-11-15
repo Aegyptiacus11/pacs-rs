@@ -1975,6 +1975,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pacs-audit"
+version = "0.7.0"
+dependencies = [
+ "base64 0.23.1",
+ "tempfile",
+]
+
+[[package]]
 name = "pacs-core"
 version = "0.7.0"
 dependencies = [
@@ -2103,6 +2111,7 @@ dependencies = [
  "jwt-sessions",
  "mimalloc",
  "pacs-archive",
+ "pacs-audit",
  "pacs-core",
  "pacs-deid",
  "pacs-dicomweb",

@@ -122,6 +122,8 @@ jobs:
       PACS_TEST_POSTGRES_URL: postgres://postgres:test@127.0.0.1:15432
       PACS_TEST_S3_ENDPOINT: http://127.0.0.1:18333
       PACS_TEST_REFERENCE_URL: http://127.0.0.1:18042/dicom-web
+      # audit messages are validated against DICOM's schema
+      PACS_TEST_XMLLINT: xmllint
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Toolchain (rust-toolchain.toml)
@@ -142,10 +144,10 @@ jobs:
           # the bucket the S3 tests use
           ready curl -fsS -o /dev/null -X PUT http://127.0.0.1:18333/pacs-test
 
-      - name: DCMTK and pynetdicom (DIMSE interoperability)
+      - name: DCMTK and pynetdicom (DIMSE interoperability), xmllint (audit schema)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq dcmtk
+          sudo apt-get install -y -qq dcmtk libxml2-utils
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install -q pynetdicom
           echo "PACS_TEST_PYTHON=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"

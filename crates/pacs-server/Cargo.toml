@@ -20,6 +20,7 @@ getrandom.workspace = true
 jwt-sessions.workspace = true
 mimalloc.workspace = true
 pacs-archive.workspace = true
+pacs-audit.workspace = true
 pacs-core.workspace = true
 pacs-deid.workspace = true
 pacs-dicomweb.workspace = true

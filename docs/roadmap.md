@@ -27,7 +27,7 @@ server can read and delete everything. What remains:
 | Rights per project | a user can be limited to some projects |
 | TLS on DIMSE | associations can require TLS, following PS3.15 H.1 (step 6 of the [plan](interop.md#build-order)) |
 | TLS to Postgres | the index connection is encrypted and the server's certificate checked |
-| Audit trail | every read, store, export, deletion and login is recorded as the DICOM audit message of PS3.15 (IHE ATNA), kept apart from the application log |
+| Audit trail | every read, store, export and deletion is recorded as the DICOM audit message of PS3.15 (IHE ATNA), kept apart from the application log, and the messages can be sent to a repository over TLS. Sign-ins, account changes and refusals are [recorded already](audit.md) |
 | Limits on requests | timeouts and a bound on concurrent requests, so that one client cannot hold the server |
 
 ## 2. Safe to keep data
