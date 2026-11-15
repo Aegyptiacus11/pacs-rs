@@ -37,6 +37,7 @@ an authenticating proxy in front before opening it to a network.
 |---|---|
 | [Running](docs/running.md) | Docker, the image, every `PACS_*` setting |
 | [Login](docs/login.md) | `PACS_AUTH`: signing in, roles, users |
+| [Audit trail](docs/audit.md) | `PACS_AUDIT_FILE`: who signed in and who changed what, as DICOM audit messages |
 | [Web interface](docs/web-interface.md) | the worklist, patients, the viewer, hanging protocols, measurements |
 | [DICOMweb](docs/dicomweb.md) | QIDO-RS, WADO-RS, STOW-RS; compression, transcoding, caching |
 | [REST API](docs/rest-api.md) | resources by public ID, uploads, deletion, find, archives, remote AEs |
@@ -59,6 +60,7 @@ an authenticating proxy in front before opening it to a network.
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
 | `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND and C-MOVE SCU |
+| `pacs-audit` | DICOM audit trail messages (PS3.15 A.5) as the syslog lines of IHE ATNA; no network or storage, usable on its own |
 | `pacs-deid` | de-identification by PS3.15 Annex E, configured per project; no network or storage, usable on its own |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |
 

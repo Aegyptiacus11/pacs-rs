@@ -75,3 +75,13 @@ docker run -d --rm --name pacs-rs-reference -p 127.0.0.1:18042:8042 \
 PACS_TEST_REFERENCE_URL=http://127.0.0.1:18042/dicom-web cargo test -p pacs-server --test reference
 docker stop pacs-rs-reference
 ```
+
+## The audit schema
+
+Every audit message is validated against the schema of DICOM PS3.15 A.5.1.1
+(`crates/pacs-audit/tests/`, with how the file was made) when `PACS_TEST_XMLLINT` names
+`xmllint` (Debian and Ubuntu: `libxml2-utils`); without it those checks are skipped:
+
+```bash
+PACS_TEST_XMLLINT=xmllint cargo test -p pacs-audit -p pacs-server --test schema --test audit
+```
