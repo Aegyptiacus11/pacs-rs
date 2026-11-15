@@ -41,7 +41,7 @@ const created = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "sho
 const json = (body: unknown): RequestInit => ({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const tooShort = (password: string) => new TextEncoder().encode(password).length < MIN_PASSWORD;
 
-function RoleChoice({ roles, value, onChange }: { roles: RoleInfo[]; value: string; onChange: (role: string) => void }) {
+export function RoleChoice({ roles, value, onChange }: { roles: RoleInfo[]; value: string; onChange: (role: string) => void }) {
   return (
     <div role="radiogroup" aria-label="Role" className="grid max-h-64 gap-1.5 overflow-auto">
       {roles.map((role) => (
@@ -61,7 +61,7 @@ function RoleChoice({ roles, value, onChange }: { roles: RoleInfo[]; value: stri
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="grid gap-1.5 text-sm font-medium">
       {label}

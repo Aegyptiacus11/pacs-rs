@@ -113,7 +113,7 @@ impl Index {
         Ok(Some(after))
     }
 
-    /// Remove a role; whether there was one. [`Error::Conflict`] while a user has it.
+    /// Remove a role; whether there was one. [`Error::Conflict`] while a user or a client has it.
     pub async fn delete_role(&self, id: &str) -> Result<bool, Error> {
         let mut tx = self.begin_write().await?;
         let holders: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE role = $1")
@@ -123,6 +123,15 @@ impl Index {
         if holders > 0 {
             return Err(Error::Conflict(format!(
                 "{holders} user(s) have this role: give them another one first"
+            )));
+        }
+        let clients: i64 = sqlx::query_scalar("SELECT count(*) FROM clients WHERE role = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if clients > 0 {
+            return Err(Error::Conflict(format!(
+                "{clients} tool(s) have this role: give them another one first"
             )));
         }
         let done = sqlx::query("DELETE FROM roles WHERE id = $1")

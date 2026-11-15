@@ -17,12 +17,14 @@ use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
 mod annotations;
+mod clients;
 mod delete;
 mod protocols;
 mod rest;
 mod roles;
 mod users;
 mod worklist;
+pub use clients::StoredClient;
 pub use delete::{Deleted, Level};
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};

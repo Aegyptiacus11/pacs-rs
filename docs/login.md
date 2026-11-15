@@ -61,7 +61,7 @@ Changing roles needs `users`. A change reaches the users who have the role at th
 refresh, within 15 minutes; `GET /auth/me` gives a user's `role` and `permissions`.
 
 Open without a token: `/healthz`, the web interface's own files (not `/ui/api/`), the three
-sign-in routes below, and `OPTIONS` (CORS preflight). Everything else answers 401 without a
+sign-in routes below, `/auth/token` for [tools](#tools), and `OPTIONS` (CORS preflight). Everything else answers 401 without a
 valid token, a route that does not exist included, and 403 with a role that does not allow it.
 Errors are `{"detail": "..."}`; a 401 carries `WWW-Authenticate: Bearer`.
 
@@ -134,9 +134,71 @@ For a role with `users`.
 - The last active user with the `admin` role cannot be removed, deactivated or given another
   role (409).
 
+## Tools
+
+A program that connects without a person (a viewer, a script, a pipeline) is a client: it has
+an ID, a secret and a role, and exchanges the first two for a short access token. This is the
+OAuth client credentials grant as IHE's Internet User Authorization profile (IUA) uses it:
+Get Access Token [ITI-71] to get the token, Incorporate Access Token [ITI-72] to send it.
+
+An administrator adds a tool in the web interface (Settings, Tools) or with `POST /clients`.
+The secret is in that answer and nowhere after: the index keeps its SHA-256.
+
+```bash
+# once, by an administrator: the answer holds "id" and "secret"
+curl -H "Authorization: Bearer <an administrator's access token>" -H 'content-type: application/json' \
+  -d '{"name":"Nightly pipeline","role":"editor"}' https://pacs.example/clients
+
+# the tool, whenever its token has run out
+curl -u "$ID:$SECRET" -d grant_type=client_credentials https://pacs.example/auth/token
+curl -H "Authorization: Bearer <access_token>" https://pacs.example/dicom-web/studies
+```
+
+`POST /auth/token` takes a form (`application/x-www-form-urlencoded`), with the ID and the
+secret in `Authorization: Basic`:
+
+| Parameter | |
+|---|---|
+| `grant_type` | `client_credentials` |
+| `scope` | optional: permissions separated by spaces, to get less than the role gives |
+| `resource` | optional: this server's name (`PACS_AUTH_ISSUER`); another one is refused |
+| `requested_token_type` | optional: `urn:ietf:params:oauth:token-type:jwt`, the only kind |
+
+The answer is `{"access_token", "token_type": "Bearer", "scope", "expires_in": 300}`, never
+kept by a cache. A request that is refused gets OAuth's errors as `{"error",
+"error_description"}`: 401 `invalid_client` for an unknown ID or a wrong secret, 400
+`invalid_request`, `unsupported_grant_type`, `invalid_scope` or `invalid_target` for the rest.
+
+- **The access token** is a JWT signed with HS256, good for five minutes, with the claims
+  IUA's JSON Web Token option asks for: `iss` and `aud` (both `PACS_AUTH_ISSUER`), `sub` and
+  `client_id` (the tool's ID), `jti`, `iat`, `exp` and `scope`. It goes in
+  `Authorization: Bearer`, never in a URL.
+- **What it allows** is its scope, which is at most the role's `read`, `write`, `remote` and
+  `delete`. A tool never has `users`, whatever its role: nothing of the users, the roles, the
+  tools or `/auth`.
+- **Every request is checked against the tool as it is now.** A tool that is removed, a role
+  it is moved to, a permission taken from its role: each holds at the tool's next request,
+  for the tokens it already has too.
+- **A refused request gets 401**, as ITI-72 asks, not the 403 a user gets: with
+  `WWW-Authenticate: Bearer error="invalid_token"` when the token is not good, and
+  `error="insufficient_scope"` when it does not allow the request.
+
+| Request | |
+|---|---|
+| `GET /clients` | every tool: `id`, `name`, `role`, `created_by`, `created_ms`, `last_token_ms` |
+| `POST /clients` | `{"name", "role"}`: 201 with the tool and its `secret`, this once |
+| `PUT /clients/{id}` | `{"name"}`, `{"role"}` or both: the tool after the change |
+| `DELETE /clients/{id}` | 204: the tool is revoked |
+
+These need `users`. A role cannot be removed while a tool has it (409).
+
+What this is not: a complete IUA Authorization Server. There is no authorization code grant
+(a person signs in with a password here), no server metadata [ITI-103] and no token
+introspection [ITI-102]; the tokens are signed with the server's own secret, so only pacs-rs
+can check them; and TLS, which IUA requires, is the proxy's in front of pacs-rs.
+
 ## Not yet
 
-- Tokens for tools that cannot hold a session (a viewer, a pipeline), revocable one by one.
 - Signing in through an identity provider (OpenID Connect).
 - Rights per project.
 - An audit trail of who read, stored and deleted what.

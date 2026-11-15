@@ -213,3 +213,86 @@ async fn roles_start_as_four_and_are_made_changed_and_removed() {
         assert!(!index.delete_role("student").await.unwrap());
     }
 }
+
+#[tokio::test]
+async fn clients_are_created_found_changed_and_removed() {
+    for index in common::indexes().await {
+        assert_eq!(index.clients().await.unwrap(), []);
+        assert_eq!(index.client("nobody").await.unwrap(), None);
+
+        let viewer = index
+            .create_client("c1", "Viewer", "hash-1", "reader", "ada")
+            .await
+            .unwrap();
+        assert!(viewer.created_ms > 0);
+        assert_eq!(viewer.last_token_ms, None);
+        let pipeline = index
+            .create_client("c2", "Pipeline", "hash-2", "editor", "ada")
+            .await
+            .unwrap();
+        assert_eq!(
+            index.clients().await.unwrap(),
+            [viewer.clone(), pipeline.clone()]
+        );
+        assert_eq!(index.client("c1").await.unwrap(), Some(viewer.clone()));
+        let again = index
+            .create_client("c1", "Other", "hash-3", "reader", "ada")
+            .await;
+        assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
+
+        let changed = index
+            .update_client("c2", Some("Nightly pipeline"), Some("manager"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (changed.name.as_str(), changed.role.as_str()),
+            ("Nightly pipeline", "manager")
+        );
+        // the secret and who made it stay
+        assert_eq!(
+            (changed.secret_hash.as_str(), changed.created_by.as_str()),
+            ("hash-2", "ada")
+        );
+        // nothing to change leaves the client as it is
+        assert_eq!(
+            index.update_client("c2", None, None).await.unwrap(),
+            Some(changed)
+        );
+        assert_eq!(
+            index
+                .update_client("nobody", Some("x"), None)
+                .await
+                .unwrap(),
+            None
+        );
+
+        index.client_got_token("c1").await.unwrap();
+        let used = index.client("c1").await.unwrap().unwrap();
+        assert!(used.last_token_ms.is_some_and(|ms| ms >= viewer.created_ms));
+        // a client that is gone is not an error: its token request was refused before
+        index.client_got_token("nobody").await.unwrap();
+
+        assert!(index.delete_client("c2").await.unwrap());
+        assert!(!index.delete_client("c2").await.unwrap());
+        assert_eq!(index.clients().await.unwrap(), [used]);
+    }
+}
+
+#[tokio::test]
+async fn a_role_a_client_has_stays() {
+    for index in common::indexes().await {
+        index
+            .create_role("robot", "Robot", &["read".to_owned()])
+            .await
+            .unwrap();
+        index
+            .create_client("c1", "Viewer", "hash-1", "robot", "ada")
+            .await
+            .unwrap();
+        let in_use = index.delete_role("robot").await;
+        assert!(matches!(in_use, Err(Error::Conflict(_))), "{in_use:?}");
+        assert!(index.delete_client("c1").await.unwrap());
+        assert!(index.delete_role("robot").await.unwrap());
+    }
+}

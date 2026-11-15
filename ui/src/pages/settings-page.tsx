@@ -1,10 +1,10 @@
 // The settings, from the foot of the rail: the users for an administrator, the roles and what
-// each one permits, one's own account when the server asks for a login, and what this server is. A section the user may not see
+// each one permits, the tools that connect without a person, one's own account when the server asks for a login, and what this server is. A section the user may not see
 // is not listed, and asking for it by address shows the first one they may.
 
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleUser, Copy, Info, KeyRound, LogOut, ShieldCheck, Users } from "lucide-react";
+import { CircleUser, Copy, Info, KeyRound, LogOut, ShieldCheck, Users, Waypoints } from "lucide-react";
 import { toast } from "sonner";
 import { PasswordDialog } from "@/components/user-menu";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import { summary, useRoles, type Permission } from "@/lib/roles";
 import { authOn, may, signOut, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { RolesSection } from "@/pages/roles-section";
+import { ToolsSection } from "@/pages/tools-section";
 import { UsersSection } from "@/pages/users-page";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -114,6 +115,7 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
   const sections = [
     { id: "users" as const, label: "Users", Icon: Users, shown: authOn && may("admin", user) },
     { id: "roles" as const, label: "Roles and permissions", Icon: ShieldCheck, shown: authOn && !!user },
+    { id: "tools" as const, label: "Tools", Icon: Waypoints, shown: authOn && may("admin", user) },
     { id: "account" as const, label: "Your account", Icon: CircleUser, shown: authOn && !!user },
     { id: "about" as const, label: "About this server", Icon: Info, shown: true },
   ].filter((s) => s.shown);
@@ -146,6 +148,8 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
             <UsersSection />
           ) : current.id === "roles" ? (
             <RolesSection />
+          ) : current.id === "tools" ? (
+            <ToolsSection />
           ) : current.id === "account" ? (
             <AccountSection />
           ) : (
