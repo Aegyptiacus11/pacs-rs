@@ -22,6 +22,7 @@ use tracing::Level;
 
 mod annotations;
 pub mod audit;
+mod audit_routes;
 pub mod auth;
 mod modalities;
 pub mod projects;
@@ -459,6 +460,7 @@ pub fn app_with_audit(
                 .collect(),
         ));
     let index = archive.index().clone();
+    let audit_index = index.clone();
     let dicomweb = pacs_dicomweb::router(
         archive,
         pacs_dicomweb::Config {
@@ -489,7 +491,7 @@ pub fn app_with_audit(
         app = login.protect(app.merge(login.router()?));
     }
     // outside the guard, which it watches; inside CORS, whose preflights are no events
-    app = audit.observe(app);
+    app = audit.observe(app, audit_index, &path);
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }
