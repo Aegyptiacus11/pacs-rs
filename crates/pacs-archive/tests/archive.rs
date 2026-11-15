@@ -381,3 +381,73 @@ async fn the_read_limit_and_deletions_do_not_wait_on_each_other() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn what_a_request_stored_is_handed_to_who_asks() {
+    use pacs_archive::observed::{Stored, stored_during};
+    let archive = archive().await;
+    let series = SyntheticSeries::new(31, 2).for_patient(3);
+    let other = SyntheticSeries::new(32, 1);
+    let noted = |series: &SyntheticSeries, outcome| Stored {
+        study_instance_uid: series.study_uid(),
+        sop_class_uid: "1.2.840.10008.5.1.4.1.1.2".into(),
+        patient_id: Some(series.patient_id()),
+        patient_name: Some("SYNTHETIC^SERIES".into()),
+        outcome,
+    };
+
+    // every instance a request ingests, in order, with whose it is and what became of it
+    let (count, stored) = stored_during(async {
+        let mut count = 0;
+        for bytes in series.all_bytes().into_iter().chain(other.all_bytes()) {
+            archive.ingest(Bytes::from(bytes)).await.unwrap();
+            count += 1;
+        }
+        count
+    })
+    .await;
+    assert_eq!(count, 3);
+    assert_eq!(
+        stored,
+        [
+            noted(&series, Outcome::Added),
+            noted(&series, Outcome::Added),
+            noted(&other, Outcome::Added)
+        ]
+    );
+
+    // a copy already held is noted as such; what is refused is not noted at all
+    let (results, stored) = stored_during(async {
+        let again = archive.ingest(Bytes::from(series.slice_bytes(0))).await;
+        let garbage = archive.ingest(Bytes::from_static(b"not DICOM")).await;
+        let elsewhere = archive
+            .ingest_in_study(
+                Bytes::from(SyntheticSeries::new(33, 1).slice_bytes(0)),
+                "1.2.3",
+            )
+            .await;
+        (again.is_ok(), garbage.is_err(), elsewhere.is_err())
+    })
+    .await;
+    assert_eq!(results, (true, true, true));
+    assert_eq!(stored, [noted(&series, Outcome::AlreadyStored)]);
+
+    // a request that stores nothing has nothing; and outside one, ingest works the same
+    let ((), stored) = stored_during(async {}).await;
+    assert_eq!(stored, []);
+    let alone = archive
+        .ingest(Bytes::from(SyntheticSeries::new(34, 1).slice_bytes(0)))
+        .await;
+    assert_eq!(alone.unwrap().outcome, Outcome::Added);
+    // two requests at once keep their own
+    let (first, second) = tokio::join!(
+        stored_during(archive.ingest(Bytes::from(SyntheticSeries::new(35, 1).slice_bytes(0)))),
+        stored_during(archive.ingest(Bytes::from(SyntheticSeries::new(36, 1).slice_bytes(0)))),
+    );
+    assert_eq!(first.1.len(), 1);
+    assert_eq!(second.1.len(), 1);
+    assert_ne!(
+        first.1[0].study_instance_uid,
+        second.1[0].study_instance_uid
+    );
+}
