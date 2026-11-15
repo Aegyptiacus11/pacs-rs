@@ -1,9 +1,11 @@
 # Roadmap
 
-The way from today's pacs-rs to one that can run in production as a **research PACS** beside a
-hospital's clinical PACS ([the role](interop.md#the-role)). The milestones are in the order they
-are meant to be built: the first three make it safe to run with real data, the next two complete
-what it does, the last one proves it. Inside a milestone the order is free.
+The way from today's pacs-rs to one that can run in production, first as a **research PACS**
+beside a hospital's clinical PACS, then as a **clinical PACS** itself: both in one program
+([the role](interop.md#the-role)). The milestones are in the order they are meant to be built:
+the first three make it safe to run with real data, the next two complete the research PACS,
+the sixth adds what a hospital's own archive needs, the last one proves it. Inside a milestone
+the order is free.
 
 Every behaviour comes from the DICOM standard or an IHE profile and is tested against DCMTK,
 dcm4che and pynetdicom ([sources](interop.md)). An item is done when its "done when" holds in a
@@ -81,7 +83,22 @@ So that workstations, viewers and other archives can use pacs-rs as they use any
 | Write-back | segmentations as DICOM Segmentation and measurements as Structured Reports go to the hospital's destination (clinical mode, step 7) |
 | Labels, metadata and modifications | the rest of the [REST API](rest-api.md) that research tools use |
 
-## 6. Proven
+## 6. The clinical archive
+
+What a hospital's own archive does beyond storing and serving images: the Image Manager/Image
+Archive of IHE Scheduled Workflow.b ([the plan](interop.md#the-clinical-archive)).
+
+| Item | Done when |
+|---|---|
+| Patient updates and orders | an HL7 v2 message over MLLP that corrects a patient or merges two changes the studies already stored, and what is served afterwards has the new values [RAD-4, -12, -13] |
+| Modality Performed Procedure Step | a modality's N-CREATE and N-SET are accepted and kept, and the study shows what was performed [RAD-6, -7] |
+| Storage Commitment | dcm4che's `stgcmtscu` asks for commitment of stored instances and gets the N-EVENT-REPORT that lists them, with the missing ones as failures [RAD-10] |
+| Instance Availability Notification | a configured destination is told when a study becomes available [RAD-49] |
+| Rejection notes | a Key Object Selection that rejects instances hides them from queries and retrieval, by the reason it gives (IOCM) |
+| Retention | a study is kept for a set time by rule, and cannot be deleted before it |
+| Both modes in one server | one installation stores a department's studies as received and serves a project's de-identified copy, each under its own AE title and its own rights |
+
+## 7. Proven
 
 | Item | Done when |
 |---|---|
@@ -90,10 +107,11 @@ So that workstations, viewers and other archives can use pacs-rs as they use any
 | Soak | a server takes continuous traffic for days with flat memory |
 | Security review | the login, the tokens and every route that writes are reviewed by someone else |
 | A first site | one real project runs on it from pull to de-identified reading |
+| A first clinical site | one department runs on it as its archive, with its modalities and workstations |
 | 1.0 | the REST, DICOMweb and settings interfaces are declared stable, with a policy for changing them |
 
 ## Not planned
 
-Replacing a hospital's clinical PACS: HL7 v2 orders, Modality Performed Procedure Step, Storage
-Commitment and the rest of IHE Scheduled Workflow.b
-([why](interop.md#not-planned-replacing-a-clinical-pacs)).
+Being the order filler or the radiology information system: pacs-rs receives orders, it does not
+create them, and the modality worklist stays with the system that schedules
+([the clinical archive](interop.md#the-clinical-archive)).

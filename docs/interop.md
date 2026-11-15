@@ -1,10 +1,15 @@
 # Hospital interfaces: the plan
 
 Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside; the rest is
-not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today. It is
-a **research PACS** beside a hospital's clinical PACS: it pulls studies from the hospital, de-identifies
-them when the project asks for it, and serves them to the research tools (viewers, annotation platforms,
-pipelines) over DICOMweb. It does not replace the clinical PACS.
+not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today.
+
+It is meant to be both kinds of PACS in one program:
+
+- a **research PACS** beside a hospital's clinical PACS: it pulls studies from the hospital,
+  de-identifies them when the project asks for it, and serves them to the research tools (viewers,
+  annotation platforms, pipelines) over DICOMweb. This is what the build order below reaches first.
+- a **clinical PACS**, the hospital's own archive, which modalities send to and workstations read from.
+  This comes after ([the clinical archive](#the-clinical-archive)).
 
 Sources, checked on 2026-10-31: DICOM 2026d (PS3.2, PS3.4, PS3.7, PS3.15) and the IHE Radiology Technical
 Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK, dcm4che and pynetdicom.
@@ -22,8 +27,12 @@ hospital PACS --C-FIND / C-MOVE--> pacs-rs staging --de-identify--> pacs-rs arch
   results may go back to the hospital PACS. pacs-rs is a general PACS: this is what it does with no
   project configured.
 
-The hospital PACS stays read-only for pacs-rs, except for a clinical-mode write-back to a destination the
-hospital names.
+Both modes run in one server at once: the AE title a study is sent to decides which one it gets. So one
+installation can be a department's archive and, under a project's AE title, the de-identified copy its
+researchers read.
+
+Beside another PACS, that PACS stays read-only for pacs-rs, except for a clinical-mode write-back to a
+destination the hospital names.
 
 ## Build order
 
@@ -110,9 +119,27 @@ would need the A-ASSOCIATE-RQ before negotiation, which dicom-ul 0.10 does not o
 - Agree the mode and, for research mode, the de-identification options and whether a key is kept, in the
   project's ethics or data-protection approval.
 
-## Not planned: replacing a clinical PACS
+## The clinical archive
 
-A hospital's own archive is IHE Scheduled Workflow.b's Image Manager/Image Archive (RAD TF-1: 34). That would
-add HL7 v2 orders and patient updates over MLLP [RAD-4, -12, -13], Modality Performed Procedure Step
-[RAD-6, -7] (PS3.4 F.7), Storage Commitment [RAD-10] (PS3.4 J.3), Instance Availability Notification
-[RAD-49] (PS3.4 Annex R) and rejection notes for deletions (IOCM). None of it is needed by a research PACS.
+Planned, after the research workflow ([roadmap](roadmap.md#6-the-clinical-archive)). As a hospital's own
+archive pacs-rs takes the role IHE Scheduled Workflow.b gives the Image Manager/Image Archive
+(RAD TF-1: 34). Beyond storing and serving images, which the steps above cover, that role adds:
+
+| What | Where it is defined | Why an archive needs it |
+|---|---|---|
+| Orders and patient updates from the hospital's systems | HL7 v2 over MLLP [RAD-4, -12, -13] | a name corrected or two records merged at the front desk reaches the studies already stored |
+| Modality Performed Procedure Step | [RAD-6, -7], PS3.4 F.7 | the archive knows what a modality did and which images to expect |
+| Storage Commitment | [RAD-10], PS3.4 J.3 | a modality deletes its local copy only once the archive has taken responsibility for it |
+| Instance Availability Notification | [RAD-49], PS3.4 Annex R | other systems are told when a study can be read |
+| Rejection notes for deletions | IHE Imaging Object Change Management (IOCM) | images rejected for quality or patient safety are hidden or removed everywhere, with the reason kept |
+
+What this does not make pacs-rs: the order filler or the radiology information system. Orders are
+received, not created, and the modality worklist stays with the system that schedules.
+
+Two things from the other milestones carry more weight here than in research: the audit trail and TLS
+([roadmap](roadmap.md#1-safe-to-expose)), which a clinical site requires before anything is connected, and
+deletion that can be undone ([roadmap](roadmap.md#2-safe-to-keep-data)).
+
+Each transaction above is to be read in the current IHE Radiology Technical Framework and DICOM text
+before it is built, and tested against DCMTK and dcm4che like the rest; the numbers here were checked on
+2026-10-31 against Revision 23.0.
