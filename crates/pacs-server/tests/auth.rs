@@ -8,6 +8,7 @@ use std::path::Path;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use base64::Engine;
 use clap::Parser;
 use http_body_util::BodyExt;
 use pacs_core::synthetic::SyntheticSeries;
@@ -469,14 +470,15 @@ async fn the_whole_login_on_sqlite() {
     the_whole_login(settings_in(dir.path(), &[])).await;
 }
 
-#[tokio::test]
-async fn the_whole_login_on_postgres() {
+/// Settings on a new, empty database of the Postgres server `PACS_TEST_POSTGRES_URL` names;
+/// `None` when it names none.
+async fn postgres_settings(name: &str, dir: &Path) -> Option<Settings> {
     let Ok(server) = std::env::var("PACS_TEST_POSTGRES_URL") else {
         eprintln!("PACS_TEST_POSTGRES_URL not set; skipping");
-        return;
+        return None;
     };
     let server = server.trim_end_matches('/');
-    let name = format!("pacs_auth_test_{}", std::process::id());
+    let name = format!("{name}_{}", std::process::id());
     sqlx::any::install_default_drivers();
     let mut admin =
         <sqlx::AnyConnection as sqlx::Connection>::connect(&format!("{server}/postgres"))
@@ -491,8 +493,15 @@ async fn the_whole_login_on_postgres() {
             .await
             .unwrap();
     }
+    Some(settings_with(&format!("{server}/{name}"), dir, &[]))
+}
+
+#[tokio::test]
+async fn the_whole_login_on_postgres() {
     let dir = tempfile::tempdir().unwrap();
-    the_whole_login(settings_with(&format!("{server}/{name}"), dir.path(), &[])).await;
+    if let Some(settings) = postgres_settings("pacs_auth_test", dir.path()).await {
+        the_whole_login(settings).await;
+    }
 }
 
 async fn user_id(app: &Router, admin: &str, login: &str) -> String {
@@ -803,6 +812,16 @@ async fn starts_that_must_fail() {
     )
     .await;
     assert!(spaced.contains("PACS_ADMIN_LOGIN"), "{spaced}");
+    let bad_issuer = settings_in(dir.path(), &["--auth-issuer", "our pacs"]);
+    let spaced = failure(
+        &[
+            ("PACS_AUTH_SECRET", SECRET),
+            ("PACS_ADMIN_PASSWORD", ADMIN_PASSWORD),
+        ],
+        &bad_issuer,
+    )
+    .await;
+    assert!(spaced.contains("PACS_AUTH_ISSUER"), "{spaced}");
     // none of them left a user behind
     assert_eq!(archive.index().user_count().await.unwrap(), 0);
 
@@ -1332,5 +1351,569 @@ async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
     assert_eq!(
         get(&app, "/users", Some(&admin)).await.status,
         StatusCode::OK
+    );
+}
+
+/// `POST /auth/token` as a client sends it: a form, its id and secret in `Authorization: Basic`.
+async fn ask_token(app: &Router, credentials: Option<(&str, &str)>, form: &str) -> Reply {
+    let mut request = Request::post("/auth/token")
+        .header("host", "pacs.test")
+        .header("content-type", "application/x-www-form-urlencoded");
+    if let Some((id, secret)) = credentials {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{id}:{secret}"));
+        request = request.header("authorization", format!("Basic {encoded}"));
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(form.to_owned())).unwrap())
+        .await
+        .unwrap();
+    let (status, headers) = (response.status(), response.headers().clone());
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    Reply {
+        status,
+        headers,
+        body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    }
+}
+
+/// A new client of `role`: its id and secret.
+async fn make_client(app: &Router, admin: &str, name: &str, role: &str) -> (String, String) {
+    let made = post(
+        app,
+        "/clients",
+        Some(admin),
+        json!({"name": name, "role": role}),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    let field = |name: &str| made.body[name].as_str().unwrap().to_owned();
+    (field("id"), field("secret"))
+}
+
+async fn client_token(app: &Router, id: &str, secret: &str, form: &str) -> String {
+    let reply = ask_token(app, Some((id, secret)), form).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    reply.token()
+}
+
+/// The claims of a JWT, unverified.
+fn claims_of(token: &str) -> Value {
+    let payload = token.split('.').nth(1).expect("a JWT");
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+const GRANT: &str = "grant_type=client_credentials";
+
+async fn a_client_from_secret_to_revocation(settings: Settings) {
+    let app = start(&settings).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+
+    // Made by an administrator: the secret is in this answer, which no cache keeps.
+    let made = post(
+        &app,
+        "/clients",
+        Some(&admin),
+        json!({"name": " Nightly pipeline ", "role": "editor"}),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    assert_eq!(made.headers["cache-control"], "no-store");
+    let (id, secret) = (
+        made.body["id"].as_str().unwrap().to_owned(),
+        made.body["secret"].as_str().unwrap().to_owned(),
+    );
+    assert_eq!(secret.len(), 64);
+    assert_eq!(made.body["name"], "Nightly pipeline");
+    assert_eq!(made.body["created_by"], "admin");
+    assert_eq!(made.body["last_token_ms"], Value::Null);
+
+    // ...and nowhere after: the list has neither the secret nor its hash.
+    let listed = get(&app, "/clients", Some(&admin)).await;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(listed.body.as_array().unwrap().len(), 1);
+    let text = listed.body.to_string();
+    assert!(
+        !text.contains(&secret) && !text.contains("secret"),
+        "{text}"
+    );
+
+    // The secret gets an access token, as the client credentials grant answers.
+    let reply = ask_token(&app, Some((&id, &secret)), GRANT).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(reply.headers["cache-control"], "no-store");
+    assert_eq!(reply.headers["pragma"], "no-cache");
+    assert_eq!(reply.body["token_type"], "Bearer");
+    assert_eq!(reply.body["scope"], "read write remote");
+    assert_eq!(reply.body["expires_in"], 300);
+    let token = reply.token();
+    let claims = claims_of(&token);
+    assert_eq!(claims["iss"], "pacs-rs");
+    assert_eq!(claims["aud"], "pacs-rs");
+    assert_eq!(claims["sub"], id.as_str());
+    assert_eq!(claims["client_id"], id.as_str());
+    assert_eq!(claims["scope"], "read write remote");
+    assert!(claims["jti"].as_str().is_some_and(|jti| !jti.is_empty()));
+    assert_eq!(
+        claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap(),
+        300
+    );
+    let listed = get(&app, "/clients", Some(&admin)).await;
+    assert!(listed.body[0]["last_token_ms"].as_i64().is_some());
+
+    // The token does what an editor may: read and upload, not delete.
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get(&app, "/dicom-web/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    let file = SyntheticSeries::new(98, 1).slice_bytes(0);
+    let upload = send(
+        &app,
+        Method::POST,
+        "/instances",
+        Some(&token),
+        None,
+        Some(file),
+    )
+    .await;
+    assert_eq!(upload.status, StatusCode::OK, "{}", upload.body);
+    let study = get(&app, "/studies", Some(&token)).await.body[0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let delete = async |token: &str| {
+        send(
+            &app,
+            Method::DELETE,
+            &format!("/studies/{study}"),
+            Some(token),
+            None,
+            None,
+        )
+        .await
+    };
+    // Refused with 401 and the reason in the challenge, as ITI-72 asks.
+    let refused = delete(&token).await;
+    assert_eq!(refused.status, StatusCode::UNAUTHORIZED, "{}", refused.body);
+    assert_eq!(
+        refused.headers["www-authenticate"],
+        "Bearer error=\"insufficient_scope\""
+    );
+
+    // Nothing of the accounts, whatever the role: not the users, the clients, or /auth.
+    let (root_id, root_secret) = make_client(&app, &admin, "Everything", "admin").await;
+    let root = ask_token(&app, Some((&root_id, &root_secret)), GRANT).await;
+    assert_eq!(root.body["scope"], "read write remote delete");
+    let root = root.token();
+    for (method, path) in [
+        (Method::GET, "/users"),
+        (Method::GET, "/clients"),
+        (Method::POST, "/clients"),
+        (Method::GET, "/auth/me"),
+        (Method::GET, "/roles"),
+        (Method::POST, "/auth/download-token"),
+        (Method::POST, "/auth/password"),
+    ] {
+        let reply = send(
+            &app,
+            method.clone(),
+            path,
+            Some(&root),
+            Some(json!({})),
+            None,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(
+            reply.headers["www-authenticate"], "Bearer error=\"insufficient_scope\"",
+            "{method} {path}"
+        );
+    }
+
+    // In the header only: not in a URL, and the secret itself is not a token.
+    let in_url = get(&app, &format!("/studies?token={token}"), None).await;
+    assert_eq!(in_url.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        get(&app, "/studies", Some(&secret)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // A narrower scope on request: this token only reads.
+    let narrow = ask_token(&app, Some((&id, &secret)), &format!("{GRANT}&scope=read")).await;
+    assert_eq!(narrow.body["scope"], "read");
+    let narrow = narrow.token();
+    assert_eq!(
+        get(&app, "/studies", Some(&narrow)).await.status,
+        StatusCode::OK
+    );
+    let file = SyntheticSeries::new(98, 1).slice_bytes(0);
+    let upload = send(
+        &app,
+        Method::POST,
+        "/instances",
+        Some(&narrow),
+        None,
+        Some(file),
+    )
+    .await;
+    assert_eq!(upload.status, StatusCode::UNAUTHORIZED);
+
+    // A new role holds at the next request, for the tokens the client already has.
+    let put = async |path: String, body: Value| {
+        send(&app, Method::PUT, &path, Some(&admin), Some(body), None).await
+    };
+    let moved = put(
+        format!("/clients/{id}"),
+        json!({"role": "reader", "name": "Reader now"}),
+    )
+    .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.body);
+    assert_eq!(moved.body["role"], "reader");
+    assert_eq!(moved.body["name"], "Reader now");
+    assert!(moved.body.get("secret").is_none());
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+    let file = SyntheticSeries::new(98, 1).slice_bytes(0);
+    let upload = send(
+        &app,
+        Method::POST,
+        "/instances",
+        Some(&token),
+        None,
+        Some(file),
+    )
+    .await;
+    assert_eq!(upload.status, StatusCode::UNAUTHORIZED);
+    // ...and so does a permission taken from its role.
+    let emptied = put("/roles/reader".into(), json!({"permissions": []})).await;
+    assert_eq!(emptied.status, StatusCode::OK, "{}", emptied.body);
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let nothing = ask_token(&app, Some((&id, &secret)), GRANT).await;
+    assert_eq!(nothing.status, StatusCode::BAD_REQUEST);
+    assert_eq!(nothing.body["error"], "invalid_scope");
+    put("/roles/reader".into(), json!({"permissions": ["read"]})).await;
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+
+    // A role a client has cannot be removed.
+    let in_use = send(
+        &app,
+        Method::DELETE,
+        "/roles/reader",
+        Some(&admin),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(in_use.status, StatusCode::CONFLICT, "{}", in_use.body);
+
+    // Removed: its tokens stop at once, and its secret gets no more.
+    assert_eq!(delete(&root).await.status, StatusCode::OK);
+    let remove = async |id: &str| {
+        send(
+            &app,
+            Method::DELETE,
+            &format!("/clients/{id}"),
+            Some(&admin),
+            None,
+            None,
+        )
+        .await
+    };
+    assert_eq!(remove(&id).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(remove(&id).await.status, StatusCode::NOT_FOUND);
+    let after = get(&app, "/studies", Some(&token)).await;
+    assert_eq!(after.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        after.headers["www-authenticate"],
+        "Bearer error=\"invalid_token\""
+    );
+    let again = ask_token(&app, Some((&id, &secret)), GRANT).await;
+    assert_eq!(again.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(again.body["error"], "invalid_client");
+    // the other client is untouched
+    assert_eq!(
+        get(&app, "/studies", Some(&root)).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn a_client_from_secret_to_revocation_on_sqlite() {
+    let dir = tempfile::tempdir().unwrap();
+    a_client_from_secret_to_revocation(settings_in(dir.path(), &[])).await;
+}
+
+#[tokio::test]
+async fn a_client_from_secret_to_revocation_on_postgres() {
+    let dir = tempfile::tempdir().unwrap();
+    if let Some(settings) = postgres_settings("pacs_clients_test", dir.path()).await {
+        a_client_from_secret_to_revocation(settings).await;
+    }
+}
+
+#[tokio::test]
+async fn token_requests_that_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(
+        dir.path(),
+        &["--auth-issuer", "https://pacs.test"],
+    ))
+    .await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let (id, secret) = make_client(&app, &admin, "Viewer", "reader").await;
+    let (root_id, root_secret) = make_client(&app, &admin, "Everything", "admin").await;
+    let own = Some((id.as_str(), secret.as_str()));
+
+    // Who is asking: 401 invalid_client with the Basic challenge, the same for every cause.
+    let other_secret = "0".repeat(64);
+    for credentials in [
+        None,
+        Some((id.as_str(), other_secret.as_str())),
+        Some((id.as_str(), "")),
+        Some(("no-such-client", secret.as_str())),
+        Some((root_id.as_str(), secret.as_str())),
+    ] {
+        let reply = ask_token(&app, credentials, GRANT).await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{credentials:?}");
+        assert_eq!(reply.body["error"], "invalid_client", "{credentials:?}");
+        assert_eq!(reply.headers["www-authenticate"], "Basic");
+        assert_eq!(reply.headers["cache-control"], "no-store");
+        assert!(reply.body.get("access_token").is_none());
+    }
+    // the secret in the form, or a Bearer header, is not the Basic header
+    let in_form = format!("{GRANT}&client_id={id}&client_secret={secret}");
+    assert_eq!(
+        ask_token(&app, None, &in_form).await.body["error"],
+        "invalid_client"
+    );
+    let bearer = Request::post("/auth/token")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("authorization", format!("Bearer {secret}"))
+        .body(Body::from(GRANT))
+        .unwrap();
+    let reply = app.clone().oneshot(bearer).await.unwrap();
+    assert_eq!(reply.status(), StatusCode::UNAUTHORIZED);
+
+    // What is asked: 400 with OAuth's error names.
+    let resource = "resource=https%3A%2F%2Fpacs.test";
+    for (form, error) in [
+        ("", "invalid_request"),
+        ("scope=read", "invalid_request"),
+        ("grant_type=password", "unsupported_grant_type"),
+        ("grant_type=authorization_code", "unsupported_grant_type"),
+        (
+            "grant_type=client_credentials&grant_type=client_credentials",
+            "invalid_request",
+        ),
+        (
+            "grant_type=client_credentials&scope=read&scope=read",
+            "invalid_request",
+        ),
+        ("grant_type=client_credentials&scope=write", "invalid_scope"),
+        (
+            "grant_type=client_credentials&scope=read+delete",
+            "invalid_scope",
+        ),
+        (
+            "grant_type=client_credentials&scope=everything",
+            "invalid_scope",
+        ),
+        ("grant_type=client_credentials&scope=users", "invalid_scope"),
+        (
+            "grant_type=client_credentials&resource=pacs-rs",
+            "invalid_target",
+        ),
+        (
+            "grant_type=client_credentials&requested_token_type=urn:ietf:params:oauth:token-type:saml2",
+            "invalid_request",
+        ),
+    ] {
+        let reply = ask_token(&app, own, form).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{form}");
+        assert_eq!(reply.body["error"], error, "{form}");
+        assert!(reply.body["error_description"].as_str().is_some(), "{form}");
+        assert_eq!(reply.headers["cache-control"], "no-store", "{form}");
+    }
+    // never `users`, even for a client whose role has it
+    let users = ask_token(
+        &app,
+        Some((&root_id, &root_secret)),
+        &format!("{GRANT}&scope=users"),
+    )
+    .await;
+    assert_eq!(users.body["error"], "invalid_scope");
+    // a JSON body is not a form
+    let json = post(
+        &app,
+        "/auth/token",
+        None,
+        json!({"grant_type": "client_credentials"}),
+    )
+    .await;
+    assert_eq!(json.status, StatusCode::BAD_REQUEST);
+    assert_eq!(json.body["error"], "invalid_request");
+
+    // The optional parameters, when they say what this server does, change nothing.
+    let jwt = "requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Ajwt";
+    let form = format!("{GRANT}&{resource}&{jwt}&scope=read");
+    let token = client_token(&app, &id, &secret, &form).await;
+    let claims = claims_of(&token);
+    assert_eq!(claims["iss"], "https://pacs.test");
+    assert_eq!(claims["aud"], "https://pacs.test");
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn clients_are_for_who_manages_users_and_tokens_do_not_cross() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let tokens = one_of_each(&app, &admin).await;
+    let (id, secret) = make_client(&app, &admin, "Viewer", "reader").await;
+
+    // Only a role with `users` sees or changes the clients.
+    for role in ["reader", "editor", "manager"] {
+        let token = Some(tokens[role].as_str());
+        let new = json!({"name": "Mine", "role": "admin"});
+        for reply in [
+            get(&app, "/clients", token).await,
+            post(&app, "/clients", token, new).await,
+            send(
+                &app,
+                Method::DELETE,
+                &format!("/clients/{id}"),
+                token,
+                None,
+                None,
+            )
+            .await,
+            send(
+                &app,
+                Method::PUT,
+                &format!("/clients/{id}"),
+                token,
+                Some(json!({"role": "admin"})),
+                None,
+            )
+            .await,
+        ] {
+            assert_eq!(
+                reply.status,
+                StatusCode::FORBIDDEN,
+                "{role}: {}",
+                reply.body
+            );
+        }
+    }
+    assert_eq!(
+        get(&app, "/clients", None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // What a client is made of is checked.
+    for (new, what) in [
+        (json!({"name": "", "role": "reader"}), "no name"),
+        (
+            json!({"name": "x".repeat(61), "role": "reader"}),
+            "a long name",
+        ),
+        (
+            json!({"name": "Viewer", "role": "nobody"}),
+            "an unknown role",
+        ),
+        (json!({"name": "Viewer"}), "no role"),
+    ] {
+        let reply = post(&app, "/clients", Some(&admin), new).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{what}");
+    }
+    let unknown_role = send(
+        &app,
+        Method::PUT,
+        &format!("/clients/{id}"),
+        Some(&admin),
+        Some(json!({"role": "nobody"})),
+        None,
+    )
+    .await;
+    assert_eq!(unknown_role.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let nobody = send(
+        &app,
+        Method::PUT,
+        "/clients/nobody",
+        Some(&admin),
+        Some(json!({"name": "x"})),
+        None,
+    )
+    .await;
+    assert_eq!(nobody.status, StatusCode::NOT_FOUND);
+
+    // A user's access token is not a client's, and a client's does not refresh or sign in.
+    let client = client_token(&app, &id, &secret, GRANT).await;
+    let me = get(&app, "/auth/me", Some(&admin)).await;
+    assert_eq!(me.status, StatusCode::OK);
+    assert_eq!(
+        sign_in(&app, &id, &secret).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        refresh(&app, &client).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    // a download token is a user's business
+    let download = post(
+        &app,
+        "/auth/download-token",
+        Some(&client),
+        json!({"path": "/studies"}),
+    )
+    .await;
+    assert_eq!(download.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_client_token_of_another_server_or_secret_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let (id, secret) = make_client(&app, &admin, "Viewer", "reader").await;
+    let token = client_token(&app, &id, &secret, GRANT).await;
+    assert_eq!(
+        get(&app, "/studies", Some(&token)).await.status,
+        StatusCode::OK
+    );
+
+    // The same index behind a server with another name: the audience is not this one.
+    let renamed = start(&settings_in(dir.path(), &["--auth-issuer", "other-pacs"])).await;
+    assert_eq!(
+        get(&renamed, "/studies", Some(&token)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    // A token changed after signing.
+    let mut parts: Vec<String> = token.split('.').map(str::to_owned).collect();
+    let mut claims = claims_of(&token);
+    claims["scope"] = "read write remote delete".into();
+    parts[1] = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
+    let forged = parts.join(".");
+    assert_eq!(
+        get(&app, "/studies", Some(&forged)).await.status,
+        StatusCode::UNAUTHORIZED
     );
 }
