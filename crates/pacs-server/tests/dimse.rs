@@ -814,3 +814,317 @@ async fn a_move_may_name_a_project() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(scp.await.unwrap(), "LIVER_2026");
 }
+
+// ---- the audit trail of DIMSE and of the remote AEs (`pacs_server::audit`) ----
+
+fn audited_settings(dir: &Path, extra: &[&str]) -> Settings {
+    let trail = dir.join("audit.log");
+    let mut all = vec!["--audit-file", trail.to_str().unwrap()];
+    all.extend(extra);
+    settings_in(dir, &all)
+}
+
+/// The XML of the trail's lines, each valid by DICOM's schema when `PACS_TEST_XMLLINT`
+/// names `xmllint`; waits for `count` of them, since an association is audited once it
+/// is over.
+async fn audit_lines(dir: &Path, count: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for _ in 0..100 {
+        let text = std::fs::read_to_string(dir.join("audit.log")).unwrap_or_default();
+        lines = text
+            .lines()
+            .map(|line| {
+                line.split_once(" - ")
+                    .expect("a syslog header")
+                    .1
+                    .to_owned()
+            })
+            .collect();
+        if lines.len() >= count {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(lines.len(), count, "{lines:#?}");
+    if let Ok(xmllint) = std::env::var("PACS_TEST_XMLLINT") {
+        let schema = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../pacs-audit/tests/dicom-audit-message.rng");
+        for xml in &lines {
+            let file = dir.join("message.xml");
+            std::fs::write(&file, xml).unwrap();
+            let output = std::process::Command::new(&xmllint)
+                .arg("--noout")
+                .arg("--relaxng")
+                .arg(&schema)
+                .arg(&file)
+                .output()
+                .unwrap_or_else(|e| {
+                    panic!("PACS_TEST_XMLLINT names {xmllint:?}, which did not run: {e}")
+                });
+            assert!(
+                output.status.success(),
+                "{}\n{xml}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+    lines
+}
+
+fn has(line: &str, parts: &[&str]) {
+    for part in parts {
+        assert!(line.contains(part), "no {part:?} in\n{line}");
+    }
+}
+
+/// One association from `calling` to `called` that stores `files` of CT, then releases.
+async fn store_over(addr: SocketAddr, calling: &str, called: &str, files: &[(String, Vec<u8>)]) {
+    let mut association = ClientAssociationOptions::new()
+        .calling_ae_title(calling)
+        .called_ae_title(called)
+        .with_presentation_context(CT, vec!["1.2.840.10008.1.2.1"])
+        .establish_async(addr)
+        .await
+        .unwrap();
+    let context = association.presentation_contexts()[0].id;
+    for (id, (sop_instance_uid, file)) in files.iter().enumerate() {
+        let meta = u32::from_le_bytes(file[140..144].try_into().unwrap()) as usize;
+        let rq = Command::new()
+            .with_ui(tag::AFFECTED_SOP_CLASS_UID, CT)
+            .with_us(tag::COMMAND_FIELD, field::C_STORE_RQ)
+            .with_us(tag::MESSAGE_ID, id as u16 + 1)
+            .with_us(tag::PRIORITY, PRIORITY_MEDIUM)
+            .with_us(tag::COMMAND_DATA_SET_TYPE, 0)
+            .with_ui(tag::AFFECTED_SOP_INSTANCE_UID, sop_instance_uid);
+        message::send(&mut association, context, &rq, Some(&file[144 + meta..]))
+            .await
+            .unwrap();
+        let Incoming::Message(rsp) = message::receive(&mut association, 0).await.unwrap() else {
+            panic!("no C-STORE-RSP");
+        };
+        assert_eq!(rsp.command.status(), Ok(pacs_dimse::Status::SUCCESS));
+    }
+    association.release().await.unwrap();
+}
+
+#[tokio::test]
+async fn what_an_association_stored_and_one_that_was_refused_are_in_the_audit_trail() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = audited_settings(dir.path(), &[]);
+    let archive = open_archive(&settings).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(pacs_server::serve_dimse_audited(
+        listener,
+        archive,
+        dimse_config(&settings).unwrap(),
+        Vec::new(),
+        pacs_server::audit::open_audit(&settings).unwrap(),
+        std::future::pending(),
+    ));
+
+    // Two studies of two patients in one association: a line each, once it is over.
+    let first = SyntheticSeries::new(61, 2).with_patient("DOE^JANE", None);
+    let second = SyntheticSeries::new(62, 1).with_patient("ROE^RICHARD", None);
+    let files = [
+        (first.instance_uid(0), first.slice_bytes(0)),
+        (second.instance_uid(0), second.slice_bytes(0)),
+        (first.instance_uid(1), first.slice_bytes(1)),
+    ];
+    store_over(addr, "MODALITY1", "PACSRS", &files).await;
+    let lines = audit_lines(dir.path(), 2).await;
+    let sender = "<ActiveParticipant UserID=\"MODALITY1\" AlternativeUserID=\"AETITLES=MODALITY1\" UserIsRequestor=\"true\" NetworkAccessPointID=\"127.0.0.1\" NetworkAccessPointTypeCode=\"2\"><RoleIDCode csd-code=\"110153\"";
+    has(
+        &lines[0],
+        &[
+            "<EventID csd-code=\"110104\"",
+            "EventActionCode=\"C\"",
+            sender,
+            "AlternativeUserID=\"AETITLES=PACSRS\" UserIsRequestor=\"false\"><RoleIDCode csd-code=\"110152\"",
+            &format!("ParticipantObjectID=\"{}\"", first.study_uid()),
+            &format!("<SOPClass UID=\"{CT}\" NumberOfInstances=\"2\"/>"),
+            "<ParticipantObjectName>DOE^JANE</ParticipantObjectName>",
+        ],
+    );
+    has(
+        &lines[1],
+        &[
+            "EventActionCode=\"C\"",
+            &format!("ParticipantObjectID=\"{}\"", second.study_uid()),
+            &format!("<SOPClass UID=\"{CT}\" NumberOfInstances=\"1\"/>"),
+            "ROE^RICHARD",
+        ],
+    );
+
+    // The same study sent again was held already: a Read. Every association is written.
+    store_over(addr, "MODALITY1", "PACSRS", &files[..1]).await;
+    let lines = audit_lines(dir.path(), 3).await;
+    has(
+        &lines[2],
+        &[
+            "<EventID csd-code=\"110104\"",
+            "EventActionCode=\"R\"",
+            sender,
+        ],
+    );
+
+    // An association that stores nothing (an echo would be one) leaves nothing; one to an
+    // AE title this server does not have is a node that was not let in, once however
+    // often it tries.
+    store_over(addr, "MODALITY1", "PACSRS", &[]).await;
+    for _ in 0..2 {
+        let refused = ClientAssociationOptions::new()
+            .calling_ae_title("MODALITY1")
+            .called_ae_title("SOMEONE_ELSE")
+            .with_presentation_context(CT, vec!["1.2.840.10008.1.2.1"])
+            .establish_async(addr)
+            .await;
+        assert!(refused.is_err());
+    }
+    let lines = audit_lines(dir.path(), 4).await;
+    has(
+        &lines[3],
+        &[
+            "<EventID csd-code=\"110113\"",
+            "originalText=\"Node Authentication\"",
+            "EventOutcomeIndicator=\"4\"",
+            "<ParticipantObjectIdentification ParticipantObjectID=\"127.0.0.1\"",
+            "originalText=\"Node ID\"",
+            "type=\"Alert Description\"",
+        ],
+    );
+    // ...and nothing came after it
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    audit_lines(dir.path(), 4).await;
+}
+
+#[tokio::test]
+async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
+    use pacs_server::app_with_audit;
+    use pacs_server::audit::open_audit;
+
+    let (port, scp) = query_scp(&["P1"]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port},gone=NOBODY@127.0.0.1:9");
+    let extra = [
+        "--dimse-remotes",
+        remotes.as_str(),
+        "--dimse-listen",
+        "127.0.0.1:0",
+        "--dimse-ae-title",
+        "RESEARCH",
+    ];
+    let settings = audited_settings(dir.path(), &extra);
+    let archive = open_archive(&settings).await.unwrap();
+    let app = app_with_audit(archive, &settings, None, open_audit(&settings).unwrap()).unwrap();
+    let here = "AlternativeUserID=\"AETITLES=RESEARCH\" UserIsRequestor=\"false\">";
+    let there = "<ActiveParticipant UserID=\"QRSCP\" AlternativeUserID=\"AETITLES=QRSCP\" UserIsRequestor=\"false\" NetworkAccessPointID=\"127.0.0.1\" NetworkAccessPointTypeCode=\"1\">";
+    // the login is off in this test: who asked is known by address alone
+    let who = "<ActiveParticipant UserID=\"unknown@pacs-rs\" UserIsRequestor=\"true\"";
+
+    // A search: this server asks the remote AE, for the caller.
+    let (status, _) = get(&app, "/modalities/qr/studies?PatientID=P1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(scp.await.unwrap(), "P1");
+    let lines = audit_lines(dir.path(), 1).await;
+    let query = &lines[0];
+    has(
+        query,
+        &[
+            "<EventID csd-code=\"110112\"",
+            "EventOutcomeIndicator=\"0\"",
+            here,
+            there,
+            who,
+            "ParticipantObjectID=\"/modalities/qr/studies\"",
+        ],
+    );
+    let (asks, answers, person) = (
+        query.find(here).unwrap(),
+        query.find(there).unwrap(),
+        query.find(who).unwrap(),
+    );
+    assert!(asks < answers && answers < person, "{query}");
+    assert!(
+        query[asks..answers].contains("csd-code=\"110153\"")
+            && query[answers..person].contains("csd-code=\"110152\"")
+    );
+    // what was asked: the request's target, in base64 ("/modalities/qr/studies?PatientID=P1")
+    has(
+        query,
+        &[
+            "<ParticipantObjectQuery>L21vZGFsaXRpZXMvcXIvc3R1ZGllcz9QYXRpZW50SUQ9UDE=</ParticipantObjectQuery>",
+        ],
+    );
+
+    // A remote AE that does not answer was asked all the same: a failure, written.
+    let (status, _) = get(&app, "/modalities/gone/studies?PatientID=P2").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let lines = audit_lines(dir.path(), 2).await;
+    has(
+        &lines[1],
+        &[
+            "<EventID csd-code=\"110112\"",
+            "EventOutcomeIndicator=\"8\"",
+            "UserID=\"NOBODY\"",
+        ],
+    );
+    // an AE this server does not know is not called
+    assert_eq!(
+        get(&app, "/modalities/nobody/studies?PatientID=P1").await.0,
+        StatusCode::NOT_FOUND
+    );
+    audit_lines(dir.path(), 2).await;
+
+    // A move: the remote AE is to send two studies here; a line each, before they arrive.
+    let (port, scp) = move_scp(0x0000, 3, 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let extra = [
+        "--dimse-remotes",
+        remotes.as_str(),
+        "--dimse-listen",
+        "127.0.0.1:0",
+        "--dimse-ae-title",
+        "RESEARCH",
+    ];
+    let settings = audited_settings(dir.path(), &extra);
+    let archive = open_archive(&settings).await.unwrap();
+    let app = app_with_audit(archive, &settings, None, open_audit(&settings).unwrap()).unwrap();
+    // a body that names no study moves nothing
+    assert_eq!(
+        send(&app, move_request("qr", r#"{"StudyInstanceUID": 7}"#))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    audit_lines(dir.path(), 0).await;
+    let (status, body) = send(
+        &app,
+        move_request("qr", r#"{"StudyInstanceUID": ["2.25.1", "2.25.2"]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(scp.await.unwrap(), "RESEARCH");
+    let lines = audit_lines(dir.path(), 2).await;
+    for (line, study) in lines.iter().zip(["2.25.1", "2.25.2"]) {
+        has(
+            line,
+            &[
+                "<EventID csd-code=\"110102\"",
+                "EventActionCode=\"E\"",
+                "EventOutcomeIndicator=\"0\"",
+                there,
+                here,
+                who,
+                &format!("ParticipantObjectID=\"{study}\" ParticipantObjectTypeCode=\"2\""),
+                // whose it is, the remote AE knows; this server does not yet
+                "ParticipantObjectID=\"unknown\" ParticipantObjectTypeCode=\"1\"",
+            ],
+        );
+        // the remote AE sends, this server receives
+        let (sends, receives) = (line.find(there).unwrap(), line.find(here).unwrap());
+        assert!(sends < receives, "{line}");
+        assert!(line[sends..receives].contains("csd-code=\"110153\""));
+    }
+}

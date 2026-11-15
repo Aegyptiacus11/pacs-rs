@@ -332,7 +332,30 @@ pub async fn serve_dimse(
     projects: Vec<std::sync::Arc<pacs_dimse::Project>>,
     shutdown: impl Future<Output = ()> + Send,
 ) {
+    serve_dimse_audited(
+        listener,
+        archive,
+        config,
+        projects,
+        audit::Audit::off(),
+        shutdown,
+    )
+    .await
+}
+
+/// [`serve_dimse`], with what associations do written to `audit` (see [`audit`]).
+pub async fn serve_dimse_audited(
+    listener: tokio::net::TcpListener,
+    archive: Archive,
+    config: pacs_dimse::Config,
+    projects: Vec<std::sync::Arc<pacs_dimse::Project>>,
+    audit: audit::Audit,
+    shutdown: impl Future<Output = ()> + Send,
+) {
     let mut scp = pacs_dimse::Scp::new(config, pacs_dimse::Destination::Archive(archive));
+    if audit.is_on() {
+        scp = scp.with_observer(std::sync::Arc::new(audit));
+    }
     for project in projects {
         scp = scp.with_route(
             project.ae_title.clone(),
@@ -450,14 +473,16 @@ pub fn app_with_audit(
     if path == "/" {
         bail!("the DICOMweb path cannot be /: the REST API is served there");
     }
+    let dimse = dimse_config(settings)?;
+    let project_titles: Vec<(String, pacs_dimse::AeTitle)> = projects::project_configs(settings)?
+        .into_iter()
+        .map(|p| (p.profile.name, p.ae_title))
+        .collect();
     let rest =
         pacs_rest::router(archive.clone(), settings.max_upload_bytes).merge(modalities::router(
-            dimse_config(settings)?,
+            dimse.clone(),
             settings.dimse_listen.is_some(),
-            projects::project_configs(settings)?
-                .into_iter()
-                .map(|p| (p.profile.name, p.ae_title))
-                .collect(),
+            project_titles.clone(),
         ));
     let index = archive.index().clone();
     let audit_index = index.clone();
@@ -491,7 +516,7 @@ pub fn app_with_audit(
         app = login.protect(app.merge(login.router()?));
     }
     // outside the guard, which it watches; inside CORS, whose preflights are no events
-    app = audit.observe(app, audit_index, &path);
+    app = audit.observe(app, audit_index, &path, dimse, project_titles);
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }

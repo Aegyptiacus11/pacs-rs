@@ -10,6 +10,7 @@ use crate::{
 pub mod event {
     use crate::Code;
     pub const APPLICATION_ACTIVITY: Code = Code::dcm("110100", "Application Activity");
+    pub const BEGIN_TRANSFERRING: Code = Code::dcm("110102", "Begin Transferring DICOM Instances");
     pub const INSTANCES_ACCESSED: Code = Code::dcm("110103", "DICOM Instances Accessed");
     pub const INSTANCES_TRANSFERRED: Code = Code::dcm("110104", "DICOM Instances Transferred");
     pub const STUDY_DELETED: Code = Code::dcm("110105", "DICOM Study Deleted");
@@ -26,6 +27,7 @@ pub mod kind {
     pub const APPLICATION_STOP: Code = Code::dcm("110121", "Application Stop");
     pub const LOGIN: Code = Code::dcm("110122", "Login");
     pub const LOGOUT: Code = Code::dcm("110123", "Logout");
+    pub const NODE_AUTHENTICATION: Code = Code::dcm("110126", "Node Authentication");
     pub const USE_OF_RESTRICTED_FUNCTION: Code = Code::dcm("110132", "Use of Restricted Function");
     pub const AUDIT_RECORDING_STOPPED: Code = Code::dcm("110133", "Audit Recording Stopped");
     pub const AUDIT_RECORDING_STARTED: Code = Code::dcm("110134", "Audit Recording Started");
@@ -48,6 +50,8 @@ pub mod role {
 pub const URI: Code = Code::rfc3881("12", "URI");
 /// `ParticipantObjectIDTypeCode` 2 of RFC 3881: a patient number.
 pub const PATIENT_NUMBER: Code = Code::rfc3881("2", "Patient Number");
+/// The ID of a node a security alert is about (A.5.3.11).
+pub const NODE_ID: Code = Code::dcm("110182", "Node ID");
 /// The ID of a study participant object is its Study Instance UID.
 pub const STUDY_INSTANCE_UID: Code = Code::dcm("110180", "Study Instance UID");
 
@@ -128,6 +132,33 @@ pub fn instances_transferred(
         participants: vec![sender.role(role::SOURCE), receiver.role(role::DESTINATION)],
         source: source.clone(),
         objects: study_objects(std::slice::from_ref(study)),
+    }
+}
+
+/// Begin Transferring DICOM Instances (A.5.3.3): `sender` was asked to send `studies`, of
+/// one patient, to `receiver`; their arrival is another event, DICOM Instances
+/// Transferred. `others` are whoever else took part, the person who asked above all.
+pub fn begin_transferring(
+    source: &Source,
+    time: SystemTime,
+    outcome: Outcome,
+    sender: Participant,
+    receiver: Participant,
+    others: Vec<Participant>,
+    studies: &[Study],
+) -> Message {
+    let mut participants = vec![sender.role(role::SOURCE), receiver.role(role::DESTINATION)];
+    participants.extend(others);
+    Message {
+        event_id: event::BEGIN_TRANSFERRING,
+        event_types: Vec::new(),
+        action: Some(Action::Execute),
+        time,
+        outcome,
+        outcome_description: None,
+        participants,
+        source: source.clone(),
+        objects: study_objects(studies),
     }
 }
 
@@ -213,15 +244,20 @@ pub fn export(
 ///
 /// For a query that is not a DICOM query the table lets the object say what was asked in
 /// the protocol's own terms: `what` is the URI queried and `query` its parameters as sent.
+/// `others` are third parties, such as the person a process asks for.
+#[allow(clippy::too_many_arguments)]
 pub fn query(
     source: &Source,
     time: SystemTime,
     outcome: Outcome,
     issuer: Participant,
     responder: Participant,
+    others: Vec<Participant>,
     what: &str,
     query: &[u8],
 ) -> Message {
+    let mut participants = vec![issuer.role(role::SOURCE), responder.role(role::DESTINATION)];
+    participants.extend(others);
     Message {
         event_id: event::QUERY,
         event_types: Vec::new(),
@@ -229,7 +265,7 @@ pub fn query(
         time,
         outcome,
         outcome_description: None,
-        participants: vec![issuer.role(role::SOURCE), responder.role(role::DESTINATION)],
+        participants,
         source: source.clone(),
         objects: vec![Object {
             id: what.to_owned(),
@@ -345,6 +381,38 @@ pub fn security_alert(
             life_cycle: None,
             id_type: URI,
             name: NameOrQuery::Name(subject.to_owned()),
+            details: vec![("Alert Description".into(), description.as_bytes().to_vec())],
+            sop_classes: Vec::new(),
+        }],
+    }
+}
+
+/// Security Alert, Node Authentication (A.5.3.11): `node` tried to connect and was not
+/// let in. The standard's own example of an alert; only failures are reported, as its
+/// note expects.
+pub fn node_authentication_failure(
+    source: &Source,
+    time: SystemTime,
+    reporter: &str,
+    node: &str,
+    description: &str,
+) -> Message {
+    Message {
+        event_id: event::SECURITY_ALERT,
+        event_types: vec![kind::NODE_AUTHENTICATION],
+        action: Some(Action::Execute),
+        time,
+        outcome: Outcome::MinorFailure,
+        outcome_description: None,
+        participants: vec![Participant::new(reporter, true)],
+        source: source.clone(),
+        objects: vec![Object {
+            id: node.to_owned(),
+            type_code: Some("2"),
+            role: Some("13"),
+            life_cycle: None,
+            id_type: NODE_ID,
+            name: NameOrQuery::Name(node.to_owned()),
             details: vec![("Alert Description".into(), description.as_bytes().to_vec())],
             sop_classes: Vec::new(),
         }],

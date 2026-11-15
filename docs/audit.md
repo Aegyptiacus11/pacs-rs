@@ -44,8 +44,23 @@ About the data, for requests that succeeded; each names the study and its patien
 | Export | a ZIP archive or a media file-set downloaded, with the address it went to |
 | Query | a search: QIDO-RS from the root, the REST API's lists and `/tools/find`, the web interface's lists; with what was asked |
 
-Each event names who (`login@<source>` for a person, its ID for a tool, `unknown` when the
-login is off), from which address, when, and how it ended.
+About DIMSE and the remote AEs:
+
+| Event | When |
+|---|---|
+| DICOM Instances Transferred, to the server | an association is over: one line per study stored through it by C-STORE, from the calling AE title to the called one, with the number of instances of each SOP class |
+| Security Alert, Node Authentication | a connection that did not become an association: an AE title that is not recognized, the limit of associations reached. Once per address and reason in 15 minutes |
+| Query, of a remote AE | `GET /modalities/{id}/studies` (C-FIND): this server asks, the remote AE answers, the caller is the requestor. Written when the remote AE fails too, as a failure |
+| Begin Transferring DICOM Instances | `POST /modalities/{id}/move` (C-MOVE): the remote AE is asked to send studies here, one line per study. Their arrival is the first event of this table |
+
+A study that arrives at a project's AE title is de-identified before it is stored, and its
+line names the study and the patient as the archive holds them: the pseudonyms. Who the
+patient was is not written. A study being moved is named by its UID alone, its patient
+`unknown`: whose it is, the remote AE knows, and this server only once it has arrived.
+
+Each event names who (`login@<source>` for a person, its ID for a tool, its AE title for a
+DICOM application, `unknown` when the login is off), from which address, when, and how it
+ended.
 
 Reading one study takes many requests: a CT is hundreds of frames. The same caller reading,
 being sent or searching the same thing again within 15 minutes leaves no second line, as the
@@ -54,9 +69,9 @@ deleted or exported is written every time.
 
 ## Not yet
 
-- **DIMSE.** C-STORE, C-FIND and C-MOVE are not audited: a study that arrives by C-STORE
-  leaves no line yet.
-- **Remote AEs.** Searches and moves through `/modalities` are not audited.
+- **Quarantined instances.** An instance a project's profile sets aside is logged, not
+  audited.
+- **C-ECHO**, and the jobs of `/jobs`, leave no line.
 - **Sending to a repository.** The lines are what IHE's Record Audit Event sends, but pacs-rs
   only writes them to the file. A syslog forwarder can ship the file as it is; sending over
   TLS from pacs-rs itself is not built.
@@ -79,7 +94,7 @@ mark.
 ```
 
 - Each event follows its table in PS3.15 A.5.3 (Application Activity A.5.3.1, Export A.5.3.4,
-  DICOM Instances Accessed A.5.3.6, DICOM Instances Transferred A.5.3.7, DICOM Study Deleted
+  Begin Transferring DICOM Instances A.5.3.3, DICOM Instances Accessed A.5.3.6, DICOM Instances Transferred A.5.3.7, DICOM Study Deleted
   A.5.3.8, Query A.5.3.10, Security Alert A.5.3.11, User Authentication A.5.3.12), with the
   codes of PS3.16 CID 400 to 403.
 - A message is about one patient: a request that touches the studies of several leaves a
@@ -90,6 +105,8 @@ mark.
   path asked, and as the query its parameters or its body.
 - The integer codes the schema inherited from RFC 3881 are written as ITI TF-2: 3.20.7.1.3
   asks: the integer, `RFC-3881` as the coding scheme, and RFC 3881's description.
+- A DICOM application is named by its AE title, with `AETITLES=<title>` as its alternative
+  ID (A.5.2.2).
 - A tool that came with its access token is named as ITI-72 (3.72.5.1) names a caller with a
   JWT: `audience<subject@issuer>`.
 - `AuditSourceID` is `PACS_AUDIT_SOURCE_ID` (`pacs-rs` by default), and the source type is 4,

@@ -31,8 +31,19 @@
 //! profile allows (A.5.3: a message is not required each time the activity occurs).
 //! What is stored, deleted or exported is written every time.
 //!
-//! Not yet: DIMSE (C-STORE, C-FIND, C-MOVE), and sending the lines to a repository over
-//! TLS.
+//! DIMSE and the remote AEs:
+//!
+//! | Event | When |
+//! |---|---|
+//! | DICOM Instances Transferred | an association is over: one line per study stored through it by C-STORE, from the calling AE title to the called one |
+//! | Security Alert, Node Authentication | a connection that did not become an association: an AE title not recognized, the limit reached |
+//! | Query | a remote AE searched by C-FIND (`GET /modalities/{id}/studies`): this server asks, the remote AE answers, the caller is the requestor |
+//! | Begin Transferring DICOM Instances | a remote AE asked by C-MOVE to send studies here (`POST /modalities/{id}/move`), one line per study; their arrival is the first event of this table |
+//!
+//! A study that arrives at a project's AE title is de-identified before it is stored: its
+//! line names the study and the patient as the archive holds them, the pseudonyms.
+//!
+//! Not yet: sending the lines to a repository over TLS.
 //!
 //! A person is `login@<source>`; a tool is its ID, with the name ITI-72 (3.72.5.1) gives
 //! a caller that came with a JWT: `audience<subject@issuer>`.
@@ -195,7 +206,15 @@ impl Audit {
 
     /// Put the trail around `app`: outside the guard, so that refusals are seen too.
     /// `index` says whose study a request touched, and `mount` is the DICOMweb root.
-    pub fn observe(&self, app: axum::Router, index: Index, mount: &str) -> axum::Router {
+    /// `dimse` names the remote AEs and this server's own AE title.
+    pub fn observe(
+        &self,
+        app: axum::Router,
+        index: Index,
+        mount: &str,
+        dimse: pacs_dimse::Config,
+        projects: Vec<(String, pacs_dimse::AeTitle)>,
+    ) -> axum::Router {
         if !self.is_on() {
             return app;
         }
@@ -203,6 +222,8 @@ impl Audit {
             audit: self.clone(),
             index,
             mount: mount.into(),
+            dimse: Arc::new(dimse),
+            projects: projects.into(),
         };
         app.layer(axum::middleware::from_fn_with_state(observer, observe))
     }
@@ -241,6 +262,67 @@ struct Observer {
     audit: Audit,
     index: Index,
     mount: Arc<str>,
+    dimse: Arc<pacs_dimse::Config>,
+    /// Project names and their AE titles: where a move may send what it brings.
+    projects: Arc<[(String, pacs_dimse::AeTitle)]>,
+}
+
+/// An application that speaks DICOM, by its AE title (A.5.2.2).
+fn application(ae_title: &str, at: Option<AccessPoint>) -> Participant {
+    Participant::new(ae_title, false)
+        .alternative(format!("AETITLES={ae_title}"))
+        .at(at)
+}
+
+impl std::fmt::Debug for Audit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.is_on() {
+            "Audit(on)"
+        } else {
+            "Audit(off)"
+        })
+    }
+}
+
+/// What DIMSE associations did: see the module's second table.
+impl pacs_dimse::Observer for Audit {
+    fn received(&self, peer: &pacs_dimse::Peer, stored: Vec<Stored>) {
+        let Some(trail) = &self.0 else { return };
+        let now = SystemTime::now();
+        let at = Some(AccessPoint::Ip(peer.address.ip().to_string()));
+        for (study, action) in stored_studies(stored) {
+            // a C-STORE is pushed: the sender asked for it
+            let mut sender = application(&peer.calling, at.clone());
+            sender.is_requestor = true;
+            let receiver = Participant::new(&trail.process, false)
+                .alternative(format!("AETITLES={}", peer.called));
+            self.record(events::instances_transferred(
+                &trail.source,
+                now,
+                action,
+                Outcome::Success,
+                sender,
+                receiver,
+                &study,
+            ));
+        }
+    }
+
+    fn refused(&self, address: SocketAddr, reason: &str) {
+        let Some(trail) = &self.0 else { return };
+        let node = address.ip().to_string();
+        // a scanner, or a peer that keeps retrying, is one line a window
+        if trail.repeated(format!("refused|{node}|{reason}"), Instant::now()) {
+            return;
+        }
+        self.record(events::node_authentication_failure(
+            &trail.source,
+            SystemTime::now(),
+            &trail.process,
+            &node,
+            &format!("a DIMSE connection did not become an association: {reason}"),
+        ));
+    }
 }
 
 /// Who a request came from, as an audit participant.
@@ -464,6 +546,30 @@ async fn studies_of(
     }
 }
 
+/// The studies a move asks for, and the AE title they are to arrive at: this server's own,
+/// or the project's that the body names (`POST /modalities/{id}/move`).
+fn moved(
+    body: &[u8],
+    dimse: &pacs_dimse::Config,
+    projects: &[(String, pacs_dimse::AeTitle)],
+) -> (Vec<String>, String) {
+    let body: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let studies = match body.get("StudyInstanceUID") {
+        Some(serde_json::Value::String(uid)) => vec![uid.clone()],
+        Some(serde_json::Value::Array(uids)) => uids
+            .iter()
+            .filter_map(|uid| uid.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let project = body.get("Project").and_then(|name| name.as_str());
+    let destination = project
+        .and_then(|name| projects.iter().find(|(n, _)| n == name))
+        .map(|(_, ae_title)| ae_title.as_str())
+        .unwrap_or(dimse.ae_title.as_str());
+    (studies, destination.to_owned())
+}
+
 /// What the request did to the archive's data, written once it has succeeded.
 struct Asked {
     subject: Subject,
@@ -491,6 +597,8 @@ impl Observer {
         match &asked.subject {
             // written by the caller, with what was stored
             Subject::Stores => {}
+            // written by the caller: a remote AE that fails was asked all the same
+            Subject::RemoteSearch(_) | Subject::RemoteMove(_) => {}
             Subject::Search => {
                 // "the query in the format of the protocol used": the body of a search
                 // that has one, else the request's target, which is never empty
@@ -507,6 +615,7 @@ impl Observer {
                         ok,
                         who,
                         server(),
+                        Vec::new(),
                         &asked.path,
                         &query,
                     ));
@@ -653,7 +762,10 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
         };
         claimed_name = Some(login_of(&bytes));
         Request::from_parts(parts, Body::from(bytes))
-    } else if posted("/tools/find") || posted("/tools/create-archive") {
+    } else if posted("/tools/find")
+        || posted("/tools/create-archive")
+        || matches!(subject, Some(Subject::RemoteMove(_)))
+    {
         // what is searched, and what is taken away, is the event
         let (parts, body) = request.into_parts();
         let Ok(bytes) = axum::body::to_bytes(body, MAX_QUERY_BODY_BYTES).await else {
@@ -708,6 +820,66 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             Participant::new(&trail.process, false),
             &study,
         ));
+    }
+    // A remote AE: asked as soon as the route got as far as calling it, which a failure
+    // of that AE (502) shows as much as a success does.
+    let called = status.is_success()
+        || matches!(
+            status,
+            StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
+        );
+    let remote = match &subject {
+        Some(Subject::RemoteSearch(id) | Subject::RemoteMove(id)) if called => {
+            observer.dimse.remote(id)
+        }
+        _ => None,
+    };
+    if let Some(remote) = remote {
+        let there = application(
+            remote.ae_title.as_str(),
+            Some(AccessPoint::Machine(remote.host.clone())),
+        );
+        let outcome = outcome_of(status);
+        if matches!(subject, Some(Subject::RemoteSearch(_))) {
+            let target = match &query {
+                Some(query) => format!("{path}?{query}"),
+                None => path.clone(),
+            };
+            let here = Participant::new(&trail.process, false)
+                .alternative(format!("AETITLES={}", observer.dimse.ae_title.as_str()));
+            audit.record(events::query(
+                &trail.source,
+                now,
+                outcome,
+                here,
+                there,
+                vec![who.clone()],
+                &path,
+                target.as_bytes(),
+            ));
+        } else {
+            let (studies, destination) = moved(&asked_body, &observer.dimse, &observer.projects);
+            let here = Participant::new(&trail.process, false)
+                .alternative(format!("AETITLES={destination}"));
+            // whose they are is the remote AE's to know: one line a study, since a line
+            // is about one patient
+            for study_instance_uid in studies {
+                audit.record(events::begin_transferring(
+                    &trail.source,
+                    now,
+                    outcome,
+                    there.clone(),
+                    here.clone(),
+                    vec![who.clone()],
+                    &[events::Study {
+                        study_instance_uid,
+                        patient_id: None,
+                        patient_name: None,
+                        sop_classes: Vec::new(),
+                    }],
+                ));
+            }
+        }
     }
     if status.is_success()
         && let Some(subject) = subject

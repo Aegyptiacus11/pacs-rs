@@ -1,7 +1,7 @@
 use clap::Parser;
 use pacs_server::{
-    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve, serve_dimse,
-    shutdown_signal,
+    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve,
+    serve_dimse_audited, shutdown_signal,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -63,11 +63,12 @@ async fn main() -> anyhow::Result<()> {
             projects = projects.len(),
             "DIMSE ready",
         );
-        tokio::spawn(serve_dimse(
+        tokio::spawn(serve_dimse_audited(
             dimse,
             archive,
             config,
             projects,
+            audit.clone(),
             until_stopped(),
         ));
     }

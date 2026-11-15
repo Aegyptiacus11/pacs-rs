@@ -36,6 +36,11 @@ pub(crate) enum Subject {
     Deleted(Level, String),
     /// Instances received. (DICOM Instances Transferred, create)
     Stores,
+    /// A remote AE searched by C-FIND, by its id here. (Query, of that AE)
+    RemoteSearch(String),
+    /// A remote AE asked by C-MOVE to send studies here. (Begin Transferring DICOM
+    /// Instances; what arrives is DICOM Instances Transferred, from the association)
+    RemoteMove(String),
 }
 
 fn level(segment: &str) -> Option<Level> {
@@ -101,6 +106,10 @@ pub(crate) fn subject(method: &Method, path: &str, mount: &str) -> Option<Subjec
                 _ => None,
             }
         }
+        ["modalities", remote, "studies"] if get => {
+            Some(Subject::RemoteSearch((*remote).to_owned()))
+        }
+        ["modalities", remote, "move"] if post => Some(Subject::RemoteMove((*remote).to_owned())),
         ["tools", "find"] if post => Some(Subject::Search),
         ["tools", "create-archive"] if get || post => Some(Subject::Exported(Target::Listed)),
         ["instances"] if post => Some(Subject::Stores),
@@ -310,8 +319,21 @@ mod tests {
             (Method::GET, "/ui/config.json", None),
             (Method::GET, "/users", None),
             (Method::POST, "/auth/login", None),
+            // remote AEs
+            (
+                Method::GET,
+                "/modalities/a/studies",
+                Some(RemoteSearch("a".into())),
+            ),
+            (
+                Method::POST,
+                "/modalities/a/move",
+                Some(RemoteMove("a".into())),
+            ),
             (Method::GET, "/modalities", None),
-            (Method::POST, "/modalities/a/move", None),
+            (Method::POST, "/modalities/a/echo", None),
+            (Method::GET, "/modalities/a/move", None),
+            (Method::GET, "/jobs/j1", None),
             (Method::GET, "/", None),
         ];
         for (method, path, expected) in cases {

@@ -10,7 +10,7 @@ use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::command::{Command, PRIORITY_MEDIUM, field, tag};
 use pacs_dimse::message::{self, Incoming};
 use pacs_server::projects::{open_projects, project_configs, secret_variable};
-use pacs_server::{Settings, open_archive, serve_dimse};
+use pacs_server::{Settings, open_archive};
 
 const CT: &str = "1.2.840.10008.5.1.4.1.1.2";
 const SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -131,7 +131,12 @@ async fn the_quarantine_setting_opens_a_store() {
 #[tokio::test]
 async fn an_instance_sent_to_a_project_is_served_de_identified() {
     let dir = tempfile::tempdir().unwrap();
-    let s = settings(dir.path(), LIVER, &[]);
+    let trail = dir.path().join("audit.log");
+    let s = settings(
+        dir.path(),
+        LIVER,
+        &["--audit-file", trail.to_str().unwrap()],
+    );
     let archive = open_archive(&s).await.unwrap();
     let projects = open_projects(
         &s,
@@ -142,11 +147,12 @@ async fn an_instance_sent_to_a_project_is_served_de_identified() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let config = pacs_server::dimse_config(&s).unwrap();
-    tokio::spawn(serve_dimse(
+    tokio::spawn(pacs_server::serve_dimse_audited(
         listener,
         archive.clone(),
         config,
         projects,
+        pacs_server::audit::open_audit(&s).unwrap(),
         std::future::pending(),
     ));
 
@@ -192,4 +198,41 @@ async fn an_instance_sent_to_a_project_is_served_de_identified() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.study_instance_uid, keys.uid(&series.study_uid()));
+
+    // The audit trail names what the archive holds, the pseudonyms: who the patient was is
+    // not written there either.
+    let mut audited = String::new();
+    for _ in 0..100 {
+        audited = std::fs::read_to_string(&trail).unwrap_or_default();
+        if !audited.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(audited.lines().count(), 1, "{audited}");
+    assert!(
+        audited.contains("<EventID csd-code=\"110104\""),
+        "{audited}"
+    );
+    assert!(
+        audited.contains("AlternativeUserID=\"AETITLES=LIVER_2026\""),
+        "{audited}"
+    );
+    assert!(
+        audited.contains(&format!(
+            "ParticipantObjectID=\"{}\"",
+            keys.uid(&series.study_uid())
+        )),
+        "{audited}"
+    );
+    for identified in [
+        series.study_uid(),
+        series.patient_id(),
+        "SYNTHETIC".to_owned(),
+    ] {
+        assert!(
+            !audited.contains(&identified),
+            "the trail holds {identified:?}:\n{audited}"
+        );
+    }
 }
