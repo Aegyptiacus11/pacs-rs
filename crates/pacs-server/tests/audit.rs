@@ -578,10 +578,7 @@ async fn starts_that_must_fail() {
     // a trail that cannot be opened: its folder is not there
     let nowhere = dir.path().join("missing/audit.log");
     let unopened = settings(dir.path(), &["--audit-file", nowhere.to_str().unwrap()]);
-    let error = format!(
-        "{:#}",
-        open_audit(&unopened).err().expect("a refused start")
-    );
+    let error = format!("{:#}", open_audit(&unopened).expect_err("a refused start"));
     assert!(error.contains("PACS_AUDIT_FILE"), "{error}");
     // ...or is a folder
     let folder = settings(dir.path(), &["--audit-file", dir.path().to_str().unwrap()]);
@@ -597,7 +594,7 @@ async fn starts_that_must_fail() {
             "our pacs",
         ],
     );
-    let error = format!("{:#}", open_audit(&spaced).err().expect("a refused start"));
+    let error = format!("{:#}", open_audit(&spaced).expect_err("a refused start"));
     assert!(error.contains("PACS_AUDIT_SOURCE_ID"), "{error}");
 
     // The trail asked for and the one given must agree: no silent server without one.
