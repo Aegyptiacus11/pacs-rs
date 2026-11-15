@@ -9,6 +9,8 @@ mod store;
 
 pub use store::{Destination, part10};
 
+use pacs_archive::observed::{Stored, stored_during};
+
 use std::sync::Arc;
 
 use dicom_ul::association::Association;
@@ -29,6 +31,26 @@ use crate::message::{self, DataSet, Incoming, MessageError};
 use crate::status::Status;
 use crate::{Config, VERIFICATION};
 
+/// An association as whoever accounts for it sees it: where the peer is, and the AE
+/// titles it called from and called.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peer {
+    pub address: std::net::SocketAddr,
+    pub calling: String,
+    pub called: String,
+}
+
+/// Told what associations did, for the server's audit trail. Called on the association's
+/// own task, after the fact: it must not block for long.
+pub trait Observer: Send + Sync + std::fmt::Debug {
+    /// The association is over, and these instances were stored through it, in order.
+    /// Never called with none.
+    fn received(&self, peer: &Peer, stored: Vec<Stored>);
+    /// A connection from `address` did not become an association, for `reason`: an AE
+    /// title that is not recognized, a request that cannot be read, the limit reached.
+    fn refused(&self, address: std::net::SocketAddr, reason: &str);
+}
+
 /// The DIMSE service provider: configuration, the destination of received instances, and
 /// the cap on associations served at once.
 #[derive(Debug)]
@@ -38,6 +60,7 @@ pub struct Scp {
     /// Further called AE titles with destinations of their own (projects).
     routes: Vec<(AeTitle, Destination)>,
     slots: Arc<Semaphore>,
+    observer: Option<Arc<dyn Observer>>,
 }
 
 impl Scp {
@@ -48,7 +71,14 @@ impl Scp {
             destination,
             routes: Vec::new(),
             slots,
+            observer: None,
         }
+    }
+
+    /// Tell `observer` what associations did.
+    pub fn with_observer(mut self, observer: Arc<dyn Observer>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// Accept `ae_title` too, its instances going to `destination`.
@@ -121,6 +151,10 @@ impl Scp {
             tokio::spawn(async move {
                 let Ok(_slot) = scp.slots.clone().try_acquire_owned() else {
                     tracing::warn!(%peer, "association rejected: the limit of {} is reached", scp.config.max_associations);
+                    if let Some(observer) = &scp.observer {
+                        observer
+                            .refused(peer, "the limit of associations served at once is reached");
+                    }
                     reject_busy(socket, scp.config.timeout).await;
                     return;
                 };
@@ -139,10 +173,13 @@ impl Scp {
         socket: TcpStream,
         peer: std::net::SocketAddr,
     ) {
-        let mut association = match options.establish_async(socket).await {
+        let association = match options.establish_async(socket).await {
             Ok(association) => association,
             Err(e) => {
                 tracing::info!(%peer, error = %e, "association not established");
+                if let Some(observer) = &self.observer {
+                    observer.refused(peer, &e.to_string());
+                }
                 return;
             }
         };
@@ -150,6 +187,34 @@ impl Scp {
         let called = association.called_ae_title().trim().to_owned();
         let destination = self.destination(&called).clone();
         tracing::info!(%peer, calling, called, "association established");
+        // what the archive takes in while the association lasts: its messages are served
+        // on this task, one after the other
+        let messages = self.messages(association, peer, &calling, &called, &destination);
+        let ((), stored) = stored_during(messages).await;
+        if let Some(observer) = &self.observer
+            && !stored.is_empty()
+        {
+            let peer = Peer {
+                address: peer,
+                calling,
+                called,
+            };
+            observer.received(&peer, stored);
+        }
+    }
+
+    /// Serve the messages of an established association until it ends.
+    async fn messages<A, S>(
+        &self,
+        mut association: A,
+        peer: std::net::SocketAddr,
+        calling: &str,
+        called: &str,
+        destination: &Destination,
+    ) where
+        A: dicom_ul::association::AsyncAssociation<S> + Association + Send,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
         let mut served = Counts::default();
         loop {
             match message::receive(&mut association, self.config.max_data_set_bytes).await {
@@ -172,25 +237,19 @@ impl Scp {
                         context_id: message.context_id,
                         abstract_syntax: context.abstract_syntax.trim_end_matches('\0'),
                         transfer_syntax: context.transfer_syntax.trim_end_matches('\0'),
-                        calling: &calling,
-                        called: &called,
+                        calling,
+                        called,
                     };
-                    let response = match handle(
-                        &request,
-                        &message.command,
-                        message.data,
-                        &destination,
-                    )
-                    .await
-                    {
-                        Handled::Respond(response) => response,
-                        Handled::Nothing => continue,
-                        Handled::Abort(reason) => {
-                            tracing::warn!(%peer, calling, reason, "association aborted");
-                            let _ = association.abort().await;
-                            break;
-                        }
-                    };
+                    let response =
+                        match handle(&request, &message.command, message.data, destination).await {
+                            Handled::Respond(response) => response,
+                            Handled::Nothing => continue,
+                            Handled::Abort(reason) => {
+                                tracing::warn!(%peer, calling, reason, "association aborted");
+                                let _ = association.abort().await;
+                                break;
+                            }
+                        };
                     served.count(&message.command, &response);
                     if let Err(e) =
                         message::send(&mut association, request.context_id, &response, None).await
