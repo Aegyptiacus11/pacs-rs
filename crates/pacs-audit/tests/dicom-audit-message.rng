@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+  <define name="other-csd-attributes">
+    <choice>
+      <attribute>
+        <name ns="">codeSystemName</name>
+        <data type="token" datatypeLibrary=""/>
+      </attribute>
+      <attribute>
+        <name ns="">codeSystemName</name>
+        <data type="token" datatypeLibrary=""/>
+      </attribute>
+    </choice>
+    <optional>
+      <attribute>
+        <name ns="">displayName</name>
+        <data type="token" datatypeLibrary=""/>
+      </attribute>
+    </optional>
+    <attribute>
+      <name ns="">originalText</name>
+      <data type="token" datatypeLibrary=""/>
+    </attribute>
+  </define>
+  <define name="CodedValueType">
+    <attribute>
+      <name ns="">csd-code</name>
+      <data type="token" datatypeLibrary=""/>
+    </attribute>
+    <ref name="other-csd-attributes"/>
+  </define>
+  <define name="EventIdentificationContents">
+    <element>
+      <name ns="">EventID</name>
+      <ref name="CodedValueType"/>
+    </element>
+    <zeroOrMore>
+      <element>
+        <name ns="">EventTypeCode</name>
+        <ref name="CodedValueType"/>
+      </element>
+    </zeroOrMore>
+    <optional>
+      <attribute>
+        <name ns="">EventActionCode</name>
+        <choice>
+          <value>C</value>
+          <value>R</value>
+          <value>U</value>
+          <value>D</value>
+          <value>E</value>
+        </choice>
+      </attribute>
+    </optional>
+    <attribute>
+      <name ns="">EventDateTime</name>
+      <data type="dateTime"/>
+    </attribute>
+    <attribute>
+      <name ns="">EventOutcomeIndicator</name>
+      <choice>
+        <value>0</value>
+        <value>4</value>
+        <value>8</value>
+        <value>12</value>
+      </choice>
+    </attribute>
+    <optional>
+      <element>
+        <name ns="">EventOutcomeDescription</name>
+        <text/>
+      </element>
+    </optional>
+  </define>
+  <define name="AuditSourceIdentificationContents">
+    <optional>
+      <attribute>
+        <name ns="">AuditEnterpriseSiteID</name>
+        <data type="token" datatypeLibrary=""/>
+      </attribute>
+    </optional>
+    <attribute>
+      <name ns="">AuditSourceID</name>
+      <data type="token" datatypeLibrary=""/>
+    </attribute>
+    <zeroOrMore>
+      <element>
+        <name ns="">AuditSourceTypeCode</name>
+        <ref name="AuditSourceTypeCodeContent"/>
+      </element>
+    </zeroOrMore>
+  </define>
+  <define name="AuditSourceTypeCodeContent">
+    <attribute>
+      <name ns="">csd-code</name>
+      <choice>
+        <value>1</value>
+        <value>2</value>
+        <value>3</value>
+        <value>4</value>
+        <value>5</value>
+        <value>6</value>
+        <value>7</value>
+        <value>8</value>
+        <value>9</value>
+        <data type="token" datatypeLibrary=""/>
+      </choice>
+    </attribute>
+    <optional>
+      <ref name="other-csd-attributes"/>
+    </optional>
+  </define>
+  <define name="ActiveParticipantContents">
+    <zeroOrMore>
+      <element>
+        <name ns="">RoleIDCode</name>
+        <ref name="CodedValueType"/>
+      </element>
+    </zeroOrMore>
+    <optional>
+      <element>
+        <name ns="">MediaIdentifier</name>
+        <element>
+          <name ns="">MediaType</name>
+          <ref name="CodedValueType"/>
+        </element>
+      </element>
+    </optional>
+    <attribute>
+      <name ns="">UserID</name>
+      <text/>
+    </attribute>
+    <optional>
+      <attribute>
+        <name ns="">AlternativeUserID</name>
+        <text/>
+      </attribute>
+    </optional>
+    <optional>
+      <attribute>
+        <name ns="">UserName</name>
+        <text/>
+      </attribute>
+    </optional>
+    <attribute>
+      <name ns="">UserIsRequestor</name>
+      <data type="boolean"/>
+    </attribute>
+    <optional>
+      <attribute>
+        <name ns="">NetworkAccessPointID</name>
+        <data type="token" datatypeLibrary=""/>
+      </attribute>
+    </optional>
+    <optional>
+      <attribute>
+        <name ns="">NetworkAccessPointTypeCode</name>
+        <choice>
+          <value>1</value>
+          <value>2</value>
+          <value>3</value>
+          <value>4</value>
+          <value>5</value>
+        </choice>
+      </attribute>
+    </optional>
+  </define>
+  <define name="ValuePair">
+    <attribute>
+      <name ns="">type</name>
+      <data type="token" datatypeLibrary=""/>
+    </attribute>
+    <attribute>
+      <name ns="">value</name>
+      <data type="base64Binary"/>
+    </attribute>
+  </define>
+  <define name="DICOMObjectDescriptionContents">
+    <zeroOrMore>
+      <element>
+        <name ns="">MPPS</name>
+        <attribute>
+          <name ns="">UID</name>
+          <data type="token" datatypeLibrary=""/>
+        </attribute>
+      </element>
+    </zeroOrMore>
+    <zeroOrMore>
+      <element>
+        <name ns="">Accession</name>
+        <attribute>
+          <name ns="">Number</name>
+          <data type="token" datatypeLibrary=""/>
+        </attribute>
+      </element>
+    </zeroOrMore>
+    <zeroOrMore>
+      <element>
+        <name ns="">SOPClass</name>
+        <zeroOrMore>
+          <element>
+            <name ns="">Instance</name>
+            <attribute>
+              <name ns="">UID</name>
+              <data type="token" datatypeLibrary=""/>
+            </attribute>
+          </element>
+        </zeroOrMore>
+        <optional>
+          <attribute>
+            <name ns="">UID</name>
+            <data type="token" datatypeLibrary=""/>
+          </attribute>
+        </optional>
+        <attribute>
+          <name ns="">NumberOfInstances</name>
+          <data type="integer"/>
+        </attribute>
+      </element>
+    </zeroOrMore>
+    <optional>
+      <element>
+        <name ns="">ParticipantObjectContainsStudy</name>
+        <zeroOrMore>
+          <element>
+            <name ns="">StudyIDs</name>
+            <attribute>
+              <name ns="">UID</name>
+              <data type="token" datatypeLibrary=""/>
+            </attribute>
+          </element>
+        </zeroOrMore>
+      </element>
+    </optional>
+    <optional>
+      <element>
+        <name ns="">Encrypted</name>
+        <data type="boolean"/>
+      </element>
+    </optional>
+    <optional>
+      <element>
+        <name ns="">Anonymized</name>
+        <data type="boolean"/>
+      </element>
+    </optional>
+  </define>
+  <define name="ParticipantObjectIdentificationContents">
+    <element>
+      <name ns="">ParticipantObjectIDTypeCode</name>
+      <ref name="CodedValueType"/>
+    </element>
+    <choice>
+      <element>
+        <name ns="">ParticipantObjectName</name>
+        <data type="token" datatypeLibrary=""/>
+      </element>
+      <element>
+        <name ns="">ParticipantObjectQuery</name>
+        <data type="base64Binary"/>
+      </element>
+    </choice>
+    <zeroOrMore>
+      <element>
+        <name ns="">ParticipantObjectDetail</name>
+        <ref name="ValuePair"/>
+      </element>
+    </zeroOrMore>
+    <zeroOrMore>
+      <element>
+        <name ns="">ParticipantObjectDescription</name>
+        <ref name="DICOMObjectDescriptionContents"/>
+      </element>
+    </zeroOrMore>
+    <attribute>
+      <name ns="">ParticipantObjectID</name>
+      <data type="token" datatypeLibrary=""/>
+    </attribute>
+    <optional>
+      <attribute>
+        <name ns="">ParticipantObjectTypeCode</name>
+        <choice>
+          <value>1</value>
+          <value>2</value>
+          <value>3</value>
+          <value>4</value>
+        </choice>
+      </attribute>
+    </optional>
+    <optional>
+      <attribute>
+        <name ns="">ParticipantObjectTypeCodeRole</name>
+        <choice>
+          <value>1</value>
+          <value>2</value>
+          <value>3</value>
+          <value>4</value>
+          <value>5</value>
+          <value>6</value>
+          <value>7</value>
+          <value>8</value>
+          <value>9</value>
+          <value>10</value>
+          <value>11</value>
+          <value>12</value>
+          <value>13</value>
+          <value>14</value>
+          <value>15</value>
+          <value>16</value>
+          <value>17</value>
+          <value>18</value>
+          <value>19</value>
+          <value>20</value>
+          <value>21</value>
+          <value>22</value>
+          <value>23</value>
+          <value>24</value>
+          <value>25</value>
+          <value>26</value>
+        </choice>
+      </attribute>
+    </optional>
+    <optional>
+      <attribute>
+        <name ns="">ParticipantObjectDataLifeCycle</name>
+        <choice>
+          <value>1</value>
+          <value>2</value>
+          <value>3</value>
+          <value>4</value>
+          <value>5</value>
+          <value>6</value>
+          <value>7</value>
+          <value>8</value>
+          <value>9</value>
+          <value>10</value>
+          <value>11</value>
+          <value>12</value>
+          <value>13</value>
+          <value>14</value>
+          <value>15</value>
+        </choice>
+      </attribute>
+    </optional>
+    <optional>
+      <attribute>
+        <name ns="">ParticipantObjectSensitivity</name>
+        <data type="token" datatypeLibrary=""/>
+      </attribute>
+    </optional>
+  </define>
+  <define name="message">
+    <element>
+      <name ns="">AuditMessage</name>
+      <group>
+        <element>
+          <name ns="">EventIdentification</name>
+          <ref name="EventIdentificationContents"/>
+        </element>
+        <oneOrMore>
+          <element>
+            <name ns="">ActiveParticipant</name>
+            <ref name="ActiveParticipantContents"/>
+          </element>
+        </oneOrMore>
+        <element>
+          <name ns="">AuditSourceIdentification</name>
+          <ref name="AuditSourceIdentificationContents"/>
+        </element>
+        <zeroOrMore>
+          <element>
+            <name ns="">ParticipantObjectIdentification</name>
+            <ref name="ParticipantObjectIdentificationContents"/>
+          </element>
+        </zeroOrMore>
+      </group>
+    </element>
+  </define>
+  <start>
+    <ref name="message"/>
+  </start>
+</grammar>

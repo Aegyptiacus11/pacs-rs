@@ -1,0 +1,14 @@
+[package]
+name = "pacs-audit"
+description = "DICOM audit trail messages (PS3.15 A.5) as syslog lines (IHE ATNA, ITI-20); no network or storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
