@@ -45,6 +45,7 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_ADMIN_PASSWORD` | | the first administrator's password, 12 bytes or more, read only when there is no user yet; environment only, or `..._FILE` |
 | `PACS_AUTH_COOKIE_SECURE` | `true` | send the refresh cookie over HTTPS only |
 | `PACS_AUTH_COOKIE_PATH` | `/auth` | the cookie's path as the browser sees it, behind a proxy that adds a prefix |
+| `PACS_AUTH_ISSUER` | `pacs-rs` | the name this server gives itself in the access tokens of [tools](login.md#tools): their `iss` and `aud` |
 | `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
 | `PACS_DIMSE_AE_TITLE` | `PACSRS` | pacs-rs's AE title, called and calling |
 | `PACS_DIMSE_EXTRA_AE_TITLES` | none | further called AE titles accepted, comma-separated |

@@ -12,15 +12,17 @@ test that CI runs.
 ## 1. Safe to expose
 
 Built: the [login](login.md) (`PACS_AUTH`, off by default), with sessions, roles whose
-permissions can be changed, users kept in the index, and the sign-in page and the settings (users, roles, account) of the
+permissions can be changed, users kept in the index, [tools](login.md#tools) that connect with
+an access token got by the client credentials grant of IHE Internet User Authorization and
+can be revoked, and the sign-in page and the settings (users, roles, tools, account) of the
 [web interface](web-interface.md). Without it, anyone who reaches the
 server can read and delete everything. What remains:
 
 | Item | Done when |
 |---|---|
 | Signing in through a provider | a user signs in with OpenID Connect, and pacs-rs gives the same session as after a password |
+| Tokens from a provider | a tool's access token issued by the hospital's authorization server is accepted, checked with its published keys or by introspection (IUA ITI-102, ITI-103) |
 | Rights per project | a user can be limited to some projects |
-| Tokens for tools | a viewer or a pipeline connects with a token that can be revoked, following IHE Internet User Authorization |
 | TLS on DIMSE | associations can require TLS, following PS3.15 H.1 (step 6 of the [plan](interop.md#build-order)) |
 | TLS to Postgres | the index connection is encrypted and the server's certificate checked |
 | Audit trail | every read, store, export, deletion and login is recorded as the DICOM audit message of PS3.15 (IHE ATNA), kept apart from the application log |

@@ -58,7 +58,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   adding one, changing a role, setting a new password, deactivating, activating and removing.
   *Roles and permissions*: one column a role, one row a permission; who manages users ticks
   what each role permits, adds roles, renames and removes them, and everyone else sees the
-  table read-only. *Your account*: the login, the
+  table read-only. *Tools*, for an administrator: the [programs that connect without a
+  person](login.md#tools), adding one (its secret is shown once), changing its role and
+  removing it. *Your account*: the login, the
   role, changing the password, signing out. *About this server*: its version and the
   addresses a viewer or a script connects to. Without a login only the last one is there.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
