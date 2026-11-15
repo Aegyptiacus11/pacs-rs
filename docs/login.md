@@ -201,5 +201,4 @@ can check them; and TLS, which IUA requires, is the proxy's in front of pacs-rs.
 
 - Signing in through an identity provider (OpenID Connect).
 - Rights per project.
-- In the [audit trail](audit.md): who read, stored and deleted what. Sign-ins, account
-  changes and refusals are recorded already.
+- In the [audit trail](audit.md): DIMSE, and sending to a repository.
