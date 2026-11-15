@@ -28,6 +28,13 @@ fn server() -> Participant {
     Participant::new("pacs-server@host", false)
 }
 
+/// A remote AE, as a participant.
+fn hospital() -> Participant {
+    Participant::new("HOSPITAL", false)
+        .alternative("AETITLES=HOSPITAL")
+        .at(Some(AccessPoint::Machine("pacs.hospital.example".into())))
+}
+
 fn ct() -> Study {
     Study {
         study_instance_uid: "1.2.826.0.1.3680043.2.1125.1".into(),
@@ -139,6 +146,7 @@ fn study_messages() -> Vec<(&'static str, Message)> {
                 Outcome::Success,
                 ada(),
                 server(),
+                Vec::new(),
                 "/dicom-web/studies",
                 b"PatientName=DOE*&limit=25",
             ),
@@ -151,8 +159,56 @@ fn study_messages() -> Vec<(&'static str, Message)> {
                 Outcome::Success,
                 ada(),
                 server(),
+                Vec::new(),
                 "/studies",
-                b"",
+                b"/studies",
+            ),
+        ),
+        (
+            "query-of-a-remote-ae",
+            events::query(
+                &source(),
+                when(),
+                Outcome::SeriousFailure,
+                server().alternative("AETITLES=PACSRS"),
+                hospital(),
+                vec![ada()],
+                "/modalities/hospital/studies",
+                b"/modalities/hospital/studies?PatientID=P-0042",
+            ),
+        ),
+        (
+            "begin-transferring",
+            events::begin_transferring(
+                &source(),
+                when(),
+                Outcome::Success,
+                hospital(),
+                server().alternative("AETITLES=RESEARCH"),
+                vec![ada()],
+                &[nameless()],
+            ),
+        ),
+        (
+            "received-by-c-store",
+            events::instances_transferred(
+                &source(),
+                when(),
+                Action::Create,
+                Outcome::Success,
+                hospital(),
+                server().alternative("AETITLES=PACSRS"),
+                &ct(),
+            ),
+        ),
+        (
+            "node-refused",
+            events::node_authentication_failure(
+                &source(),
+                when(),
+                "pacs-server@host",
+                "203.0.113.9",
+                "association rejected: calling AE title not recognized",
             ),
         ),
     ]
@@ -440,4 +496,50 @@ fn the_events_about_studies_name_the_study_and_the_patient() {
     assert!(query.contains("EventActionCode=\"E\"") && query.contains("csd-code=\"110112\""));
     assert!(query.contains("<ParticipantObjectIdentification ParticipantObjectID=\"/dicom-web/studies\" ParticipantObjectTypeCode=\"2\" ParticipantObjectTypeCodeRole=\"3\"><ParticipantObjectIDTypeCode csd-code=\"12\" codeSystemName=\"RFC-3881\" originalText=\"URI\"/><ParticipantObjectQuery>UGF0aWVudE5hbWU9RE9FKiZsaW1pdD0yNQ==</ParticipantObjectQuery>"));
     assert!(!query.contains("Patient Number"));
+}
+
+#[test]
+fn the_events_about_remote_aes() {
+    let hospital = "UserID=\"HOSPITAL\" AlternativeUserID=\"AETITLES=HOSPITAL\" UserIsRequestor=\"false\" NetworkAccessPointID=\"pacs.hospital.example\" NetworkAccessPointTypeCode=\"1\">";
+    // a search of a remote AE: this server asks, the remote answers, the person is the requestor
+    let query = one("query-of-a-remote-ae").to_xml();
+    assert!(query.contains("EventOutcomeIndicator=\"8\""));
+    let (asks, answers, person) = (
+        query.find("AlternativeUserID=\"AETITLES=PACSRS\"").unwrap(),
+        query.find(hospital).unwrap(),
+        query.find("UserID=\"ada@pacs-rs\"").unwrap(),
+    );
+    assert!(asks < answers && answers < person, "{query}");
+    assert!(query[asks..answers].contains("originalText=\"Source Role ID\""));
+    assert!(query[answers..person].contains("originalText=\"Destination Role ID\""));
+    // the person has no role in the exchange, and is who asked for it
+    assert!(
+        query[person..]
+            .starts_with("UserID=\"ada@pacs-rs\" UserName=\"ada\" UserIsRequestor=\"true\"")
+    );
+    assert!(
+        !query[person..query.find("<AuditSourceIdentification").unwrap()].contains("RoleIDCode")
+    );
+
+    // a move: the remote AE will send, the server receive; the study, and a patient not known yet
+    let begin = one("begin-transferring").to_xml();
+    assert!(begin.contains("EventActionCode=\"E\"") && begin.contains("csd-code=\"110102\" codeSystemName=\"DCM\" originalText=\"Begin Transferring DICOM Instances\""));
+    let (sends, receives) = (
+        begin.find(hospital).unwrap(),
+        begin.find("AETITLES=RESEARCH").unwrap(),
+    );
+    assert!(sends < receives);
+    assert!(begin[sends..receives].contains("originalText=\"Source Role ID\""));
+    assert!(
+        begin.contains("ParticipantObjectID=\"1.2.3\"")
+            && begin.contains("ParticipantObjectID=\"unknown\"")
+    );
+
+    // a node that was not let in
+    let refused = one("node-refused").to_xml();
+    assert!(
+        refused.contains("EventOutcomeIndicator=\"4\"")
+            && refused.contains("originalText=\"Node Authentication\"")
+    );
+    assert!(refused.contains("<ParticipantObjectIdentification ParticipantObjectID=\"203.0.113.9\" ParticipantObjectTypeCode=\"2\" ParticipantObjectTypeCodeRole=\"13\"><ParticipantObjectIDTypeCode csd-code=\"110182\" codeSystemName=\"DCM\" originalText=\"Node ID\"/><ParticipantObjectName>203.0.113.9</ParticipantObjectName><ParticipantObjectDetail type=\"Alert Description\""));
 }
