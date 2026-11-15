@@ -42,8 +42,8 @@ an authenticating proxy in front before opening it to a network.
 | [REST API](docs/rest-api.md) | resources by public ID, uploads, deletion, find, archives, remote AEs |
 | [DIMSE](docs/dimse.md) | C-ECHO, C-STORE, C-FIND and C-MOVE; statuses, AE titles |
 | [De-identification](docs/de-identification.md) | projects, PS3.15 profiles and options, quarantine |
-| [Roadmap](docs/roadmap.md) | what is not built yet |
-| [Hospital interfaces: the plan](docs/interop.md) | the research PACS beside a clinical one, and its build order |
+| [Roadmap](docs/roadmap.md) | what is not built yet, towards a research and a clinical PACS in one |
+| [Hospital interfaces: the plan](docs/interop.md) | the research PACS beside a clinical one, the clinical archive after it, and the build order |
 | [Building and testing](docs/building.md) | the toolchain, the web interface, Postgres, S3, DIMSE and reference tests |
 | [CI and releases](docs/releases.md) | CI, the docs site, tags, archives and the image |
 | [Benchmarks](docs/benchmarks.md) | measurements and their limits |
