@@ -12,6 +12,7 @@ repository = "https://github.com/Aegyptiacus11/pacs-rs"
 [workspace.dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
+base64 = "0.23.1"
 bytes = "1.12.1"
 # CharLS (JPEG-LS), C++ built by cmake and linked statically.
 charls = { version = "0.4.2", features = ["static"] }

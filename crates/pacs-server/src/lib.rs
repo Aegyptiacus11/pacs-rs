@@ -115,6 +115,11 @@ pub struct Settings {
     #[arg(long, env = "PACS_AUTH_COOKIE_PATH")]
     pub auth_cookie_path: Option<String>,
 
+    /// The name this server gives itself in the access tokens of tools: their issuer (`iss`)
+    /// and audience (`aud`), and what a tool may name as `resource` when it asks for one.
+    #[arg(long, env = "PACS_AUTH_ISSUER", default_value = "pacs-rs")]
+    pub auth_issuer: String,
+
     /// Address DIMSE (C-ECHO, C-STORE) listens on, e.g. `0.0.0.0:11112`. None by default:
     /// no DIMSE port is opened.
     #[arg(long, env = "PACS_DIMSE_LISTEN")]

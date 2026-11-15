@@ -27,8 +27,12 @@
 //! token a URL may carry: an access token in a query is refused, and so is a download token
 //! in the header.
 //!
+//! A program that connects without a person (a viewer, a pipeline) is a client, made under
+//! `/clients` with a role: see [`token`] for how it gets its access tokens and what they
+//! allow.
+//!
 //! Open without a token: `/healthz`, the web interface's own files (not `/ui/api/`), the
-//! sign-in routes, and `OPTIONS`. Everything else, a route that does not exist included, is
+//! sign-in routes, `/auth/token`, and `OPTIONS`. Everything else, a route that does not exist included, is
 //! refused without one.
 //!
 //! DIMSE has no login here: `PACS_DIMSE_KNOWN_CALLERS_ONLY` and the network decide who may
@@ -39,22 +43,24 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::Context;
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Request, State};
-use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+use axum::extract::rejection::{FormRejection, JsonRejection};
+use axum::extract::{Form, Path, Request, State};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, PRAGMA, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
+use base64::Engine;
 use jwt_sessions::http::{CookieSettings, auth_router};
 use jwt_sessions::{
     AccessTokens, Auth, AuthUser, Claims, RefreshTokens, SqlRefreshStore, StoreError, UserStore,
     check_password, hash_password,
 };
-use pacs_index::{Index, StoredUser, UserChange};
+use pacs_index::{Index, StoredClient, StoredUser, UserChange};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::Settings;
 
@@ -137,7 +143,13 @@ pub fn is_open(method: &Method, path: &str) -> bool {
     method == Method::OPTIONS
         || matches!(
             path,
-            "/healthz" | "/" | "/ui" | "/auth/login" | "/auth/refresh" | "/auth/logout"
+            "/healthz"
+                | "/"
+                | "/ui"
+                | "/auth/login"
+                | "/auth/refresh"
+                | "/auth/logout"
+                | "/auth/token"
         )
         // the web interface's files, which hold nothing of the archive; its API is not open
         || (method == Method::GET && path.starts_with("/ui/") && !path.starts_with("/ui/api/"))
@@ -150,7 +162,7 @@ pub fn right_for(method: &Method, path: &str) -> Right {
         path.strip_prefix(prefix)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     };
-    if under("/users") {
+    if under("/users") || under("/clients") {
         return Right::Admin;
     }
     // every signed-in user may see the roles (what their own allows); changing them is for
@@ -235,6 +247,10 @@ pub struct Login {
     sessions: Arc<Sessions>,
     /// Signs download tokens: the sessions' secret, one minute.
     downloads: AccessTokens,
+    /// Signs the access tokens of clients: the same secret, five minutes, with this server
+    /// as issuer and audience, so that neither kind of token passes for the other.
+    clients: AccessTokens,
+    issuer: String,
     index: Index,
     cookie: CookieSettings,
 }
@@ -243,6 +259,12 @@ pub struct Login {
 const DOWNLOAD_TOKEN_SECONDS: u64 = 60;
 /// The claim of a download token: the path, query included, it is good for.
 const DOWNLOAD_CLAIM: &str = "dl";
+
+/// How long a client's access token is good for. IUA (ITI TF-2: 3.71.5) asks for an hour or
+/// less and recommends five minutes or less.
+pub const CLIENT_TOKEN_SECONDS: u64 = 300;
+/// The claim that marks a client's access token, and names the client.
+const CLIENT_CLAIM: &str = "client_id";
 
 /// Passwords shorter than this are refused when a user is made or changed.
 pub const MIN_PASSWORD_BYTES: usize = 12;
@@ -302,6 +324,10 @@ pub async fn open_login(
          secret, at least 32 bytes (openssl rand -hex 32)",
     )?;
     let access = AccessTokens::new(&secret).context("PACS_AUTH_SECRET")?;
+    let issuer = settings.auth_issuer.trim().to_owned();
+    if issuer.is_empty() || issuer.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        anyhow::bail!("PACS_AUTH_ISSUER: a name without spaces, e.g. pacs-rs or this server's URL");
+    }
     let cookie = CookieSettings {
         path: settings.auth_cookie_path.clone(),
         secure: settings.auth_cookie_secure,
@@ -336,10 +362,18 @@ pub async fn open_login(
         .clone()
         .with_ttl(std::time::Duration::from_secs(DOWNLOAD_TOKEN_SECONDS))
         .context("the download tokens")?;
+    let clients = access
+        .clone()
+        .with_ttl(std::time::Duration::from_secs(CLIENT_TOKEN_SECONDS))
+        .context("the clients' access tokens")?
+        .with_issuer(issuer.clone())
+        .with_audience(issuer.clone());
     let sessions = Arc::new(Auth::new(IndexUsers(index.clone()), access, refresh));
     Ok(Some(Login {
         sessions,
         downloads,
+        clients,
+        issuer,
         index: index.clone(),
         cookie,
     }))
@@ -386,6 +420,8 @@ pub struct SignedIn {
     /// The id of their role.
     pub role: String,
     pub permissions: Vec<Permission>,
+    /// A client, not a person: `id` is the client's and `login` its name.
+    pub client: bool,
 }
 
 impl SignedIn {
@@ -408,7 +444,50 @@ fn signed_in(claims: &Claims) -> Option<SignedIn> {
             .iter()
             .filter_map(|p| p.as_str()?.parse().ok())
             .collect(),
+        client: false,
     })
+}
+
+/// What a client's token allows now: its scope, less what its role no longer gives. `None`
+/// when the client is gone (revoked) or the token is not one of ours.
+async fn client_of(login: &Login, claims: &Claims) -> Result<Option<SignedIn>, pacs_index::Error> {
+    let (Some(id), Some(scope)) = (
+        claims.get(CLIENT_CLAIM).and_then(Value::as_str),
+        claims.get("scope").and_then(Value::as_str),
+    ) else {
+        return Ok(None);
+    };
+    let Some(client) = login.index.client(id).await? else {
+        return Ok(None);
+    };
+    // a role that is gone allows nothing
+    let role = login.index.role(&client.role).await?;
+    let allowed = role.map(|role| role.permissions).unwrap_or_default();
+    let permissions = scope
+        .split(' ')
+        .filter(|p| allowed.iter().any(|a| a == p))
+        .filter_map(|p| p.parse().ok())
+        .filter(|p| CLIENT_SCOPES.contains(p))
+        .collect();
+    Ok(Some(SignedIn {
+        id: client.id,
+        login: client.name,
+        role: client.role,
+        permissions,
+        client: true,
+    }))
+}
+
+/// A client's request refused. IUA (ITI TF-2: 3.72.4.3) asks for 401 whether the token or
+/// its scope fails; the challenge says which.
+fn client_refused(error: &'static str, detail: &str) -> Response {
+    let mut response = refused(StatusCode::UNAUTHORIZED, detail).into_response();
+    let challenge = match error {
+        "insufficient_scope" => HeaderValue::from_static("Bearer error=\"insufficient_scope\""),
+        _ => HeaderValue::from_static("Bearer error=\"invalid_token\""),
+    };
+    response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
+    response
 }
 
 /// Before every route: let open requests through, refuse the others without a valid access
@@ -431,7 +510,28 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     let claims = match (bearer, query_token) {
         (Some(token), _) => {
             let Ok(claims) = login.sessions.access.verify(&token) else {
-                return invalid();
+                // not a user's: a client's, which names this server as issuer and audience
+                let Ok(claims) = login.clients.verify(&token) else {
+                    return invalid();
+                };
+                let client = match client_of(&login, &claims).await {
+                    Ok(Some(client)) => client,
+                    Ok(None) => {
+                        return client_refused("invalid_token", "Invalid or expired access token");
+                    }
+                    Err(e) => return internal("reading a client", e).into_response(),
+                };
+                // nothing of the accounts for a client, whatever its role
+                let right = right_for(&method, &path);
+                if right.permission().is_none() || !client.may(right) {
+                    tracing::info!(client = %client.login, role = %client.role, %method, %path, "refused: scope");
+                    return client_refused(
+                        "insufficient_scope",
+                        "This token's scope does not allow this",
+                    );
+                }
+                request.extensions_mut().insert(client);
+                return next.run(request).await;
             };
             // a download token is for a URL, and for nothing else
             if claims.get(DOWNLOAD_CLAIM).is_some() {
@@ -915,9 +1015,327 @@ async fn delete_role(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// What a client's token may hold: everything but the accounts.
+const CLIENT_SCOPES: [Permission; 4] = [
+    Permission::Read,
+    Permission::Write,
+    Permission::Remote,
+    Permission::Delete,
+];
+
+/// Client secrets are 32 random bytes in hexadecimal: nothing to guess, so a plain SHA-256
+/// is what the index keeps.
+fn new_secret() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("no random bytes: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn secret_hash(secret: &str) -> String {
+    Sha256::digest(secret.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Equal, in a time that does not depend on where they differ.
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
+/// The id and secret of `Authorization: Basic`, as a client sends them to the token route.
+fn basic_credentials(header: Option<&HeaderValue>) -> Option<(String, String)> {
+    let (scheme, encoded) = header?.to_str().ok()?.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let (id, secret) = std::str::from_utf8(&decoded).ok()?.split_once(':')?;
+    Some((id.to_owned(), secret.to_owned()))
+}
+
+/// The answer of the token route: never kept by a cache (OAuth 2.1, 3.2.3).
+fn token_reply(status: StatusCode, body: Value) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    let headers = response.headers_mut();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+}
+
+/// A token request refused, as OAuth 2.1 (3.2.4) words it.
+fn token_error(error: &str, description: &str) -> Response {
+    let unknown_client = error == "invalid_client";
+    let status = if unknown_client {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    let mut response = token_reply(
+        status,
+        json!({ "error": error, "error_description": description }),
+    );
+    if unknown_client {
+        response
+            .headers_mut()
+            .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Basic"));
+    }
+    response
+}
+
+/// The scope a client gets: what it asks for, or without a `scope` everything its role
+/// gives a client. Asking for more than that is an error, not a smaller token.
+fn granted_scope(asked: Option<&str>, role: &[String]) -> Result<Vec<Permission>, String> {
+    let allowed: Vec<Permission> = CLIENT_SCOPES
+        .into_iter()
+        .filter(|p| role.iter().any(|r| r == p.as_str()))
+        .collect();
+    let Some(asked) = asked else {
+        return Ok(allowed);
+    };
+    let mut wanted = Vec::new();
+    for name in asked.split(' ').filter(|name| !name.is_empty()) {
+        let known = CLIENT_SCOPES.into_iter().find(|p| p.as_str() == name);
+        match known.filter(|p| allowed.contains(p)) {
+            Some(permission) => wanted.push(permission),
+            None => return Err(format!("scope {name:?} is not one this client may have")),
+        }
+    }
+    // in the order of the permissions, each once
+    Ok(allowed.into_iter().filter(|p| wanted.contains(p)).collect())
+}
+
+/// `POST /auth/token`: a client's id and secret for an access token, the OAuth client
+/// credentials grant as IHE IUA's Get Access Token [ITI-71] uses it (ITI TF-2: 3.71.4.1.2.1).
+///
+/// The client sends `grant_type=client_credentials` as a form, with its id and secret in
+/// `Authorization: Basic`. Optional: `scope`, permissions separated by spaces, to get less
+/// than its role gives (`read`, `write`, `remote`, `delete`; never `users`); `resource`,
+/// which must then be this server's name (`PACS_AUTH_ISSUER`); `requested_token_type`,
+/// which must be the JWT one. The answer holds `access_token`, `token_type` (`Bearer`),
+/// `scope` and `expires_in`.
+///
+/// The token is a JWT signed with HS256 (IUA's JSON Web Token option, 3.71.4.2.2.1), good
+/// for five minutes, with `iss`, `sub`, `client_id`, `aud`, `jti`, `exp`, `iat` and `scope`.
+/// It goes in `Authorization: Bearer` (Incorporate Access Token [ITI-72]). Every request is
+/// checked against the client as it is now: a client removed, or a permission taken from
+/// its role, stops its tokens at once. A request it does not allow gets 401, as ITI-72 asks
+/// (3.72.4.3), with `error="insufficient_scope"` in the challenge.
+async fn token(
+    State(login): State<Login>,
+    headers: axum::http::HeaderMap,
+    form: Result<Form<Vec<(String, String)>>, FormRejection>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        return token_error(
+            "invalid_request",
+            "the body is a form: application/x-www-form-urlencoded",
+        );
+    };
+    let mut fields = std::collections::HashMap::new();
+    for (name, value) in &form {
+        if fields.insert(name.as_str(), value.as_str()).is_some() {
+            return token_error("invalid_request", &format!("{name} is given twice"));
+        }
+    }
+    match fields.get("grant_type") {
+        Some(&"client_credentials") => {}
+        Some(_) => {
+            return token_error(
+                "unsupported_grant_type",
+                "the grant type is client_credentials",
+            );
+        }
+        None => return token_error("invalid_request", "grant_type is missing"),
+    }
+    let wrong = || token_error("invalid_client", "Unknown client or wrong secret");
+    let Some((id, secret)) = basic_credentials(headers.get(AUTHORIZATION)) else {
+        return wrong();
+    };
+    let client = match login.index.client(&id).await {
+        Ok(client) => client,
+        Err(e) => return internal("reading a client", e).into_response(),
+    };
+    // hashed and compared even for an unknown id, so that both take the same time
+    let stored = client
+        .as_ref()
+        .map(|c| c.secret_hash.as_str())
+        .unwrap_or("");
+    let (Some(client), true) = (&client, same(&secret_hash(&secret), stored)) else {
+        return wrong();
+    };
+    if let Some(kind) = fields.get("requested_token_type")
+        && *kind != "urn:ietf:params:oauth:token-type:jwt"
+    {
+        return token_error("invalid_request", "the only token type is the JWT one");
+    }
+    if let Some(resource) = fields.get("resource")
+        && *resource != login.issuer
+    {
+        return token_error(
+            "invalid_target",
+            &format!("the resource here is {}", login.issuer),
+        );
+    }
+    let role = match login.index.role(&client.role).await {
+        Ok(role) => role.map(|role| role.permissions).unwrap_or_default(),
+        Err(e) => return internal("reading a role", e).into_response(),
+    };
+    let scope = match granted_scope(fields.get("scope").copied(), &role) {
+        Ok(scope) if scope.is_empty() => {
+            return token_error("invalid_scope", "this client's role allows it nothing");
+        }
+        Ok(scope) => scope,
+        Err(description) => return token_error("invalid_scope", &description),
+    };
+    let scope = scope
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut claims = serde_json::Map::new();
+    claims.insert(CLIENT_CLAIM.into(), client.id.as_str().into());
+    claims.insert("scope".into(), scope.as_str().into());
+    let token = match login.clients.issue(&client.id, &claims) {
+        Ok(token) => token,
+        Err(e) => return internal("making a client's access token", e).into_response(),
+    };
+    if let Err(e) = login.index.client_got_token(&client.id).await {
+        return internal("noting a client's token", e).into_response();
+    }
+    tracing::info!(client = %client.name, %scope, "access token given to a client");
+    token_reply(
+        StatusCode::OK,
+        json!({
+            "access_token": token,
+            "token_type": "Bearer",
+            "scope": scope,
+            "expires_in": CLIENT_TOKEN_SECONDS,
+        }),
+    )
+}
+
+fn shown_client(client: &StoredClient) -> Value {
+    json!({
+        "id": client.id,
+        "name": client.name,
+        "role": client.role,
+        "created_by": client.created_by,
+        "created_ms": client.created_ms,
+        "last_token_ms": client.last_token_ms,
+    })
+}
+
+/// A client's name as shown: 1 to 60 characters, none of them a control character.
+fn client_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("a name is 1 to 60 characters".into());
+    }
+    Ok(name.to_owned())
+}
+
+async fn list_clients(State(login): State<Login>) -> Result<Json<Value>, Refusal> {
+    let clients = login
+        .index
+        .clients()
+        .await
+        .map_err(|e| from_index("listing clients", e))?;
+    Ok(Json(Value::Array(
+        clients.iter().map(shown_client).collect(),
+    )))
+}
+
+#[derive(Deserialize)]
+struct NewClient {
+    name: String,
+    role: String,
+}
+
+/// `POST /clients`: a new client. The answer is the only place its `secret` ever appears.
+async fn create_client(
+    State(login): State<Login>,
+    Extension(user): Extension<SignedIn>,
+    new: Result<Json<NewClient>, JsonRejection>,
+) -> Result<Response, Refusal> {
+    let new = body(new)?;
+    let name = client_name(&new.name).map_err(unprocessable)?;
+    let role = known_role(&login, &new.role).await?;
+    let id = new_id().map_err(|e| internal("making a client id", e))?;
+    let secret = new_secret().map_err(|e| internal("making a client secret", e))?;
+    let client = login
+        .index
+        .create_client(&id, &name, &secret_hash(&secret), &role, &user.login)
+        .await
+        .map_err(|e| from_index("making a client", e))?;
+    tracing::info!(client = %client.name, role = %client.role, by = %user.login, "client made");
+    let mut shown = shown_client(&client);
+    shown["secret"] = secret.into();
+    Ok(token_reply(StatusCode::CREATED, shown))
+}
+
+#[derive(Deserialize)]
+struct ClientUpdate {
+    name: Option<String>,
+    role: Option<String>,
+}
+
+/// `PUT /clients/{id}`: a new name, a new role, or both. The role holds for the client's
+/// next request, tokens it already has included.
+async fn update_client(
+    State(login): State<Login>,
+    Path(id): Path<String>,
+    update: Result<Json<ClientUpdate>, JsonRejection>,
+) -> Result<Response, Refusal> {
+    let update = body(update)?;
+    let name = update
+        .name
+        .as_deref()
+        .map(client_name)
+        .transpose()
+        .map_err(unprocessable)?;
+    let role = match update.role.as_deref() {
+        Some(role) => Some(known_role(&login, role).await?),
+        None => None,
+    };
+    let client = login
+        .index
+        .update_client(&id, name.as_deref(), role.as_deref())
+        .await
+        .map_err(|e| from_index("changing a client", e))?
+        .ok_or_else(|| refused(StatusCode::NOT_FOUND, "No such client"))?;
+    Ok(Json(shown_client(&client)).into_response())
+}
+
+/// `DELETE /clients/{id}`: revoke it. Its secret gets no more tokens, and those it has stop
+/// at its next request.
+async fn delete_client(
+    State(login): State<Login>,
+    Extension(user): Extension<SignedIn>,
+    Path(id): Path<String>,
+) -> Result<Response, Refusal> {
+    let deleted = login
+        .index
+        .delete_client(&id)
+        .await
+        .map_err(|e| from_index("removing a client", e))?;
+    if !deleted {
+        return Err(refused(StatusCode::NOT_FOUND, "No such client"));
+    }
+    tracing::info!(client = %id, by = %user.login, "client removed");
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 impl Login {
     /// The sign-in routes (`/auth/login`, `/auth/refresh`, `/auth/logout`,
-    /// `/auth/logout-all`), `GET /auth/me`, `POST /auth/password`, `/users` and `/roles`.
+    /// `/auth/logout-all`), `GET /auth/me`, `POST /auth/password`, `/users`, `/roles`, `POST /auth/token` and
+    /// `/clients`.
     pub fn router(&self) -> anyhow::Result<Router> {
         let sessions: Router = auth_router(self.sessions.clone(), self.cookie.clone())
             .context("the refresh cookie")?;
@@ -929,6 +1347,9 @@ impl Login {
             .route("/users/{id}", put(update_user).delete(delete_user))
             .route("/roles", get(list_roles).post(create_role))
             .route("/roles/{id}", put(update_role).delete(delete_role))
+            .route("/auth/token", post(token))
+            .route("/clients", get(list_clients).post(create_client))
+            .route("/clients/{id}", put(update_client).delete(delete_client))
             .with_state(self.clone());
         Ok(sessions.merge(own))
     }
@@ -950,6 +1371,7 @@ mod tests {
             login: "ada".into(),
             role: "custom".into(),
             permissions: permissions.to_vec(),
+            client: false,
         };
         let rights = [
             Right::SignedIn,
@@ -1017,7 +1439,12 @@ mod tests {
         ] {
             assert!(is_open(&get, path), "{path}");
         }
-        for path in ["/auth/login", "/auth/refresh", "/auth/logout"] {
+        for path in [
+            "/auth/login",
+            "/auth/refresh",
+            "/auth/logout",
+            "/auth/token",
+        ] {
             assert!(is_open(&Method::POST, path), "{path}");
         }
         assert!(is_open(&Method::OPTIONS, "/studies"));
@@ -1075,6 +1502,11 @@ mod tests {
             (Method::GET, "/users", Admin),
             (Method::POST, "/users", Admin),
             (Method::DELETE, "/users/u1", Admin),
+            (Method::GET, "/clients", Admin),
+            (Method::POST, "/clients", Admin),
+            (Method::PUT, "/clients/c1", Admin),
+            (Method::DELETE, "/clients/c1", Admin),
+            (Method::GET, "/clientsx", Read),
             (Method::GET, "/auth/me", SignedIn),
             (Method::POST, "/auth/logout-all", SignedIn),
             (Method::POST, "/auth/password", SignedIn),
@@ -1132,5 +1564,68 @@ mod tests {
         assert!(check_new_password("123456789012").is_ok());
         assert!(check_new_password(&"x".repeat(1024)).is_ok());
         assert!(check_new_password(&"x".repeat(1025)).is_err());
+    }
+
+    #[test]
+    fn the_scope_a_client_gets() {
+        let role = |list: &[&str]| list.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        use Permission::*;
+        let editor = role(&["read", "write", "remote"]);
+        // without a scope: all its role gives a client
+        assert_eq!(granted_scope(None, &editor), Ok(vec![Read, Write, Remote]));
+        // never the accounts
+        let admin = role(&["read", "write", "remote", "delete", "users"]);
+        assert_eq!(
+            granted_scope(None, &admin),
+            Ok(vec![Read, Write, Remote, Delete])
+        );
+        assert!(granted_scope(Some("users"), &admin).is_err());
+        // a narrower one, in the order of the permissions, each once
+        assert_eq!(
+            granted_scope(Some("write read  read"), &editor),
+            Ok(vec![Read, Write])
+        );
+        // more than the role gives, or a name that is no permission: an error
+        assert!(granted_scope(Some("read delete"), &editor).is_err());
+        assert!(granted_scope(Some("Read"), &editor).is_err());
+        // an empty scope asks for nothing, and a role may give nothing
+        assert_eq!(granted_scope(Some(""), &editor), Ok(vec![]));
+        assert_eq!(granted_scope(None, &role(&["users"])), Ok(vec![]));
+    }
+
+    #[test]
+    fn basic_credentials_and_secrets() {
+        let header = |text: &str| HeaderValue::from_str(text).unwrap();
+        // "abc:s3:cret": the secret may hold a colon, the id may not
+        assert_eq!(
+            basic_credentials(Some(&header("Basic YWJjOnMzOmNyZXQ="))),
+            Some(("abc".into(), "s3:cret".into()))
+        );
+        assert_eq!(
+            basic_credentials(Some(&header("basic YWJjOnMzOmNyZXQ="))),
+            Some(("abc".into(), "s3:cret".into()))
+        );
+        for refused in [
+            "Bearer YWJjOnMzOmNyZXQ=",
+            "Basic",
+            "Basic !!!",
+            "Basic YWJj",
+            "",
+        ] {
+            assert_eq!(basic_credentials(Some(&header(refused))), None, "{refused}");
+        }
+        assert_eq!(basic_credentials(None), None);
+
+        let (one, other) = (new_secret().unwrap(), new_secret().unwrap());
+        assert_eq!(one.len(), 64);
+        assert_ne!(one, other);
+        assert_eq!(
+            secret_hash("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert!(same("abc", "abc"));
+        assert!(!same("abc", "abd") && !same("abc", "ab") && !same("", "a"));
+        assert!(client_name(" Viewer ").is_ok_and(|name| name == "Viewer"));
+        assert!(client_name(" ").is_err() && client_name(&"x".repeat(61)).is_err());
     }
 }
