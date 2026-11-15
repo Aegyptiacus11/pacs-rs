@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dicom-dictionary-std.workspace = true
 bytes.workspace = true
 pacs-core.workspace = true
 pacs-index.workspace = true

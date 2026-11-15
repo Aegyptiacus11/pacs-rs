@@ -17,6 +17,7 @@ use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
 mod annotations;
+mod audited;
 mod clients;
 mod delete;
 mod protocols;
@@ -24,6 +25,7 @@ mod rest;
 mod roles;
 mod users;
 mod worklist;
+pub use audited::AuditedStudy;
 pub use clients::StoredClient;
 pub use delete::{Deleted, Level};
 pub use protocols::StoredProtocol;

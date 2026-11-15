@@ -4,7 +4,10 @@
 
 use std::sync::Arc;
 
+pub mod observed;
+
 use bytes::Bytes;
+use dicom_dictionary_std::tags;
 use pacs_core::codec::{self, JPEG_LS_LOSSLESS};
 use pacs_core::{Instance, InstanceKey};
 use pacs_index::{Deleted, Index, InstanceEntry, Level, NewInstance, Recorded};
@@ -205,6 +208,20 @@ impl Archive {
         let _reading = self.admit(&bytes).await?;
         let _writing = self.writes.read().await;
         let instance = Instance::from_bytes(&bytes)?;
+        // whose it is, for who accounts for what was stored (see `observed`)
+        let patient = (
+            instance.string(tags::PATIENT_ID),
+            instance.string(tags::PATIENT_NAME),
+        );
+        let noted = |key: &InstanceKey, outcome: Outcome| {
+            observed::note(|| observed::Stored {
+                study_instance_uid: key.study_instance_uid.clone(),
+                sop_class_uid: key.sop_class_uid.clone(),
+                patient_id: patient.0.clone(),
+                patient_name: patient.1.clone(),
+                outcome,
+            })
+        };
         if let Some(expected) = expected_study
             && expected != instance.key.study_instance_uid
         {
@@ -222,6 +239,7 @@ impl Archive {
             && existing.series_instance_uid == instance.key.series_instance_uid
             && existing.study_instance_uid == instance.key.study_instance_uid
         {
+            noted(&instance.key, Outcome::AlreadyStored);
             return Ok(Ingested {
                 key: instance.key,
                 outcome: Outcome::AlreadyStored,
@@ -238,13 +256,17 @@ impl Archive {
             }
         };
         match self.index.record(&new).await {
-            Ok(recorded) => Ok(Ingested {
-                key: instance.key,
-                outcome: match recorded {
+            Ok(recorded) => {
+                let outcome = match recorded {
                     Recorded::Added => Outcome::Added,
                     Recorded::Replaced => Outcome::Replaced,
-                },
-            }),
+                };
+                noted(&instance.key, outcome);
+                Ok(Ingested {
+                    key: instance.key,
+                    outcome,
+                })
+            }
             Err(e) => {
                 if matches!(e, pacs_index::Error::Conflict(_)) {
                     self.store.delete(&object_key).await?;

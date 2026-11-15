@@ -18,19 +18,32 @@
 //! | Security Alert, User Security Attributes Changed | a user or a tool is made, changed or removed; a password is changed |
 //! | Security Alert, Security Roles Changed | a role is made, changed or removed |
 //! | Security Alert, Access Control Decision | a request the caller's role or scope does not allow |
+//! | DICOM Instances Transferred | instances received (REST upload, STOW-RS), and instances, frames or images sent to a caller |
+//! | DICOM Instances Accessed | a study's attributes, lists or measurements read; measurements replaced; part of a study deleted |
+//! | DICOM Study Deleted | a study deleted whole, alone or with its patient |
+//! | Export | a ZIP archive or a media file-set downloaded |
+//! | Query | a search: QIDO-RS, the REST API's lists and `/tools/find`, the web interface's lists |
 //!
-//! Not yet: what is read, stored, exported and deleted (the events that name a study and
-//! its patient), and sending the lines to a repository over TLS.
+//! The events about data name the study and its patient, and are written for requests
+//! that succeeded. Which request is which is in `audit_routes`. Reading one study takes
+//! many requests (a CT is hundreds of frames): the same caller reading, being sent or
+//! searching the same thing again within [`REPEAT_SECONDS`] leaves no second line, as the
+//! profile allows (A.5.3: a message is not required each time the activity occurs).
+//! What is stored, deleted or exported is written every time.
+//!
+//! Not yet: DIMSE (C-STORE, C-FIND, C-MOVE), and sending the lines to a repository over
+//! TLS.
 //!
 //! A person is `login@<source>`; a tool is its ID, with the name ITI-72 (3.72.5.1) gives
 //! a caller that came with a JWT: `audience<subject@issuer>`.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
 use axum::body::Body;
@@ -39,17 +52,26 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use pacs_archive::observed::{Stored, stored_during};
 use pacs_audit::events::{self, access_point, kind};
 use pacs_audit::syslog::{self, Sender};
-use pacs_audit::{Code, Message, Outcome, Participant, Source};
+use pacs_audit::{AccessPoint, Action, Code, Message, Outcome, Participant, SopClass, Source};
+use pacs_index::{AuditedStudy, Index, Level};
 
 use crate::Settings;
+use crate::audit_routes::{Subject, Target, subject};
 use crate::auth::{SignedIn, basic_credentials};
 
 /// CID 403: a decision about access, here a refusal.
 const ACCESS_CONTROL_DECISION: Code = Code::dcm("110147", "Access Control Decision");
 /// A sign-in body is a login and a password: nothing near this.
 const MAX_LOGIN_BODY_BYTES: usize = 64 * 1024;
+/// A search or a list of resources to archive, as JSON: read here to be recorded.
+const MAX_QUERY_BODY_BYTES: usize = 1024 * 1024;
+/// How long the same caller reading or searching the same thing again leaves no new line.
+pub const REPEAT_SECONDS: u64 = 15 * 60;
+/// Past this many remembered reads, the old ones are dropped before a new one is kept.
+const MAX_REMEMBERED: usize = 20_000;
 
 struct Trail {
     file: Mutex<File>,
@@ -59,6 +81,8 @@ struct Trail {
     process: String,
     /// `PACS_AUTH_ISSUER`: the issuer and audience of a tool's token.
     issuer: String,
+    /// What was read or searched lately, and when: see [`REPEAT_SECONDS`].
+    recent: Mutex<HashMap<String, Instant>>,
 }
 
 /// The audit trail of a running server; does nothing when there is none.
@@ -108,6 +132,7 @@ pub fn open_audit(settings: &Settings) -> anyhow::Result<Audit> {
             process_id: std::process::id().to_string(),
         },
         issuer: settings.auth_issuer.trim().to_owned(),
+        recent: Mutex::new(HashMap::new()),
     }))))
 }
 
@@ -169,12 +194,53 @@ impl Audit {
     }
 
     /// Put the trail around `app`: outside the guard, so that refusals are seen too.
-    pub fn observe(&self, app: axum::Router) -> axum::Router {
+    /// `index` says whose study a request touched, and `mount` is the DICOMweb root.
+    pub fn observe(&self, app: axum::Router, index: Index, mount: &str) -> axum::Router {
         if !self.is_on() {
             return app;
         }
-        app.layer(axum::middleware::from_fn_with_state(self.clone(), observe))
+        let observer = Observer {
+            audit: self.clone(),
+            index,
+            mount: mount.into(),
+        };
+        app.layer(axum::middleware::from_fn_with_state(observer, observe))
     }
+}
+
+impl Trail {
+    /// Whether `what` was noted less than [`REPEAT_SECONDS`] ago; notes it now if not.
+    fn repeated(&self, what: String, now: Instant) -> bool {
+        let window = Duration::from_secs(REPEAT_SECONDS);
+        let mut recent = match self.recent.lock() {
+            Ok(recent) => recent,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if recent
+            .get(&what)
+            .is_some_and(|last| now.duration_since(*last) < window)
+        {
+            return true;
+        }
+        if recent.len() >= MAX_REMEMBERED {
+            recent.retain(|_, last| now.duration_since(*last) < window);
+            // still full of fresh entries: forget them all rather than grow; the cost is
+            // a line written twice
+            if recent.len() >= MAX_REMEMBERED {
+                recent.clear();
+            }
+        }
+        recent.insert(what, now);
+        false
+    }
+}
+
+/// The trail with what it needs to say whose data a request touched.
+#[derive(Clone)]
+struct Observer {
+    audit: Audit,
+    index: Index,
+    mount: Arc<str>,
 }
 
 /// Who a request came from, as an audit participant.
@@ -258,12 +324,319 @@ fn account_change(method: &Method, path: &str) -> Option<(Code, String)> {
     }
 }
 
+/// The study as an event describes it; with its instance counts when the event is about
+/// all of it.
+fn described(study: &AuditedStudy, whole: bool) -> events::Study {
+    events::Study {
+        study_instance_uid: study.study_instance_uid.clone(),
+        patient_id: study.patient_id.clone(),
+        patient_name: study.patient_name.clone(),
+        sop_classes: if whole {
+            study
+                .sop_classes
+                .iter()
+                .map(|(uid, instances)| SopClass {
+                    uid: uid.clone(),
+                    instances: u64::try_from(*instances).unwrap_or(0),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+/// `studies` in groups of one patient each, in the order met: a message is about one.
+fn by_patient(studies: Vec<events::Study>) -> Vec<Vec<events::Study>> {
+    let mut groups: Vec<Vec<events::Study>> = Vec::new();
+    for study in studies {
+        let same = |group: &Vec<events::Study>| {
+            group[0].patient_id == study.patient_id && group[0].patient_name == study.patient_name
+        };
+        match groups.iter_mut().find(|group| same(group)) {
+            Some(group) => group.push(study),
+            None => groups.push(vec![study]),
+        }
+    }
+    groups
+}
+
+/// What was stored, a study at a time: its patient, how many instances of each SOP class,
+/// and whether the archive gained them (Create), replaced its copies (Update) or held
+/// them already (Read).
+fn stored_studies(stored: Vec<Stored>) -> Vec<(events::Study, Action)> {
+    let mut studies: Vec<(events::Study, Action)> = Vec::new();
+    for one in stored {
+        let action = match one.outcome {
+            pacs_archive::Outcome::Added => Action::Create,
+            pacs_archive::Outcome::Replaced => Action::Update,
+            pacs_archive::Outcome::AlreadyStored => Action::Read,
+        };
+        let position = studies
+            .iter()
+            .position(|(study, _)| study.study_instance_uid == one.study_instance_uid);
+        let index = position.unwrap_or_else(|| {
+            studies.push((
+                events::Study {
+                    study_instance_uid: one.study_instance_uid.clone(),
+                    patient_id: one.patient_id.clone(),
+                    patient_name: one.patient_name.clone(),
+                    sop_classes: Vec::new(),
+                },
+                Action::Read,
+            ));
+            studies.len() - 1
+        });
+        let (study, strongest) = &mut studies[index];
+        // one new instance makes the transfer a creation; else one replaced, an update
+        if action == Action::Create || (action == Action::Update && *strongest == Action::Read) {
+            *strongest = action;
+        }
+        match study
+            .sop_classes
+            .iter_mut()
+            .find(|c| c.uid == one.sop_class_uid)
+        {
+            Some(class) => class.instances += 1,
+            None => study.sop_classes.push(SopClass {
+                uid: one.sop_class_uid,
+                instances: 1,
+            }),
+        }
+    }
+    studies
+}
+
+/// The public IDs an archive made to order names: `?resources=a,b`, or `{"Resources": []}`.
+fn listed_resources(query: Option<&str>, body: &[u8]) -> Vec<String> {
+    let from_query = query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .find_map(|pair| {
+            let ids = pair.strip_prefix("resources=")?;
+            Some(ids.split(',').map(str::to_owned).collect::<Vec<_>>())
+        });
+    let from_body = || {
+        let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+        let ids = value.get("Resources")?.as_array()?;
+        Some(
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect(),
+        )
+    };
+    let mut ids = from_query.or_else(from_body).unwrap_or_default();
+    ids.retain(|id| !id.is_empty());
+    ids
+}
+
+/// The studies `target` lies in, as the index has them now.
+async fn studies_of(
+    index: &Index,
+    target: &Target,
+    listed: &[String],
+) -> Result<Vec<AuditedStudy>, pacs_index::Error> {
+    match target {
+        Target::Study(uid) => Ok(index.audited_study(uid).await?.into_iter().collect()),
+        Target::Resource(level, id) => index.audited_by_public_id(*level, id).await,
+        Target::Listed => {
+            let mut studies: Vec<AuditedStudy> = Vec::new();
+            for id in listed {
+                // a public ID does not say its level
+                for level in [Level::Study, Level::Series, Level::Instance, Level::Patient] {
+                    let found = index.audited_by_public_id(level, id).await?;
+                    if found.is_empty() {
+                        continue;
+                    }
+                    for study in found {
+                        if !studies
+                            .iter()
+                            .any(|s| s.study_instance_uid == study.study_instance_uid)
+                        {
+                            studies.push(study);
+                        }
+                    }
+                    break;
+                }
+            }
+            Ok(studies)
+        }
+    }
+}
+
+/// What the request did to the archive's data, written once it has succeeded.
+struct Asked {
+    subject: Subject,
+    path: String,
+    query: Option<String>,
+    /// The body of a search or of an archive order.
+    body: Vec<u8>,
+    /// For a deletion: the studies the resource lay in, read before it went.
+    doomed: Vec<AuditedStudy>,
+}
+
+impl Observer {
+    async fn data_events(
+        &self,
+        trail: &Trail,
+        asked: Asked,
+        who: Participant,
+        ip: Option<IpAddr>,
+        now: SystemTime,
+    ) -> Result<(), pacs_index::Error> {
+        let server = || Participant::new(&trail.process, false);
+        let ok = Outcome::Success;
+        let caller_key = format!("{}|{:?}", who.user_id, ip);
+        let fresh = |what: &str| !trail.repeated(format!("{caller_key}|{what}"), Instant::now());
+        match &asked.subject {
+            // written by the caller, with what was stored
+            Subject::Stores => {}
+            Subject::Search => {
+                // "the query in the format of the protocol used": the body of a search
+                // that has one, else the request's target, which is never empty
+                let query = match (&asked.query, asked.body.is_empty()) {
+                    (_, false) => asked.body.clone(),
+                    (Some(query), true) => format!("{}?{query}", asked.path).into_bytes(),
+                    (None, true) => asked.path.clone().into_bytes(),
+                };
+                let what = format!("search|{}|{}", asked.path, String::from_utf8_lossy(&query));
+                if fresh(&what) {
+                    self.audit.record(events::query(
+                        &trail.source,
+                        now,
+                        ok,
+                        who,
+                        server(),
+                        &asked.path,
+                        &query,
+                    ));
+                }
+            }
+            Subject::Viewed(target) | Subject::Sent(target) => {
+                let sent = matches!(asked.subject, Subject::Sent(_));
+                let what = format!("{}|{target:?}", if sent { "sent" } else { "viewed" });
+                if !fresh(&what) {
+                    return Ok(());
+                }
+                let studies = studies_of(&self.index, target, &[]).await?;
+                let studies = studies
+                    .iter()
+                    .map(|study| described(study, false))
+                    .collect();
+                for group in by_patient(studies) {
+                    if sent {
+                        for study in &group {
+                            self.audit.record(events::instances_transferred(
+                                &trail.source,
+                                now,
+                                Action::Read,
+                                ok,
+                                server(),
+                                who.clone(),
+                                study,
+                            ));
+                        }
+                    } else {
+                        self.audit.record(events::instances_accessed(
+                            &trail.source,
+                            now,
+                            Action::Read,
+                            ok,
+                            vec![who.clone()],
+                            &group,
+                        ));
+                    }
+                }
+            }
+            Subject::Annotated(target) => {
+                let studies = studies_of(&self.index, target, &[]).await?;
+                let studies = studies
+                    .iter()
+                    .map(|study| described(study, false))
+                    .collect();
+                for group in by_patient(studies) {
+                    self.audit.record(events::instances_accessed(
+                        &trail.source,
+                        now,
+                        Action::Update,
+                        ok,
+                        vec![who.clone()],
+                        &group,
+                    ));
+                }
+            }
+            Subject::Exported(target) => {
+                let listed = listed_resources(asked.query.as_deref(), &asked.body);
+                let studies = studies_of(&self.index, target, &listed).await?;
+                // the counts are the study's: right for a whole study, left out otherwise
+                let whole = matches!(target, Target::Resource(Level::Study | Level::Patient, _));
+                let studies = studies
+                    .iter()
+                    .map(|study| described(study, whole))
+                    .collect();
+                let at = access_point(ip)
+                    .unwrap_or_else(|| AccessPoint::Machine(trail.source.id.clone()));
+                for group in by_patient(studies) {
+                    self.audit.record(events::export(
+                        &trail.source,
+                        now,
+                        ok,
+                        who.clone(),
+                        server(),
+                        Participant::new(&asked.path, false).at(Some(at.clone())),
+                        &group,
+                    ));
+                }
+            }
+            Subject::Deleted(..) => {
+                // a study that is still there lost a part; one that is gone, all of itself
+                let (mut gone, mut cut) = (Vec::new(), Vec::new());
+                for study in &asked.doomed {
+                    if self
+                        .index
+                        .audited_study(&study.study_instance_uid)
+                        .await?
+                        .is_some()
+                    {
+                        cut.push(described(study, false));
+                    } else {
+                        gone.push(described(study, true));
+                    }
+                }
+                for group in by_patient(gone) {
+                    self.audit.record(events::study_deleted(
+                        &trail.source,
+                        now,
+                        ok,
+                        vec![who.clone()],
+                        &group,
+                    ));
+                }
+                for group in by_patient(cut) {
+                    self.audit.record(events::instances_accessed(
+                        &trail.source,
+                        now,
+                        Action::Delete,
+                        ok,
+                        vec![who.clone()],
+                        &group,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Around every request: after the answer is made, write the event it amounts to, if any.
-async fn observe(State(audit): State<Audit>, request: Request, next: Next) -> Response {
+async fn observe(State(observer): State<Observer>, request: Request, next: Next) -> Response {
+    let audit = &observer.audit;
     let Some(trail) = audit.0.clone() else {
         return next.run(request).await;
     };
     let (method, path) = (request.method().clone(), request.uri().path().to_owned());
+    let query = request.uri().query().map(str::to_owned);
+    let subject = subject(&method, &path, &observer.mount);
     let ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -272,12 +645,21 @@ async fn observe(State(audit): State<Audit>, request: Request, next: Next) -> Re
 
     // Who is asking to sign in is in the request, which the route consumes.
     let mut claimed_name = None;
+    let mut asked_body = Vec::new();
     let request = if posted("/auth/login") {
         let (parts, body) = request.into_parts();
         let Ok(bytes) = axum::body::to_bytes(body, MAX_LOGIN_BODY_BYTES).await else {
             return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         };
         claimed_name = Some(login_of(&bytes));
+        Request::from_parts(parts, Body::from(bytes))
+    } else if posted("/tools/find") || posted("/tools/create-archive") {
+        // what is searched, and what is taken away, is the event
+        let (parts, body) = request.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, MAX_QUERY_BODY_BYTES).await else {
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        };
+        asked_body = bytes.to_vec();
         Request::from_parts(parts, Body::from(bytes))
     } else {
         if posted("/auth/token") {
@@ -287,10 +669,61 @@ async fn observe(State(audit): State<Audit>, request: Request, next: Next) -> Re
         request
     };
 
-    let response = next.run(request).await;
+    // A deletion takes what it deletes with it: whose it was is read first.
+    let doomed = match &subject {
+        Some(Subject::Deleted(level, id)) => {
+            match observer.index.audited_by_public_id(*level, id).await {
+                Ok(studies) => studies,
+                Err(error) => {
+                    tracing::error!(%error, "the audit trail could not read what is being deleted");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+        }
+        _ => Vec::new(),
+    };
+    let (response, stored) = if subject == Some(Subject::Stores) {
+        stored_during(next.run(request)).await
+    } else {
+        (next.run(request).await, Vec::new())
+    };
     let status = response.status();
     let user = response.extensions().get::<SignedIn>();
     let now = SystemTime::now();
+
+    // The archive's data: who it was, then what they did.
+    let who = match user {
+        Some(user) => caller(&trail, user, ip),
+        // no login: all that is known of the caller is where they are
+        None => claimed(&trail, "", true, ip),
+    };
+    // what was stored is stored, whatever the answer says of the rest of the request
+    for (study, action) in stored_studies(stored) {
+        audit.record(events::instances_transferred(
+            &trail.source,
+            now,
+            action,
+            Outcome::Success,
+            who.clone(),
+            Participant::new(&trail.process, false),
+            &study,
+        ));
+    }
+    if status.is_success()
+        && let Some(subject) = subject
+    {
+        let asked = Asked {
+            subject,
+            path: path.clone(),
+            query,
+            body: asked_body,
+            doomed,
+        };
+        if let Err(error) = observer.data_events(&trail, asked, who, ip, now).await {
+            // the request is done; what cannot be said of it is said in the other log
+            tracing::error!(%error, %method, %path, "an audit message was not written");
+        }
+    }
     let said = || (!status.is_success()).then(|| format!("HTTP {}", status.as_u16()));
 
     if let Some(name) = claimed_name {
@@ -408,5 +841,138 @@ mod tests {
             outcome_of(StatusCode::INTERNAL_SERVER_ERROR),
             Outcome::SeriousFailure
         );
+    }
+
+    fn trail() -> Trail {
+        let dir = tempfile::tempdir().unwrap();
+        Trail {
+            file: Mutex::new(open_for_append(&dir.path().join("audit.log")).unwrap()),
+            source: Source::application_server("pacs-rs"),
+            sender: Sender {
+                hostname: "host".into(),
+                app_name: "pacs-rs".into(),
+                process_id: "1".into(),
+            },
+            process: "pacs-server@host".into(),
+            issuer: "pacs-rs".into(),
+            recent: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn the_same_read_again_is_a_repeat_until_the_window_has_passed() {
+        let trail = trail();
+        let start = Instant::now();
+        let after = |seconds: u64| start + Duration::from_secs(seconds);
+        assert!(!trail.repeated("ada|viewed|1.2.3".into(), start));
+        assert!(trail.repeated("ada|viewed|1.2.3".into(), after(1)));
+        assert!(trail.repeated("ada|viewed|1.2.3".into(), after(REPEAT_SECONDS - 1)));
+        // another caller, another study, another kind: each its own
+        assert!(!trail.repeated("bob|viewed|1.2.3".into(), after(1)));
+        assert!(!trail.repeated("ada|viewed|4.5.6".into(), after(1)));
+        assert!(!trail.repeated("ada|sent|1.2.3".into(), after(1)));
+        // the window runs from the line that was written, not from the last repeat
+        assert!(!trail.repeated("ada|viewed|1.2.3".into(), after(REPEAT_SECONDS)));
+        assert!(trail.repeated("ada|viewed|1.2.3".into(), after(REPEAT_SECONDS + 1)));
+
+        // what is remembered is bounded: the old goes when there is no more room
+        let late = after(3 * REPEAT_SECONDS);
+        for n in 0..MAX_REMEMBERED {
+            trail.repeated(format!("filler {n}"), late);
+        }
+        assert!(trail.recent.lock().unwrap().len() <= MAX_REMEMBERED);
+        assert!(
+            !trail
+                .recent
+                .lock()
+                .unwrap()
+                .contains_key("ada|viewed|4.5.6")
+        );
+        // ...and when all of it is fresh, all of it goes rather than grow
+        trail.repeated("one more".into(), late);
+        assert!(trail.recent.lock().unwrap().len() <= MAX_REMEMBERED);
+    }
+
+    #[test]
+    fn the_resources_of_an_archive_made_to_order() {
+        let ids = |list: &[&str]| list.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            listed_resources(Some("resources=a,b"), b""),
+            ids(&["a", "b"])
+        );
+        assert_eq!(
+            listed_resources(Some("x=1&resources=a,,b&y=2"), b""),
+            ids(&["a", "b"])
+        );
+        assert_eq!(
+            listed_resources(
+                None,
+                br#"{"Resources": ["a", 7, "b"], "Synchronous": true}"#
+            ),
+            ids(&["a", "b"])
+        );
+        // the address wins over a body, as the route for a link has no body
+        assert_eq!(
+            listed_resources(Some("resources=a"), br#"{"Resources": ["b"]}"#),
+            ids(&["a"])
+        );
+        for nothing in [&b"not json"[..], b"{}", br#"{"Resources": "a"}"#, b""] {
+            assert_eq!(listed_resources(None, nothing), ids(&[]));
+        }
+        assert_eq!(listed_resources(Some("other=1"), b""), ids(&[]));
+    }
+
+    #[test]
+    fn what_was_stored_is_counted_by_study_and_its_patients_are_kept_apart() {
+        let stored = |study: &str, class: &str, patient: &str, outcome| Stored {
+            study_instance_uid: study.into(),
+            sop_class_uid: class.into(),
+            patient_id: Some(patient.into()),
+            patient_name: None,
+            outcome,
+        };
+        use pacs_archive::Outcome::*;
+        let studies = stored_studies(vec![
+            stored("1.1", "ct", "p1", AlreadyStored),
+            stored("1.2", "ct", "p2", AlreadyStored),
+            stored("1.1", "ct", "p1", Replaced),
+            stored("1.1", "seg", "p1", Added),
+            stored("1.1", "ct", "p1", Replaced),
+            stored("1.3", "ct", "p1", Replaced),
+        ]);
+        let summary: Vec<_> = studies
+            .iter()
+            .map(|(study, action)| {
+                let classes: Vec<_> = study
+                    .sop_classes
+                    .iter()
+                    .map(|c| (c.uid.as_str(), c.instances))
+                    .collect();
+                (study.study_instance_uid.as_str(), *action, classes)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                // one new instance makes it a creation, whatever the others were
+                ("1.1", Action::Create, vec![("ct", 3), ("seg", 1)]),
+                ("1.2", Action::Read, vec![("ct", 1)]),
+                ("1.3", Action::Update, vec![("ct", 1)]),
+            ]
+        );
+        assert_eq!(stored_studies(Vec::new()), []);
+
+        // a message is about one patient
+        let groups = by_patient(studies.into_iter().map(|(study, _)| study).collect());
+        let uids: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(|s| s.study_instance_uid.as_str())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(uids, [vec!["1.1", "1.3"], vec!["1.2"]]);
     }
 }

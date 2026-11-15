@@ -15,8 +15,12 @@ PACS_AUDIT_FILE=/var/log/pacs-rs/audit.log pacs-server
   event a client saw succeed. Should a line fail to be written while the server runs, the
   application log says so, with the kind of event.
 - Nothing that opens a door is written: no password, no secret, no token.
+- **The file holds patient IDs and names**, since an audit trail says whose data was touched.
+  Keep it as you keep the archive itself.
 
 ## What is recorded
+
+About accounts and the server itself:
 
 | Event | When |
 |---|---|
@@ -27,15 +31,32 @@ PACS_AUDIT_FILE=/var/log/pacs-rs/audit.log pacs-server
 | Security Alert, Security Roles Changed | a role is made, changed or removed |
 | Security Alert, Access Control Decision | a request the caller's role, or a tool's scope, does not allow |
 
-Each event names who (`login@<source>` for a person, its ID for a tool), from which address,
-when, and how it ended (success, or a failure with the HTTP status).
+About the data, for requests that succeeded; each names the study and its patient:
+
+| Event | When |
+|---|---|
+| DICOM Instances Transferred, to the server | instances received: `POST /instances`, STOW-RS. One line per study in the request, with the number of instances of each SOP class; Create when the archive gained any, Update when it only replaced copies, Read when it held them all already |
+| DICOM Instances Transferred, to the caller | instances, frames, rendered images and bulk data retrieved (WADO-RS), `GET /instances/{id}/file` |
+| DICOM Instances Accessed, read | what a study is: its metadata, its lists of series and instances (QIDO-RS under a study, the REST API's resources), its measurements |
+| DICOM Instances Accessed, update | a study's measurements replaced |
+| DICOM Instances Accessed, delete | a series or an instance deleted, the study staying |
+| DICOM Study Deleted | a study deleted whole (by itself, with its patient, or by its last series or instance), with the instances it had |
+| Export | a ZIP archive or a media file-set downloaded, with the address it went to |
+| Query | a search: QIDO-RS from the root, the REST API's lists and `/tools/find`, the web interface's lists; with what was asked |
+
+Each event names who (`login@<source>` for a person, its ID for a tool, `unknown` when the
+login is off), from which address, when, and how it ended.
+
+Reading one study takes many requests: a CT is hundreds of frames. The same caller reading,
+being sent or searching the same thing again within 15 minutes leaves no second line, as the
+profile allows (a message is not required each time the activity occurs). What is stored,
+deleted or exported is written every time.
 
 ## Not yet
 
-- **What is read, stored, exported and deleted.** These are the events that name a study and
-  its patient (DICOM Instances Transferred, DICOM Instances Accessed, DICOM Study Deleted,
-  Query, Export): they are the next step, and the reason this page is not the whole
-  [roadmap item](roadmap.md#1-safe-to-expose) yet.
+- **DIMSE.** C-STORE, C-FIND and C-MOVE are not audited: a study that arrives by C-STORE
+  leaves no line yet.
+- **Remote AEs.** Searches and moves through `/modalities` are not audited.
 - **Sending to a repository.** The lines are what IHE's Record Audit Event sends, but pacs-rs
   only writes them to the file. A syslog forwarder can ship the file as it is; sending over
   TLS from pacs-rs itself is not built.
@@ -44,7 +65,6 @@ when, and how it ended (success, or a failure with the HTTP status).
   which comes with an access token, names the user.
 - **Callers behind a proxy.** The address is the one that connected: behind a reverse proxy,
   the proxy's. `X-Forwarded-For` is not read.
-- **DIMSE.** Associations are not audited yet.
 
 ## The format
 
@@ -58,8 +78,16 @@ mark.
 <85>1 2026-11-15T21:33:03.275Z pacs.example pacs-rs 4242 IHE+RFC-3881 - <AuditMessage><EventIdentification EventActionCode="E" EventDateTime="2026-11-15T21:33:03.274Z" EventOutcomeIndicator="0"><EventID csd-code="110114" codeSystemName="DCM" originalText="User Authentication"/><EventTypeCode csd-code="110122" codeSystemName="DCM" originalText="Login"/></EventIdentification><ActiveParticipant UserID="ada@pacs-rs" UserIsRequestor="true" NetworkAccessPointID="192.0.2.7" NetworkAccessPointTypeCode="2"/><ActiveParticipant UserID="pacs-server@pacs.example" UserIsRequestor="false"/><AuditSourceIdentification AuditSourceID="pacs-rs"><AuditSourceTypeCode csd-code="4"/></AuditSourceIdentification></AuditMessage>
 ```
 
-- Each event follows its table in PS3.15 A.5.3 (Application Activity A.5.3.1, Security Alert
-  A.5.3.11, User Authentication A.5.3.12), with the codes of PS3.16 CID 400 to 403.
+- Each event follows its table in PS3.15 A.5.3 (Application Activity A.5.3.1, Export A.5.3.4,
+  DICOM Instances Accessed A.5.3.6, DICOM Instances Transferred A.5.3.7, DICOM Study Deleted
+  A.5.3.8, Query A.5.3.10, Security Alert A.5.3.11, User Authentication A.5.3.12), with the
+  codes of PS3.16 CID 400 to 403.
+- A message is about one patient: a request that touches the studies of several leaves a
+  line for each.
+- A study is named by its Study Instance UID; a patient without an ID or a name, as
+  de-identified data may be, is written `unknown`, since the fields may not be empty.
+- A search that is not a DICOM query is recorded in its own terms, as A.5.3.10 allows: the
+  path asked, and as the query its parameters or its body.
 - The integer codes the schema inherited from RFC 3881 are written as ITI TF-2: 3.20.7.1.3
   asks: the integer, `RFC-3881` as the coding scheme, and RFC 3881's description.
 - A tool that came with its access token is named as ITI-72 (3.72.5.1) names a caller with a
