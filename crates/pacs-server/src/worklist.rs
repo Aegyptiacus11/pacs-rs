@@ -24,8 +24,9 @@
 //! image counts, modalities and first and last study dates.
 //! Part of the web interface: off with it (`PACS_UI=false`).
 
+use crate::scope::Seen;
 use axum::Router;
-use axum::extract::{Query, State};
+use axum::extract::Query;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -168,7 +169,7 @@ fn failed(what: &str, e: pacs_index::Error) -> Response {
     )
 }
 
-async fn studies(State(index): State<Index>, Query(params): Query<Params>) -> Response {
+async fn studies(Seen(index): Seen, Query(params): Query<Params>) -> Response {
     let (q, with_summary) = match query(params) {
         Ok(q) => q,
         Err(message) => return error(StatusCode::BAD_REQUEST, message),
@@ -213,7 +214,7 @@ struct FacetParams {
     patient: Option<String>,
 }
 
-async fn facets(State(index): State<Index>, Query(p): Query<FacetParams>) -> Response {
+async fn facets(Seen(index): Seen, Query(p): Query<FacetParams>) -> Response {
     match index
         .worklist_facets(p.patient.as_deref().filter(|s| !s.is_empty()))
         .await
@@ -267,7 +268,7 @@ fn patient_query(p: PatientParams) -> Result<PatientQuery, &'static str> {
     })
 }
 
-async fn patients(State(index): State<Index>, Query(params): Query<PatientParams>) -> Response {
+async fn patients(Seen(index): Seen, Query(params): Query<PatientParams>) -> Response {
     let q = match patient_query(params) {
         Ok(q) => q,
         Err(message) => return error(StatusCode::BAD_REQUEST, message),
@@ -303,5 +304,5 @@ pub fn router(index: Index) -> Router {
         .route("/ui/api/patients", get(patients))
         .route("/ui/api/studies", get(studies))
         .route("/ui/api/studies/facets", get(facets))
-        .with_state(index)
+        .with_state(crate::scope::Whole::new(index))
 }

@@ -29,6 +29,7 @@ pub mod limits;
 mod modalities;
 pub mod projects;
 mod protocols;
+mod scope;
 mod ui;
 mod worklist;
 
