@@ -4,6 +4,9 @@ At the server's root, compatible with the reference server's REST API (see [Comp
 reference server](building.md#comparing-with-a-reference-server)), so its clients work unchanged. Resources have public IDs: the SHA-1 of their
 DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gives them.
 
+This page lists every request. [REST API, task by task](rest-guide.md) shows the common ones
+with their answers.
+
 | Request | |
 |---|---|
 | `POST /instances` | one DICOM file as the body; `ID`, `ParentPatient`, `ParentStudy`, `ParentSeries`, `Path`, `Status` (`Success` or `AlreadyStored`) |

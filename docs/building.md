@@ -85,3 +85,28 @@ Every audit message is validated against the schema of DICOM PS3.15 A.5.1.1
 ```bash
 PACS_TEST_XMLLINT=xmllint cargo test -p pacs-audit -p pacs-server --test schema --test audit
 ```
+
+## The documentation's examples
+
+A page of `docs/` shows a request as a `curl` command after `$ ` in a `console` block, and
+its answer as the `json` block right after it. `crates/pacs-server/tests/docs.rs` reads the
+pages named in its `PAGES`, gives each an empty server, sends the commands in order and
+compares each answer with the block: whole, except where the page says `"..."`, which stands
+for any value (a time, an address). A command must be answered 2xx, or with the `HttpStatus`
+its block shows.
+
+```bash
+cargo test -p pacs-server --test docs
+```
+
+- A failure prints the server's answer, ready to paste into the page.
+- `@name` in a command reads `docs/sample/name`: the three slices of the sample study, which
+  the book also publishes for the reader to download. They are what
+  `cargo run -p pacs-core --features synthetic --example write_synthetic -- docs/sample 1 3 64`
+  writes, and the test says so when they are not.
+- Only the `curl` options the pages use are known (`-s`, `-X`, `-H`, `-d`, `--data-binary`,
+  `-o`), and only `http://127.0.0.1:8080`: anything else fails, so that a command is never run
+  as something other than what the page says.
+- A page with a `$ curl` line that is not in `PAGES` fails the test.
+- Commands that cannot be run this way (Docker, a login on another host) go in a `bash` block,
+  which is not run.

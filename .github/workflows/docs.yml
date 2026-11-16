@@ -1,6 +1,7 @@
 # The documentation site, https://aegyptiacus11.github.io/pacs-rs/: the mdBook in docs/
-# (book.toml). A pull request checks the links and builds the book; a push to main also
-# publishes it to GitHub Pages. GitHub's own runners only, like ci.yml.
+# (book.toml). A pull request checks the links, builds the book and runs the pages' examples
+# against a server (crates/pacs-server/tests/docs.rs); a push to main also publishes the book
+# to GitHub Pages, once both have passed. GitHub's own runners only, like ci.yml.
 name: docs
 
 on:
@@ -61,14 +62,29 @@ jobs:
           mdbook build
           test -s target/book/index.html
           test -s target/book/roadmap.html
+          test -s target/book/quickstart.html
+          # the sample study the quickstart downloads
+          test -s target/book/sample/00001.dcm
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
           path: target/book
 
+  # ci.yml runs this test with the others when the code changes, but not when only docs/ does
+  examples:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: The pages' examples, against a server
+        run: cargo test -p pacs-server --test docs --locked
+
   publish:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, examples]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
