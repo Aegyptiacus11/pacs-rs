@@ -25,7 +25,7 @@ About accounts and the server itself:
 | Event | When |
 |---|---|
 | Application Activity (start, stop) | the server starts, and stops; with its AE titles when DIMSE is on |
-| User Authentication, Login | `POST /auth/login`, and a tool's `POST /auth/token`: accepted or refused, with the login or ID that was claimed |
+| User Authentication, Login | `POST /auth/login`, and a tool's `POST /auth/token`: accepted or refused, with the login or ID that was claimed; named, as on its later lines, once accepted |
 | User Authentication, Logout | `POST /auth/logout` and `/auth/logout-all` |
 | Security Alert, User Security Attributes Changed | a user or a tool is made, changed or removed; a password is changed |
 | Security Alert, Security Roles Changed | a role is made, changed or removed |
@@ -90,7 +90,7 @@ Trail Message Format Profile (PS3.15 A.5), in XML on one line, UTF-8, without a 
 mark.
 
 ```text
-<85>1 2026-11-15T21:33:03.275Z pacs.example pacs-rs 4242 IHE+RFC-3881 - <AuditMessage><EventIdentification EventActionCode="E" EventDateTime="2026-11-15T21:33:03.274Z" EventOutcomeIndicator="0"><EventID csd-code="110114" codeSystemName="DCM" originalText="User Authentication"/><EventTypeCode csd-code="110122" codeSystemName="DCM" originalText="Login"/></EventIdentification><ActiveParticipant UserID="ada@pacs-rs" UserIsRequestor="true" NetworkAccessPointID="192.0.2.7" NetworkAccessPointTypeCode="2"/><ActiveParticipant UserID="pacs-server@pacs.example" UserIsRequestor="false"/><AuditSourceIdentification AuditSourceID="pacs-rs"><AuditSourceTypeCode csd-code="4"/></AuditSourceIdentification></AuditMessage>
+<85>1 2026-11-15T21:33:03.275Z pacs.example pacs-rs 4242 IHE+RFC-3881 - <AuditMessage><EventIdentification EventActionCode="E" EventDateTime="2026-11-15T21:33:03.274Z" EventOutcomeIndicator="0"><EventID csd-code="110114" codeSystemName="DCM" originalText="User Authentication"/><EventTypeCode csd-code="110122" codeSystemName="DCM" originalText="Login"/></EventIdentification><ActiveParticipant UserID="ada@pacs-rs" UserName="ada" UserIsRequestor="true" NetworkAccessPointID="192.0.2.7" NetworkAccessPointTypeCode="2"/><ActiveParticipant UserID="pacs-server@pacs.example" UserIsRequestor="false"/><AuditSourceIdentification AuditSourceID="pacs-rs"><AuditSourceTypeCode csd-code="4"/></AuditSourceIdentification></AuditMessage>
 ```
 
 - Each event follows its table in PS3.15 A.5.3 (Application Activity A.5.3.1, Export A.5.3.4,
