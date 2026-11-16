@@ -16,7 +16,8 @@ test that CI runs.
 Built: the [login](login.md) (`PACS_AUTH`, off by default), with sessions, roles whose
 permissions can be changed, users kept in the index, [tools](login.md#tools) that connect with
 an access token got by the client credentials grant of IHE Internet User Authorization and
-can be revoked, and the sign-in page and the settings (users, roles, tools, account) of the
+can be revoked, [limits on requests](running.md#limits-on-requests) (timeouts, and bounds on
+what is served at once, for the server and for each address), and the sign-in page and the settings (users, roles, tools, account) of the
 [web interface](web-interface.md). Without it, anyone who reaches the
 server can read and delete everything. What remains:
 
@@ -28,7 +29,6 @@ server can read and delete everything. What remains:
 | TLS on DIMSE | associations can require TLS, following PS3.15 H.1 (step 6 of the [plan](interop.md#build-order)) |
 | TLS to Postgres | the index connection is encrypted and the server's certificate checked |
 | Audit trail to a repository | the audit messages are sent to an audit record repository over TLS (RFC 5425), kept and retried when it cannot be reached. They are [written to a file already](audit.md), for HTTP and DIMSE, as the DICOM audit message of PS3.15 (IHE ATNA) |
-| Limits on requests | timeouts and a bound on concurrent requests, so that one client cannot hold the server |
 
 ## 2. Safe to keep data
 

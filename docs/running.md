@@ -48,6 +48,13 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_AUTH_ISSUER` | `pacs-rs` | the name this server gives itself in the access tokens of [tools](login.md#tools): their `iss` and `aud` |
 | `PACS_AUDIT_FILE` | none | keep an [audit trail](audit.md) in this file, one line per event |
 | `PACS_AUDIT_SOURCE_ID` | `pacs-rs` | the name this server reports under in its audit messages |
+| `PACS_HEADER_TIMEOUT` | `30` | seconds a client has to send a request's head; an idle connection is closed after it. `0`: no [limit](#limits-on-requests) |
+| `PACS_BODY_TIMEOUT` | `60` | seconds a request's body may pause |
+| `PACS_REQUEST_TIMEOUT` | `300` | seconds within which a request without a body must be answered |
+| `PACS_WRITE_TIMEOUT` | `60` | seconds a write to a client may stall |
+| `PACS_MAX_CONNECTIONS` | `1024` | connections open at once. `0`: no bound |
+| `PACS_MAX_REQUESTS` | `256` | requests served at once |
+| `PACS_MAX_REQUESTS_PER_CLIENT` | `64` | requests served at once for one address |
 | `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
 | `PACS_DIMSE_AE_TITLE` | `PACSRS` | pacs-rs's AE title, called and calling |
 | `PACS_DIMSE_EXTRA_AE_TITLES` | none | further called AE titles accepted, comma-separated |
@@ -76,3 +83,35 @@ A synthetic series to try it with:
 cargo run -p pacs-core --features synthetic --example write_synthetic -- synthetic 1 3
 curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 ```
+
+## Limits on requests
+
+So that one client cannot hold the server, each part of a request has a time, and the
+requests served at once have a number.
+
+| Limit | Setting | Over it |
+|---|---|---|
+| The request's head must arrive within | `PACS_HEADER_TIMEOUT` | the connection is closed |
+| The request's body may pause for at most | `PACS_BODY_TIMEOUT` | the request fails, the connection is closed |
+| A request without a body must be answered within | `PACS_REQUEST_TIMEOUT` | 503 |
+| A write to the client may stall for at most | `PACS_WRITE_TIMEOUT` | the connection is closed |
+| Connections open at once | `PACS_MAX_CONNECTIONS` | further ones wait to be accepted |
+| Requests being served at once | `PACS_MAX_REQUESTS` | 503, `Retry-After: 1` |
+| Requests being served at once for one address | `PACS_MAX_REQUESTS_PER_CLIENT` | 429, `Retry-After: 1` |
+
+- The timeouts are about pauses, not sizes: an upload or a download takes as long as it needs
+  while bytes keep moving.
+- The head's timeout runs from the connection's opening and again from each answer, so a
+  connection kept open and left idle is closed after it.
+- `PACS_REQUEST_TIMEOUT` is for `GET`, `HEAD`, `DELETE` and `OPTIONS`. A request with a body
+  is bounded by the pauses of its body, and a synchronous C-MOVE
+  (`POST /modalities/{id}/move`) by `PACS_DIMSE_MOVE_TIMEOUT`.
+- A request counts as being served until its answer's body has been sent: a download, to its
+  last byte.
+- `/healthz` is outside the two bounds on requests: a busy server still says it is up.
+- **Behind a reverse proxy** every request comes from the proxy's address, so
+  `PACS_MAX_REQUESTS_PER_CLIENT` bounds all its users together: raise it, or set it to `0` and
+  bound clients at the proxy.
+
+DIMSE has its own: `PACS_DIMSE_TIMEOUT`, `PACS_DIMSE_MOVE_TIMEOUT` and
+`PACS_DIMSE_MAX_ASSOCIATIONS`.
