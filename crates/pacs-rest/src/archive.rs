@@ -15,9 +15,11 @@ use bytes::Bytes;
 use pacs_archive::Archive;
 use serde::Deserialize;
 use serde_json::Value;
+use utoipa::ToSchema;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
+use crate::schema::Error;
 use crate::{AppState, RestError};
 
 fn tag<'a>(tags: &'a Value, name: &str) -> &'a str {
@@ -51,6 +53,19 @@ fn name(parts: &[&str]) -> String {
     }
 }
 
+/// A study's files in a ZIP.
+///
+/// Folders by patient, study and series; the files as stored. Sent as it is built.
+#[utoipa::path(
+    get,
+    path = "/studies/{id}/archive",
+    tag = "Studies",
+    params(("id" = String, Path, description = "The study's identifier.")),
+    responses(
+        (status = 200, description = "The ZIP.", body = crate::schema::Binary, content_type = "application/zip"),
+        (status = 404, description = "No study has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn study(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -61,7 +76,19 @@ pub(crate) async fn study(
     Ok(zip_response(&state, &format!("{id}.zip"), files(entries)))
 }
 
-/// `GET /patients/{id}/archive`: each of the patient's studies, laid out as above.
+/// A patient's files in a ZIP, every study.
+///
+/// Folders by patient, study and series; the files as stored. Sent as it is built.
+#[utoipa::path(
+    get,
+    path = "/patients/{id}/archive",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "The ZIP.", body = crate::schema::Binary, content_type = "application/zip"),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -77,13 +104,18 @@ pub(crate) async fn patient(
     Ok(zip_response(&state, &format!("{id}.zip"), files(entries)))
 }
 
-#[derive(Debug, Deserialize)]
+/// What to put in a ZIP.
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct CreateArchive {
+    /// Identifiers of patients, studies, series and instances, mixed as needed.
     #[serde(rename = "Resources")]
     resources: Vec<String>,
+    /// `true` unless given; `false` is refused, as there are no archive jobs yet.
     #[serde(rename = "Synchronous", default = "yes")]
     synchronous: bool,
+    /// Refused when given: the files come as stored.
     #[serde(rename = "Transcode")]
+    #[schema(value_type = Option<String>)]
     transcode: Option<Value>,
 }
 
@@ -91,8 +123,21 @@ fn yes() -> bool {
     true
 }
 
-/// `POST /tools/create-archive` with `{"Resources": [...]}`: patients, studies, series and
-/// instances in one ZIP, each file once however many of the resources hold it.
+/// Several resources in one ZIP.
+///
+/// Patients, studies, series and instances together, each file once however many of the
+/// resources hold it.
+#[utoipa::path(
+    post,
+    path = "/tools/create-archive",
+    tag = "Search and archives",
+    request_body(content = CreateArchive, description = "The resources to include."),
+    responses(
+        (status = 200, description = "The ZIP.", body = crate::schema::Binary, content_type = "application/zip"),
+        (status = 400, description = "The body is not an archive request, or asks for what is not supported yet.", body = Error),
+        (status = 404, description = "One of the identifiers names nothing; the body is empty.")
+    )
+)]
 pub(crate) async fn create_archive(
     State(state): State<AppState>,
     body: Bytes,
@@ -115,7 +160,19 @@ pub(crate) async fn create_archive(
     resources_archive(&state, &request.resources).await
 }
 
-/// `GET /tools/create-archive?resources=a,b`: the same, so that a link can download it.
+/// Several resources in one ZIP, by a link.
+///
+/// The same as the `POST`, for a link a browser can follow.
+#[utoipa::path(
+    get,
+    path = "/tools/create-archive",
+    tag = "Search and archives",
+    params(("resources" = String, Query, description = "Identifiers of any level, separated by commas. Without any, the ZIP is empty.")),
+    responses(
+        (status = 200, description = "The ZIP.", body = crate::schema::Binary, content_type = "application/zip"),
+        (status = 404, description = "One of the identifiers names nothing; the body is empty.")
+    )
+)]
 pub(crate) async fn create_archive_get(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,

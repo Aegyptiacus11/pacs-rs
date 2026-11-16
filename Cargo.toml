@@ -60,6 +60,9 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-io-timeout = "1.2.1"
+# the description of the HTTP API, written beside each handler
+utoipa = "6.0.0"
+utoipa-axum = "0.3.0"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["cors", "timeout", "trace"] }
 tracing = "0.1.44"

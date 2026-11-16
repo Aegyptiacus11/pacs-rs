@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use pacs_index::Level;
 use serde_json::{Value, json};
 
+use crate::schema::Deleted;
 use crate::{AppState, RestError};
 
 async fn delete(state: &AppState, level: Level, id: &str) -> Result<Json<Value>, RestError> {
@@ -25,6 +26,20 @@ async fn delete(state: &AppState, level: Level, id: &str) -> Result<Json<Value>,
     Ok(Json(json!({ "RemainingAncestor": ancestor })))
 }
 
+/// Deletes a patient.
+///
+/// Everything under it goes too, and every level above it that is left empty. The index
+/// entries are removed first and the files after. There is no undo.
+#[utoipa::path(
+    delete,
+    path = "/patients/{id}",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "Deleted; the closest level still there.", body = Deleted),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -32,6 +47,20 @@ pub(crate) async fn patient(
     delete(&state, Level::Patient, &id).await
 }
 
+/// Deletes a study.
+///
+/// Everything under it goes too, and every level above it that is left empty. The index
+/// entries are removed first and the files after. There is no undo.
+#[utoipa::path(
+    delete,
+    path = "/studies/{id}",
+    tag = "Studies",
+    params(("id" = String, Path, description = "The study's identifier.")),
+    responses(
+        (status = 200, description = "Deleted; the closest level still there.", body = Deleted),
+        (status = 404, description = "No study has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn study(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -39,6 +68,20 @@ pub(crate) async fn study(
     delete(&state, Level::Study, &id).await
 }
 
+/// Deletes a series.
+///
+/// Everything under it goes too, and every level above it that is left empty. The index
+/// entries are removed first and the files after. There is no undo.
+#[utoipa::path(
+    delete,
+    path = "/series/{id}",
+    tag = "Series",
+    params(("id" = String, Path, description = "The series's identifier.")),
+    responses(
+        (status = 200, description = "Deleted; the closest level still there.", body = Deleted),
+        (status = 404, description = "No series has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn series(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -46,6 +89,20 @@ pub(crate) async fn series(
     delete(&state, Level::Series, &id).await
 }
 
+/// Deletes an instance.
+///
+/// Everything under it goes too, and every level above it that is left empty. The index
+/// entries are removed first and the files after. There is no undo.
+#[utoipa::path(
+    delete,
+    path = "/instances/{id}",
+    tag = "Instances",
+    params(("id" = String, Path, description = "The instance's identifier.")),
+    responses(
+        (status = 200, description = "Deleted; the closest level still there.", body = Deleted),
+        (status = 404, description = "No instance has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn instance(
     State(state): State<AppState>,
     Path(id): Path<String>,

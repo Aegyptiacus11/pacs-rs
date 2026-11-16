@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use pacs_index::{RestInstance, RestPatient, RestSeries, RestStudy, Statistics};
 use serde_json::{Value, json};
 
+use crate::schema::{Error, Instance, Patient, PatientList, Series, Study, StudyList};
 use crate::{AppState, RestError};
 
 pub(crate) fn patient_json(patient: RestPatient) -> Value {
@@ -96,6 +97,21 @@ fn page(ids: Vec<String>, params: &HashMap<String, String>) -> Result<Vec<String
     })
 }
 
+/// Lists the patients.
+#[utoipa::path(
+    get,
+    path = "/patients",
+    tag = "Patients",
+    params(
+        ("expand" = Option<bool>, Query, description = "Answer with the resources instead of their identifiers. `?expand` alone means true."),
+        ("limit" = Option<u64>, Query, description = "At most this many."),
+        ("since" = Option<u64>, Query, description = "Skip this many first: with `limit`, a page.")
+    ),
+    responses(
+        (status = 200, description = "The patients' identifiers, or the patients.", body = PatientList),
+        (status = 400, description = "`limit` or `since` is not a number.", body = Error)
+    )
+)]
 pub(crate) async fn patients(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -114,6 +130,17 @@ pub(crate) async fn patients(
     Ok(Json(Value::Array(patients)))
 }
 
+/// A patient.
+#[utoipa::path(
+    get,
+    path = "/patients/{id}",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "The patient.", body = Patient),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -122,6 +149,17 @@ pub(crate) async fn patient(
     Ok(Json(patient_json(patient.ok_or(RestError::NotFound)?)))
 }
 
+/// A patient's studies.
+#[utoipa::path(
+    get,
+    path = "/patients/{id}/studies",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "The studies.", body = Vec<Study>),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient_studies(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -137,6 +175,17 @@ pub(crate) async fn patient_studies(
     Ok(Json(Value::Array(studies)))
 }
 
+/// A patient's series, of every study.
+#[utoipa::path(
+    get,
+    path = "/patients/{id}/series",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "The series.", body = Vec<Series>),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient_series(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -154,6 +203,17 @@ pub(crate) async fn patient_series(
     Ok(Json(Value::Array(series)))
 }
 
+/// A patient's instances, of every study.
+#[utoipa::path(
+    get,
+    path = "/patients/{id}/instances",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "The instances.", body = Vec<Instance>),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient_instances(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -168,6 +228,17 @@ pub(crate) async fn patient_instances(
     )))
 }
 
+/// How much a patient holds.
+#[utoipa::path(
+    get,
+    path = "/patients/{id}/statistics",
+    tag = "Patients",
+    params(("id" = String, Path, description = "The patient's identifier.")),
+    responses(
+        (status = 200, description = "Counts and sizes.", body = crate::schema::Statistics),
+        (status = 404, description = "No patient has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn patient_statistics(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -183,6 +254,21 @@ pub(crate) async fn patient_statistics(
     Ok(Json(value))
 }
 
+/// Lists the studies.
+#[utoipa::path(
+    get,
+    path = "/studies",
+    tag = "Studies",
+    params(
+        ("expand" = Option<bool>, Query, description = "Answer with the resources instead of their identifiers. `?expand` alone means true."),
+        ("limit" = Option<u64>, Query, description = "At most this many."),
+        ("since" = Option<u64>, Query, description = "Skip this many first: with `limit`, a page.")
+    ),
+    responses(
+        (status = 200, description = "The studies' identifiers, or the studies.", body = StudyList),
+        (status = 400, description = "`limit` or `since` is not a number.", body = Error)
+    )
+)]
 pub(crate) async fn studies(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -201,6 +287,17 @@ pub(crate) async fn studies(
     Ok(Json(Value::Array(studies)))
 }
 
+/// A study.
+#[utoipa::path(
+    get,
+    path = "/studies/{id}",
+    tag = "Studies",
+    params(("id" = String, Path, description = "The study's identifier.")),
+    responses(
+        (status = 200, description = "The study.", body = Study),
+        (status = 404, description = "No study has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn study(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -209,6 +306,17 @@ pub(crate) async fn study(
     Ok(Json(study_json(study.ok_or(RestError::NotFound)?)))
 }
 
+/// A study's series, in Series Number order.
+#[utoipa::path(
+    get,
+    path = "/studies/{id}/series",
+    tag = "Studies",
+    params(("id" = String, Path, description = "The study's identifier.")),
+    responses(
+        (status = 200, description = "The series.", body = Vec<Series>),
+        (status = 404, description = "No study has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn study_series(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -224,6 +332,17 @@ pub(crate) async fn study_series(
     Ok(Json(Value::Array(series)))
 }
 
+/// A study's instances, of every series.
+#[utoipa::path(
+    get,
+    path = "/studies/{id}/instances",
+    tag = "Studies",
+    params(("id" = String, Path, description = "The study's identifier.")),
+    responses(
+        (status = 200, description = "The instances.", body = Vec<Instance>),
+        (status = 404, description = "No study has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn study_instances(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -238,6 +357,17 @@ pub(crate) async fn study_instances(
     )))
 }
 
+/// How much a study holds.
+#[utoipa::path(
+    get,
+    path = "/studies/{id}/statistics",
+    tag = "Studies",
+    params(("id" = String, Path, description = "The study's identifier.")),
+    responses(
+        (status = 200, description = "Counts and sizes.", body = crate::schema::Statistics),
+        (status = 404, description = "No study has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn study_statistics(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -270,6 +400,17 @@ fn statistics_json(stats: Statistics) -> Value {
     })
 }
 
+/// A series.
+#[utoipa::path(
+    get,
+    path = "/series/{id}",
+    tag = "Series",
+    params(("id" = String, Path, description = "The series's identifier.")),
+    responses(
+        (status = 200, description = "The series.", body = Series),
+        (status = 404, description = "No series has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn series(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -278,6 +419,17 @@ pub(crate) async fn series(
     Ok(Json(series_json(series.ok_or(RestError::NotFound)?)))
 }
 
+/// A series' instances, in Instance Number order.
+#[utoipa::path(
+    get,
+    path = "/series/{id}/instances",
+    tag = "Series",
+    params(("id" = String, Path, description = "The series's identifier.")),
+    responses(
+        (status = 200, description = "The instances.", body = Vec<Instance>),
+        (status = 404, description = "No series has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn series_instances(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -293,6 +445,17 @@ pub(crate) async fn series_instances(
     Ok(Json(Value::Array(instances)))
 }
 
+/// An instance.
+#[utoipa::path(
+    get,
+    path = "/instances/{id}",
+    tag = "Instances",
+    params(("id" = String, Path, description = "The instance's identifier.")),
+    responses(
+        (status = 200, description = "The instance.", body = Instance),
+        (status = 404, description = "No instance has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -301,6 +464,20 @@ pub(crate) async fn instance(
     Ok(Json(instance_json(instance.ok_or(RestError::NotFound)?)))
 }
 
+/// An instance's DICOM file.
+///
+/// The file as stored: in JPEG-LS Lossless when pacs-rs compressed it on the way in. DICOMweb
+/// retrieves it in another transfer syntax.
+#[utoipa::path(
+    get,
+    path = "/instances/{id}/file",
+    tag = "Instances",
+    params(("id" = String, Path, description = "The instance's identifier.")),
+    responses(
+        (status = 200, description = "The DICOM file.", body = crate::schema::Binary, content_type = "application/dicom"),
+        (status = 404, description = "No instance has this identifier; the body is empty.")
+    )
+)]
 pub(crate) async fn instance_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -349,6 +526,17 @@ pub(crate) mod parents {
             .ok_or(RestError::NotFound)
     }
 
+    /// The patient of a study.
+    #[utoipa::path(
+        get,
+        path = "/studies/{id}/patient",
+        tag = "Studies",
+        params(("id" = String, Path, description = "The study's identifier.")),
+        responses(
+            (status = 200, description = "The patient.", body = Patient),
+            (status = 404, description = "No study has this identifier; the body is empty.")
+        )
+    )]
     pub(crate) async fn study_patient(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -356,6 +544,17 @@ pub(crate) mod parents {
         patient_of_study(&state, &id).await
     }
 
+    /// The study of a series.
+    #[utoipa::path(
+        get,
+        path = "/series/{id}/study",
+        tag = "Series",
+        params(("id" = String, Path, description = "The series's identifier.")),
+        responses(
+            (status = 200, description = "The study.", body = Study),
+            (status = 404, description = "No series has this identifier; the body is empty.")
+        )
+    )]
     pub(crate) async fn series_study(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -363,6 +562,17 @@ pub(crate) mod parents {
         study(&state, &series_of(&state, &id).await?.parent_study).await
     }
 
+    /// The patient of a series.
+    #[utoipa::path(
+        get,
+        path = "/series/{id}/patient",
+        tag = "Series",
+        params(("id" = String, Path, description = "The series's identifier.")),
+        responses(
+            (status = 200, description = "The patient.", body = Patient),
+            (status = 404, description = "No series has this identifier; the body is empty.")
+        )
+    )]
     pub(crate) async fn series_patient(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -370,6 +580,17 @@ pub(crate) mod parents {
         patient_of_study(&state, &series_of(&state, &id).await?.parent_study).await
     }
 
+    /// The series of an instance.
+    #[utoipa::path(
+        get,
+        path = "/instances/{id}/series",
+        tag = "Instances",
+        params(("id" = String, Path, description = "The instance's identifier.")),
+        responses(
+            (status = 200, description = "The series.", body = Series),
+            (status = 404, description = "No instance has this identifier; the body is empty.")
+        )
+    )]
     pub(crate) async fn instance_series(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -380,6 +601,17 @@ pub(crate) mod parents {
         )))
     }
 
+    /// The study of an instance.
+    #[utoipa::path(
+        get,
+        path = "/instances/{id}/study",
+        tag = "Instances",
+        params(("id" = String, Path, description = "The instance's identifier.")),
+        responses(
+            (status = 200, description = "The study.", body = Study),
+            (status = 404, description = "No instance has this identifier; the body is empty.")
+        )
+    )]
     pub(crate) async fn instance_study(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -387,6 +619,17 @@ pub(crate) mod parents {
         study(&state, &instance_of(&state, &id).await?.parent_study).await
     }
 
+    /// The patient of an instance.
+    #[utoipa::path(
+        get,
+        path = "/instances/{id}/patient",
+        tag = "Instances",
+        params(("id" = String, Path, description = "The instance's identifier.")),
+        responses(
+            (status = 200, description = "The patient.", body = Patient),
+            (status = 404, description = "No instance has this identifier; the body is empty.")
+        )
+    )]
     pub(crate) async fn instance_patient(
         State(state): State<AppState>,
         Path(id): Path<String>,
