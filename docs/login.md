@@ -123,9 +123,9 @@ For a role with `users`.
 
 | Request | |
 |---|---|
-| `GET /users` | every user: `id`, `login`, `role`, `active`, `created_ms` |
-| `POST /users` | `{"login", "password", "role"}`: 201 with the user; 409 when the login is taken |
-| `PUT /users/{id}` | any of `{"password", "role", "active"}`: the user after the change |
+| `GET /users` | every user: `id`, `login`, `role`, `active`, `created_ms`, `projects` |
+| `POST /users` | `{"login", "password", "role"}`, and `"projects"` to [limit them](#rights-per-project): 201 with the user; 409 when the login is taken |
+| `PUT /users/{id}` | any of `{"password", "role", "active", "projects"}`: the user after the change |
 | `DELETE /users/{id}` | 204 |
 
 - A password is 12 to 1024 bytes, stored as an argon2id hash.
@@ -185,9 +185,9 @@ kept by a cache. A request that is refused gets OAuth's errors as `{"error",
 
 | Request | |
 |---|---|
-| `GET /clients` | every tool: `id`, `name`, `role`, `created_by`, `created_ms`, `last_token_ms` |
-| `POST /clients` | `{"name", "role"}`: 201 with the tool and its `secret`, this once |
-| `PUT /clients/{id}` | `{"name"}`, `{"role"}` or both: the tool after the change |
+| `GET /clients` | every tool: `id`, `name`, `role`, `created_by`, `created_ms`, `last_token_ms`, `projects` |
+| `POST /clients` | `{"name", "role"}`, and `"projects"` to [limit it](#rights-per-project): 201 with the tool and its `secret`, this once |
+| `PUT /clients/{id}` | any of `{"name", "role", "projects"}`: the tool after the change |
 | `DELETE /clients/{id}` | 204: the tool is revoked |
 
 These need `users`. A role cannot be removed while a tool has it (409).
@@ -197,8 +197,47 @@ What this is not: a complete IUA Authorization Server. There is no authorization
 introspection [ITI-102]; the tokens are signed with the server's own secret, so only pacs-rs
 can check them; and TLS, which IUA requires, is the proxy's in front of pacs-rs.
 
+## Rights per project
+
+The role says what an account may do. Its projects say on which studies. A user or a tool
+sees every study, unless it is limited to some of the server's
+[projects](de-identification.md): then the rest of the archive is, to that account, not
+there.
+
+| `projects` of a user or a tool | It sees |
+|---|---|
+| `null`, or left out | every study |
+| `["liver-2026"]` | the studies that came in through that project |
+| `[]` | no study |
+
+- **A study in no project** (stored as received, so identified) is seen only by an account
+  that sees every study. Someone limited to de-identified projects never sees an identified
+  study.
+- **Outside its projects an account is answered 404**, as for a study that does not exist,
+  on every route: the REST API, DICOMweb, the web interface's lists, archives, searches and
+  download links. Lists and counts hold only what it sees. A patient is the studies of
+  theirs that it sees.
+- **Writing.** Measurements go on the studies it sees. Deleting takes only what it sees: of
+  a patient, the studies in its projects, and the others stay. It stores nothing over HTTP
+  (403): what it sent would be in no project, out of its own sight. A study comes into a
+  project through the project's AE title.
+- **Remote archives.** With the `remote` permission it may search them, and bring studies in
+  only with `"Project"` naming one of its own (403 otherwise). A search there shows the
+  hospital's patients, identified: `remote` is not for an account that must not see them.
+- **Setting it.** In the web interface (Settings, Users or Tools: *Studies they see*), or
+  with `"projects"` in `POST` and `PUT` of `/users` and `/clients`. A name that is not a
+  project of this server is refused (422). `GET /projects` lists the names, for who manages
+  users. `GET /auth/me` tells an account its own.
+- **A change holds from the account's next request**, tokens it already has included: the
+  limit is read from the index each time, not from the token.
+- **Who is not limited**: the first administrator, and every account until someone limits
+  it. An administrator can limit another, and nobody changes their own unless they manage
+  users.
+
+What this does not cover: DIMSE has no accounts, so whoever may open an association to a
+project's AE title may send to it.
+
 ## Not yet
 
 - Signing in through an identity provider (OpenID Connect).
-- Rights per project.
 - Sending the [audit trail](audit.md) to a repository.

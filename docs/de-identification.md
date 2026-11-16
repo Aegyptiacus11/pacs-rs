@@ -20,9 +20,9 @@ with each study it receives, and nothing with a study stored as received. That i
 the study's first instance and does not change: an instance for the same study that comes
 another way (to the archive itself, by upload or C-STORE, or to another project) is refused
 with a conflict, so identified and de-identified instances never end up in one study. To
-bring a study in another way, delete it first. This is the ground for
-[rights per project](roadmap.md#1-safe-to-expose), which are not enforced yet: today every
-reader sees every project.
+bring a study in another way, delete it first. It is also what
+[rights per project](login.md#rights-per-project) go by: a user or a tool limited to some
+projects sees their studies and nothing else.
 
 - **Profile**: PS3.15 Table E.1-1 (2026d) whole, sequences included, with the options chosen:
   `retain-uids`, `retain-device-identity`, `retain-institution-identity`,

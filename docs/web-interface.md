@@ -55,11 +55,12 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   to write, no deletion without the right to delete. Downloads go through a
   [download token](login.md#links-a-browser-follows-itself).
 - **Settings**: at the foot of the rail (along the bottom on a narrow screen), in tabs. *Users*, for an administrator: the list,
-  adding one, changing a role, setting a new password, deactivating, activating and removing.
+  adding one, changing a role, the studies they see ([every one, or only some
+  projects'](login.md#rights-per-project)), setting a new password, deactivating, activating and removing.
   *Roles and permissions*: one column a role, one row a permission; who manages users ticks
   what each role permits, adds roles, renames and removes them, and everyone else sees the
   table read-only. *Tools*, for an administrator: the [programs that connect without a
-  person](login.md#tools), adding one (its secret is shown once), changing its role and
+  person](login.md#tools), adding one (its secret is shown once), changing its role, the studies it sees and
   removing it. *Your account*: the login, the
   role, changing the password, signing out. *About this server*: its version and the
   addresses a viewer or a script connects to. Without a login only the last one is there.
