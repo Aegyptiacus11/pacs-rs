@@ -241,7 +241,8 @@ async fn sign_ins_account_changes_and_refusals_leave_a_line_each() {
             LOGIN,
             OK,
             "EventActionCode=\"E\"",
-            "UserID=\"admin@test-pacs\" UserIsRequestor=\"true\"",
+            // accepted: named as on every later line
+            "UserID=\"admin@test-pacs\" UserName=\"admin\" UserIsRequestor=\"true\"",
         ],
     );
     // no socket address in these tests: the server's own name stands for the access point
@@ -262,7 +263,8 @@ async fn sign_ins_account_changes_and_refusals_leave_a_line_each() {
             AUTHENTICATION,
             LOGIN,
             REFUSED,
-            "UserID=\"admin@test-pacs\"",
+            // refused: a claim is not a name
+            "UserID=\"admin@test-pacs\" UserIsRequestor=\"true\"",
             "<EventOutcomeDescription>HTTP 401</EventOutcomeDescription>",
         ],
     );
@@ -397,14 +399,25 @@ async fn sign_ins_account_changes_and_refusals_leave_a_line_each() {
             AUTHENTICATION,
             LOGIN,
             OK,
-            &format!("UserID=\"{id}\" UserIsRequestor=\"true\""),
+            // accepted: named as on the lines of what it does next
+            &format!(
+                "UserID=\"{id}\" UserName=\"pacs-rs&lt;{id}@pacs-rs&gt;\" UserIsRequestor=\"true\""
+            ),
         ],
     );
     assert_eq!(
         ask_token(&app, &id, "a-wrong-secret").await.status,
         StatusCode::UNAUTHORIZED
     );
-    has(&lines.one(), &[LOGIN, REFUSED, &format!("UserID=\"{id}\"")]);
+    // refused: a claim is not a name
+    has(
+        &lines.one(),
+        &[
+            LOGIN,
+            REFUSED,
+            &format!("UserID=\"{id}\" UserIsRequestor=\"true\""),
+        ],
+    );
 
     // Refused for what the caller is: a reader who deletes, a tool that uploads.
     let reader = sign_in(&app, "rita", READER_PASSWORD).await.body["access_token"]

@@ -899,11 +899,21 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
     let said = || (!status.is_success()).then(|| format!("HTTP {}", status.as_u16()));
 
     if let Some(name) = claimed_name {
+        let person = path == "/auth/login";
+        let mut who = claimed(&trail, &name, person, ip);
+        // once accepted, the claim is who they are: named as on every later line
+        if status.is_success() && !name.is_empty() {
+            who = who.named(if person {
+                name.clone()
+            } else {
+                format!("{0}<{name}@{0}>", trail.issuer)
+            });
+        }
         audit.record(events::user_authentication(
             &trail.source,
             now,
             true,
-            claimed(&trail, &name, path == "/auth/login", ip),
+            who,
             &trail.process,
             outcome_of(status),
             said(),
