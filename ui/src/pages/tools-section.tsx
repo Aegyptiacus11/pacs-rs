@@ -4,7 +4,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Ellipsis, Loader2, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Ellipsis, FolderLock, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -31,9 +31,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, url } from "@/lib/api";
 import { summary, useRoles, type Permission, type RoleInfo } from "@/lib/roles";
+import { limitLabel, ProjectsChoice, ProjectsDialog, useProjects, type Projects } from "@/pages/projects-choice";
 import { Field, RoleChoice } from "@/pages/users-page";
 
-type Tool = { id: string; name: string; role: string; created_by: string; created_ms: number; last_token_ms: number | null };
+type Tool = { id: string; name: string; role: string; created_by: string; created_ms: number; last_token_ms: number | null; projects: Projects };
 type NewTool = Tool & { secret: string };
 
 const day = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
@@ -69,11 +70,12 @@ function Secret({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AddTool({ open, roles, onClose }: { open: boolean; roles: RoleInfo[]; onClose: () => void }) {
+function AddTool({ open, roles, projects, onClose }: { open: boolean; roles: RoleInfo[]; projects: string[]; onClose: () => void }) {
   const queries = useQueryClient();
   const [name, setName] = useState("");
   const [chosen, setRole] = useState<string | null>(null);
   const role = chosen ?? roles[0]?.id ?? "";
+  const [seen, setSeen] = useState<Projects>(null);
   const [error, setError] = useState<string | null>(null);
   const [made, setMade] = useState<NewTool | null>(null);
   // emptied when it opens, not when it closes: the secret stays put while the dialog fades out
@@ -81,12 +83,13 @@ function AddTool({ open, roles, onClose }: { open: boolean; roles: RoleInfo[]; o
     if (!open) return;
     setName("");
     setRole(null);
+    setSeen(null);
     setError(null);
     setMade(null);
   }, [open]);
   const close = onClose;
   const add = useMutation({
-    mutationFn: () => api<NewTool>("clients", { method: "POST", ...json({ name: name.trim(), role }) }),
+    mutationFn: () => api<NewTool>("clients", { method: "POST", ...json({ name: name.trim(), role, projects: seen }) }),
     onSuccess: (tool) => {
       queries.invalidateQueries({ queryKey: ["clients"] });
       setMade(tool);
@@ -135,6 +138,12 @@ function AddTool({ open, roles, onClose }: { open: boolean; roles: RoleInfo[]; o
             <div className="grid gap-1.5 text-sm font-medium">
               Role
               <RoleChoice roles={roles} value={role} onChange={setRole} />
+              {projects.length > 0 && (
+                <div className="mt-2.5 grid gap-1.5">
+                  Studies
+                  <ProjectsChoice projects={projects} value={seen} onChange={setSeen} />
+                </div>
+              )}
             </div>
             <p role="alert" className="min-h-5 text-sm text-destructive">
               {error}
@@ -162,6 +171,8 @@ export function ToolsSection() {
   const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id;
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Tool | null>(null);
+  const [limiting, setLimiting] = useState<Tool | null>(null);
+  const projects = useProjects().data ?? [];
 
   const done = () => queries.invalidateQueries({ queryKey: ["clients"] });
   const failed = (e: unknown) => toast.error(e instanceof Error ? e.message : "The change was not made.");
@@ -226,6 +237,7 @@ export function ToolsSection() {
                   <TableCell className="max-w-40">
                     <div className="truncate font-medium">{t.name}</div>
                     <div className="truncate font-mono text-xs text-muted-foreground">{t.id}</div>
+                    {limitLabel(t.projects) && <div className="truncate text-xs text-muted-foreground">{limitLabel(t.projects)}</div>}
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -263,6 +275,11 @@ export function ToolsSection() {
                         <DropdownMenuItem onSelect={() => navigator.clipboard.writeText(t.id).then(() => toast.success("ID copied"))}>
                           <Copy /> Copy the ID
                         </DropdownMenuItem>
+                        {(projects.length > 0 || t.projects !== null) && (
+                          <DropdownMenuItem onSelect={() => setLimiting(t)}>
+                            <FolderLock /> Studies it sees
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem variant="destructive" onSelect={() => setRemoving(t)}>
                           <Trash2 /> Remove
                         </DropdownMenuItem>
@@ -275,7 +292,13 @@ export function ToolsSection() {
           </Table>
         )}
       </div>
-      <AddTool open={adding} roles={roles} onClose={() => setAdding(false)} />
+      <AddTool open={adding} roles={roles} projects={projects} onClose={() => setAdding(false)} />
+      <ProjectsDialog
+        kind="clients"
+        account={limiting && { id: limiting.id, name: limiting.name, projects: limiting.projects }}
+        projects={projects}
+        onClose={() => setLimiting(null)}
+      />
       <AlertDialog open={!!removing} onOpenChange={(o) => !o && !remove.isPending && setRemoving(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

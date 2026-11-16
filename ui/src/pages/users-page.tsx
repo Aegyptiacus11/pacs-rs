@@ -3,7 +3,7 @@
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, KeyRound, Loader2, Plus, Trash2, UserCheck, UserX } from "lucide-react";
+import { Ellipsis, FolderLock, KeyRound, Loader2, Plus, Trash2, UserCheck, UserX } from "lucide-react";
 import { toast } from "sonner";
 import { MIN_PASSWORD } from "@/components/user-menu";
 import {
@@ -34,8 +34,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "@/lib/api";
 import { summary, useRoles, type RoleInfo } from "@/lib/roles";
 import { useSession } from "@/lib/session";
+import { limitLabel, ProjectsChoice, ProjectsDialog, useProjects, type Projects } from "@/pages/projects-choice";
 
-type Account = { id: string; login: string; role: string; active: boolean; created_ms: number };
+type Account = { id: string; login: string; role: string; active: boolean; created_ms: number; projects: Projects };
 
 const created = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
 const json = (body: unknown): RequestInit => ({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -70,23 +71,25 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   );
 }
 
-function AddUser({ open, roles, onClose }: { open: boolean; roles: RoleInfo[]; onClose: () => void }) {
+function AddUser({ open, roles, projects, onClose }: { open: boolean; roles: RoleInfo[]; projects: string[]; onClose: () => void }) {
   const queries = useQueryClient();
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   // the first role is the one that permits least on a new server
   const [chosen, setRole] = useState<string | null>(null);
   const role = chosen ?? roles[0]?.id ?? "";
+  const [seen, setSeen] = useState<Projects>(null);
   const [error, setError] = useState<string | null>(null);
   const close = () => {
     setLogin("");
     setPassword("");
     setRole(null);
+    setSeen(null);
     setError(null);
     onClose();
   };
   const add = useMutation({
-    mutationFn: () => api<Account>("users", { method: "POST", ...json({ login: login.trim(), password, role }) }),
+    mutationFn: () => api<Account>("users", { method: "POST", ...json({ login: login.trim(), password, role, projects: seen }) }),
     onSuccess: (user) => {
       queries.invalidateQueries({ queryKey: ["users"] });
       toast.success(`${user.login} added`);
@@ -119,6 +122,12 @@ function AddUser({ open, roles, onClose }: { open: boolean; roles: RoleInfo[]; o
             Role
             <RoleChoice roles={roles} value={role} onChange={setRole} />
           </div>
+          {projects.length > 0 && (
+            <div className="grid gap-1.5 text-sm font-medium">
+              Studies
+              <ProjectsChoice projects={projects} value={seen} onChange={setSeen} />
+            </div>
+          )}
           <p role="alert" className="min-h-5 text-sm text-destructive">
             {error}
           </p>
@@ -199,6 +208,8 @@ export function UsersSection() {
   const [adding, setAdding] = useState(false);
   const [resetting, setResetting] = useState<Account | null>(null);
   const [removing, setRemoving] = useState<Account | null>(null);
+  const [limiting, setLimiting] = useState<Account | null>(null);
+  const projects = useProjects().data ?? [];
 
   const done = () => queries.invalidateQueries({ queryKey: ["users"] });
   const failed = (e: unknown) => toast.error(e instanceof Error ? e.message : "The change was not made.");
@@ -261,6 +272,7 @@ export function UsersSection() {
                     {u.id === me?.id && <span className="ml-2 text-xs font-normal text-muted-foreground">you</span>}
                     {/* the status column is hidden on a narrow screen */}
                     {!u.active && <span className="ml-2 text-xs font-normal sm:hidden">deactivated</span>}
+                    {limitLabel(u.projects) && <div className="truncate text-xs font-normal text-muted-foreground">{limitLabel(u.projects)}</div>}
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -294,6 +306,11 @@ export function UsersSection() {
                         <DropdownMenuItem onSelect={() => setResetting(u)}>
                           <KeyRound /> Set a new password
                         </DropdownMenuItem>
+                        {(projects.length > 0 || u.projects !== null) && (
+                          <DropdownMenuItem onSelect={() => setLimiting(u)}>
+                            <FolderLock /> Studies they see
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onSelect={() => change.mutate({ id: u.id, active: !u.active })}>
                           {u.active ? <UserX /> : <UserCheck />} {u.active ? "Deactivate" : "Activate"}
                         </DropdownMenuItem>
@@ -310,7 +327,13 @@ export function UsersSection() {
           </Table>
         )}
       </div>
-      <AddUser open={adding} roles={roles} onClose={() => setAdding(false)} />
+      <AddUser open={adding} roles={roles} projects={projects} onClose={() => setAdding(false)} />
+      <ProjectsDialog
+        kind="users"
+        account={limiting && { id: limiting.id, name: limiting.login, projects: limiting.projects }}
+        projects={projects}
+        onClose={() => setLimiting(null)}
+      />
       <ResetPassword user={resetting} onClose={() => setResetting(null)} />
       <AlertDialog open={!!removing} onOpenChange={(o) => !o && !remove.isPending && setRemoving(null)}>
         <AlertDialogContent>
