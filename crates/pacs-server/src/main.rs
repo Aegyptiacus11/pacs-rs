@@ -1,7 +1,7 @@
 use clap::Parser;
 use pacs_server::{
-    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve,
-    serve_dimse_audited, shutdown_signal,
+    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve_dimse_audited,
+    shutdown_signal,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -81,7 +81,8 @@ async fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
     );
     audit.application(true, &ae_titles);
-    let served = serve(listener, app, until_stopped()).await;
+    let limits = pacs_server::limits::Limits::from_settings(&settings);
+    let served = pacs_server::limits::serve(listener, app, limits, until_stopped()).await;
     audit.application(false, &ae_titles);
     served
 }

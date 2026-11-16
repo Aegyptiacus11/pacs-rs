@@ -17,6 +17,8 @@ axum.workspace = true
 base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
+http-body.workspace = true
+hyper-util.workspace = true
 jwt-sessions.workspace = true
 mimalloc.workspace = true
 pacs-archive.workspace = true
@@ -32,11 +34,14 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+tokio-io-timeout.workspace = true
+tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 bytes.workspace = true
 dicom-core.workspace = true
 dicom-dictionary-std.workspace = true

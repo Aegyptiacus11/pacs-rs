@@ -29,7 +29,9 @@ dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
 futures = "0.3.34"
 getrandom = "0.4.3"
 hmac = "0.13.0"
+http-body = "1.0.1"
 http-body-util = "0.1.5"
+hyper-util = { version = "0.1.21", features = ["http1", "http2", "server-auto", "server-graceful", "service", "tokio"] }
 # jxl-rs, the libjxl project's JPEG XL decoder.
 jxl = "0.8.0"
 # The login: access JWTs and rotating refresh tokens, with its axum routes and its store on
@@ -56,9 +58,10 @@ sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["any", "macros", "migrate", "postgres", "runtime-tokio", "sqlite"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-io-timeout = "1.2.1"
 tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.7.1", features = ["cors", "trace"] }
+tower-http = { version = "0.7.1", features = ["cors", "timeout", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zune-core = { version = "0.5.3", default-features = false, features = ["std"] }

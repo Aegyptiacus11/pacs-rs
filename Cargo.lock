@@ -2106,8 +2106,11 @@ dependencies = [
  "dicom-object",
  "dicom-transfer-syntax-registry",
  "dicom-ul",
+ "futures",
  "getrandom 0.4.3",
+ "http-body",
  "http-body-util",
+ "hyper-util",
  "jwt-sessions",
  "mimalloc",
  "pacs-archive",
@@ -2126,6 +2129,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-io-timeout",
  "tower",
  "tower-http 0.7.1",
  "tracing",
@@ -3261,6 +3265,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-io-timeout"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bd86198d9ee903fedd2f9a2e72014287c0d9167e4ae43b5853007205dda1b76"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3352,6 +3366,7 @@ dependencies = [
  "http-body",
  "percent-encoding",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
  "tracing",

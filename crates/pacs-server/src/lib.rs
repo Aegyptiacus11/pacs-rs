@@ -24,6 +24,7 @@ mod annotations;
 pub mod audit;
 mod audit_routes;
 pub mod auth;
+pub mod limits;
 mod modalities;
 pub mod projects;
 mod protocols;
@@ -121,6 +122,37 @@ pub struct Settings {
     /// and audience (`aud`), and what a tool may name as `resource` when it asks for one.
     #[arg(long, env = "PACS_AUTH_ISSUER", default_value = "pacs-rs")]
     pub auth_issuer: String,
+
+    /// Seconds a client has to send a request's head (see `pacs_server::limits`); 0: no
+    /// limit.
+    #[arg(long, env = "PACS_HEADER_TIMEOUT", default_value_t = 30)]
+    pub header_timeout: u64,
+
+    /// Seconds a request's body may pause before the request fails; 0: no limit.
+    #[arg(long, env = "PACS_BODY_TIMEOUT", default_value_t = 60)]
+    pub body_timeout: u64,
+
+    /// Seconds within which a request without a body (GET, HEAD, DELETE, OPTIONS) must be
+    /// answered, or it gets 503; 0: no limit.
+    #[arg(long, env = "PACS_REQUEST_TIMEOUT", default_value_t = 300)]
+    pub request_timeout: u64,
+
+    /// Seconds a write to a client may stall before its connection is closed; 0: no limit.
+    #[arg(long, env = "PACS_WRITE_TIMEOUT", default_value_t = 60)]
+    pub write_timeout: u64,
+
+    /// Connections open at once; further ones wait to be accepted. 0: no bound.
+    #[arg(long, env = "PACS_MAX_CONNECTIONS", default_value_t = 1024)]
+    pub max_connections: usize,
+
+    /// Requests served at once; one more gets 503. 0: no bound.
+    #[arg(long, env = "PACS_MAX_REQUESTS", default_value_t = 256)]
+    pub max_requests: usize,
+
+    /// Requests served at once for one address; one more gets 429. Behind a reverse proxy
+    /// every request has the proxy's address: raise it, or 0 for no bound.
+    #[arg(long, env = "PACS_MAX_REQUESTS_PER_CLIENT", default_value_t = 64)]
+    pub max_requests_per_client: usize,
 
     /// Keep an audit trail in this file (see `pacs_server::audit`): one line per event,
     /// appended, in the format a hospital's audit repository reads. None by default: no
@@ -520,6 +552,8 @@ pub fn app_with_audit(
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }
+    // outside everything that works for a request, inside the line that logs it
+    app = limits::Limits::from_settings(settings).layer(app);
     // one line per request at INFO; tower-http's default is DEBUG
     let trace = TraceLayer::new_for_http()
         // as tower-http's default span at INFO, but without a download token in the URI
@@ -557,18 +591,14 @@ fn cors(origins: &[String]) -> anyhow::Result<CorsLayer> {
         .expose_headers([header::CONTENT_TYPE, header::CONTENT_LENGTH]))
 }
 
-/// Serve `app` on `listener` until `shutdown` completes, then finish open requests.
+/// Serve `app` on `listener` until `shutdown` completes, then finish open requests, with
+/// the default limits on connections ([`limits::serve`] takes others).
 pub async fn serve(
     listener: tokio::net::TcpListener,
     app: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    // with each caller's address, for the audit trail
-    let app = app.into_make_service_with_connect_info::<SocketAddr>();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
-    Ok(())
+    limits::serve(listener, app, limits::Limits::default(), shutdown).await
 }
 
 /// Whether the server listening at `listen` answers 200 on `/healthz` within 5 seconds.
