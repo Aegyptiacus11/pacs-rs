@@ -10,6 +10,12 @@ use std::sync::Arc;
 
 use crate::{Error, Index};
 
+/// The account a request is limited to: what a server leaves in the request's extensions
+/// for an account that does not see everything, and what a handler reads to bound its
+/// index with [`Index::limited_to`]. No such extension: no limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeenBy(pub String);
+
 impl Index {
     /// The same index, read as `account` sees it. Writes are not bounded by it; those who
     /// write for an account check first with what they can read.

@@ -20,6 +20,7 @@ mod error;
 mod find;
 mod resources;
 pub mod schema;
+mod scope;
 mod upload;
 
 pub use error::RestError;
@@ -40,7 +41,7 @@ pub fn router(archive: Archive, max_upload_bytes: usize) -> Router {
 pub fn router_with_api(archive: Archive, max_upload_bytes: usize) -> (Router, OpenApi) {
     described()
         .layer(DefaultBodyLimit::max(max_upload_bytes))
-        .with_state(AppState { archive })
+        .with_state(scope::Whole::new(AppState { archive }))
         .split_for_parts()
 }
 
@@ -49,7 +50,7 @@ pub fn api() -> OpenApi {
     described().into_openapi()
 }
 
-fn described() -> OpenApiRouter<AppState> {
+fn described() -> OpenApiRouter<scope::Whole> {
     OpenApiRouter::new()
         .routes(routes!(upload::instance))
         .routes(routes!(resources::instance, delete::instance))

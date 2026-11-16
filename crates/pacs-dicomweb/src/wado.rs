@@ -4,7 +4,7 @@
 //! nothing else (406). Responses carry validators for the browser's cache (`cache`).
 
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::Path;
 use axum::http::header::{ACCEPT, CONTENT_TYPE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -19,7 +19,8 @@ use pacs_index::InstanceEntry;
 use crate::cache::Validator;
 use crate::media::{Accept, Choice, Packaging, accepts_json, choose};
 use crate::qido::DICOM_JSON;
-use crate::{ApiError, AppState, multipart};
+use crate::scope::Seen;
+use crate::{ApiError, multipart};
 
 const DICOM: &str = "application/dicom";
 
@@ -170,7 +171,7 @@ async fn study_entries(archive: &Archive, study: &str) -> Result<Vec<InstanceEnt
 }
 
 pub(crate) async fn study(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path(study): Path<String>,
 ) -> Result<Response, ApiError> {
@@ -179,7 +180,7 @@ pub(crate) async fn study(
 }
 
 pub(crate) async fn series(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path((study, series)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
@@ -192,7 +193,7 @@ pub(crate) async fn series(
 }
 
 pub(crate) async fn instance(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path((study, series, instance)): Path<(String, String, String)>,
 ) -> Result<Response, ApiError> {
@@ -229,7 +230,7 @@ fn metadata_response(headers: &HeaderMap, metadata: Vec<String>) -> Result<Respo
 }
 
 pub(crate) async fn study_metadata(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path(study): Path<String>,
 ) -> Result<Response, ApiError> {
@@ -246,7 +247,7 @@ pub(crate) async fn study_metadata(
 }
 
 pub(crate) async fn series_metadata(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path((study, series)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
@@ -259,7 +260,7 @@ pub(crate) async fn series_metadata(
 }
 
 pub(crate) async fn instance_metadata(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path((study, series, instance)): Path<(String, String, String)>,
 ) -> Result<Response, ApiError> {
@@ -292,7 +293,7 @@ fn frame_error(e: FrameError) -> ApiError {
 }
 
 pub(crate) async fn frames(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path((study, series, instance, list)): Path<(String, String, String, String)>,
 ) -> Result<Response, ApiError> {

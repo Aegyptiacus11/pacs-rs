@@ -8,7 +8,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -20,6 +20,7 @@ use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
 use crate::schema::Error;
+use crate::scope::Seen;
 use crate::{AppState, RestError};
 
 fn tag<'a>(tags: &'a Value, name: &str) -> &'a str {
@@ -67,7 +68,7 @@ fn name(parts: &[&str]) -> String {
     )
 )]
 pub(crate) async fn study(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Response, RestError> {
     let index = state.archive.index();
@@ -90,7 +91,7 @@ pub(crate) async fn study(
     )
 )]
 pub(crate) async fn patient(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Response, RestError> {
     let index = state.archive.index();
@@ -138,10 +139,7 @@ fn yes() -> bool {
         (status = 404, description = "One of the identifiers names nothing; the body is empty.")
     )
 )]
-pub(crate) async fn create_archive(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> Result<Response, RestError> {
+pub(crate) async fn create_archive(Seen(state): Seen, body: Bytes) -> Result<Response, RestError> {
     let request: CreateArchive = serde_json::from_slice(&body).map_err(|e| {
         RestError::bad_request("Bad request", format!("not an archive request: {e}"))
     })?;
@@ -174,7 +172,7 @@ pub(crate) async fn create_archive(
     )
 )]
 pub(crate) async fn create_archive_get(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, RestError> {
     let ids: Vec<String> = params

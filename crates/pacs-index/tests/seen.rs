@@ -46,6 +46,10 @@ fn all_patients() -> PatientQuery {
     }
 }
 
+fn projects(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
 struct Ids {
     patient: String,
     study: String,
@@ -272,7 +276,7 @@ async fn a_limited_index_reads_only_its_projects() {
         assert_eq!(reader.unlimited().account(), None);
 
         index
-            .set_account_projects(READER, Some(&["liver".to_owned()]))
+            .set_account_projects(READER, Some(&projects(&["liver"])))
             .await
             .unwrap();
         check(&reader, &[&liver], &[&lung, &received]).await;
@@ -280,7 +284,7 @@ async fn a_limited_index_reads_only_its_projects() {
         check(&index, &[&liver, &lung, &received], &[]).await;
 
         index
-            .set_account_projects(READER, Some(&["liver".to_owned(), "lung".to_owned()]))
+            .set_account_projects(READER, Some(&projects(&["liver", "lung"])))
             .await
             .unwrap();
         check(&reader, &[&liver, &lung], &[&received]).await;
@@ -295,7 +299,7 @@ async fn a_patient_is_the_studies_the_account_sees() {
     for index in common::indexes().await {
         let [liver, lung, received] = three_studies(&index).await;
         index
-            .set_account_projects(READER, Some(&["liver".to_owned()]))
+            .set_account_projects(READER, Some(&projects(&["liver"])))
             .await
             .unwrap();
         let reader = index.limited_to(READER);
@@ -369,7 +373,7 @@ async fn a_limited_index_deletes_only_what_it_sees() {
     for index in common::indexes().await {
         let [liver, lung, received] = three_studies(&index).await;
         index
-            .set_account_projects(READER, Some(&["liver".to_owned()]))
+            .set_account_projects(READER, Some(&projects(&["liver"])))
             .await
             .unwrap();
         let reader = index.limited_to(READER);

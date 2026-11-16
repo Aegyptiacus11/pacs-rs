@@ -1,7 +1,7 @@
 //! STOW-RS (PS3.18 10.5): `multipart/related; type="application/dicom"` bodies of DICOM
 //! files.
 
-use axum::extract::{Path, State};
+use axum::extract::Path;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::media::MediaType;
 use crate::qido::{DICOM_JSON, instance_url, study_url};
+use crate::scope::Seen;
 use crate::{ApiError, AppState, multipart};
 
 /// Failure Reason (0008,1197) values, from the C-STORE statuses of PS3.4 B.2.3 and the
@@ -51,9 +52,10 @@ fn failure_of(e: &IngestError, bytes: &Bytes) -> Failure {
         IngestError::Invalid(_) => reason::CANNOT_UNDERSTAND,
         IngestError::WrongStudy { .. } => reason::DOES_NOT_MATCH,
         IngestError::TooCostly { .. } => reason::OUT_OF_RESOURCES,
-        IngestError::Conflict(_) | IngestError::Store(_) | IngestError::Index(_) => {
-            reason::PROCESSING_FAILURE
-        }
+        IngestError::Conflict(_)
+        | IngestError::Limited
+        | IngestError::Store(_)
+        | IngestError::Index(_) => reason::PROCESSING_FAILURE,
     };
     Failure {
         sop_class_uid: key.as_ref().map(|k| k.sop_class_uid.clone()),
@@ -72,6 +74,13 @@ async fn store_parts(
     body: Bytes,
     study: Option<String>,
 ) -> Result<Response, ApiError> {
+    // nothing is stored for an account limited to projects: it would be in no project
+    if state.archive.index().account().is_some() {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            pacs_archive::IngestError::Limited.to_string(),
+        ));
+    }
     let content_type = headers
         .get(CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
@@ -208,7 +217,7 @@ fn unsupported(message: impl Into<String>) -> ApiError {
 }
 
 pub(crate) async fn store(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
@@ -216,7 +225,7 @@ pub(crate) async fn store(
 }
 
 pub(crate) async fn store_in_study(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path(study): Path<String>,
     body: Bytes,

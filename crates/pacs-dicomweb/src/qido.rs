@@ -5,7 +5,7 @@
 //! carries the computed attributes (counts, Modalities in Study, Retrieve URL), so
 //! `includefield` for them is satisfied without asking.
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::HeaderMap;
 use axum::http::header::ACCEPT;
 use axum::response::{IntoResponse, Response};
@@ -13,6 +13,7 @@ use pacs_index::StudyFilter;
 use serde_json::{Value, json};
 
 use crate::media::{Accept, accepts_json};
+use crate::scope::Seen;
 use crate::{ApiError, AppState};
 
 pub(crate) const DICOM_JSON: &str = "application/dicom+json";
@@ -177,7 +178,7 @@ async fn study_attributes(state: &AppState, study: &str) -> Result<Value, ApiErr
 }
 
 pub(crate) async fn studies(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Query(params): Params,
 ) -> Result<Response, ApiError> {
@@ -218,7 +219,7 @@ pub(crate) async fn studies(
 }
 
 pub(crate) async fn series(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path(study): Path<String>,
     Query(params): Params,
@@ -259,7 +260,7 @@ pub(crate) async fn series(
 }
 
 pub(crate) async fn instances(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     headers: HeaderMap,
     Path((study, series)): Path<(String, String)>,
     Query(params): Params,
