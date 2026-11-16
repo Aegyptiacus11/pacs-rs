@@ -254,3 +254,67 @@ async fn concurrent_records_all_succeed() {
         assert_eq!(study.instance_count, 64, "{:?}", index.dialect());
     }
 }
+
+#[tokio::test]
+async fn a_study_keeps_the_project_of_its_first_instance() {
+    for index in common::indexes().await {
+        let new = |series: &SyntheticSeries, slice: u32, project: Option<&str>| {
+            let bytes = series.slice_bytes(slice);
+            let instance = Instance::from_bytes(&bytes).unwrap();
+            NewInstance::new(&instance, format!("dicom/{slice}.dcm"), bytes.len())
+                .unwrap()
+                .in_project(project)
+        };
+        let liver = SyntheticSeries::new(31, 2);
+        let received = SyntheticSeries::new(32, 2);
+        assert_eq!(index.study_project(&liver.study_uid()).await.unwrap(), None);
+
+        index.record(&new(&liver, 0, Some("liver"))).await.unwrap();
+        index.record(&new(&received, 0, None)).await.unwrap();
+        let project =
+            async |series: &SyntheticSeries| index.study_project(&series.study_uid()).await;
+        assert_eq!(project(&liver).await.unwrap(), Some(Some("liver".into())));
+        assert_eq!(project(&received).await.unwrap(), Some(None));
+
+        // more of the study, the same way: taken, and sent again, replaced
+        for slice in [1, 0] {
+            index
+                .record(&new(&liver, slice, Some("liver")))
+                .await
+                .unwrap();
+            index.record(&new(&received, slice, None)).await.unwrap();
+        }
+
+        // another way in is refused, whichever it is, and says why
+        for (series, slice, other, why) in [
+            (
+                &liver,
+                1,
+                None,
+                "is in project liver, and this instance comes for no project",
+            ),
+            (
+                &liver,
+                1,
+                Some("lung"),
+                "is in project liver, and this instance comes for project lung",
+            ),
+            (
+                &received,
+                1,
+                Some("liver"),
+                "is stored as received, in no project, and this instance comes for project liver",
+            ),
+        ] {
+            match index.record(&new(series, slice, other)).await {
+                Err(Error::Conflict(said)) => assert!(said.contains(why), "{said}"),
+                other => panic!("not refused: {other:?}"),
+            }
+        }
+        // nothing changed by the refusals
+        assert_eq!(project(&liver).await.unwrap(), Some(Some("liver".into())));
+        assert_eq!(project(&received).await.unwrap(), Some(None));
+        let study = index.study(&liver.study_uid()).await.unwrap().unwrap();
+        assert_eq!(study.instance_count, 2);
+    }
+}
