@@ -121,9 +121,9 @@ pub fn open_projects(
             let keys = Keys::new(secret.into_bytes()).with_context(|| variable.clone())?;
             Ok(Arc::new(Project {
                 ae_title: config.ae_title,
+                archive: archive.clone().for_project(&config.profile.name),
                 profile: config.profile,
                 keys,
-                archive: archive.clone(),
                 quarantine: quarantine.clone(),
             }))
         })

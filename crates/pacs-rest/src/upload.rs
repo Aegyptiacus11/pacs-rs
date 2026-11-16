@@ -23,7 +23,7 @@ use crate::{AppState, RestError};
     responses(
         (status = 200, description = "Stored, or already there.", body = Stored),
         (status = 400, description = "The body is not a DICOM file.", body = Error),
-        (status = 409, description = "The file names a study or series that is stored under another patient or study.", body = Error),
+        (status = 409, description = "The file names a series or instance that is stored under another study or series, or a study that came in through a project: only that project's AE title adds to it.", body = Error),
         (status = 413, description = "The file is larger than `PACS_MAX_UPLOAD_BYTES`, or would take too much memory to read.", body = Error)
     )
 )]

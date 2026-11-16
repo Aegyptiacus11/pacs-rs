@@ -87,6 +87,8 @@ pub struct Archive {
     index: Index,
     overwrite: bool,
     compression: Compression,
+    /// The project whose instances this archive value takes in; none for the archive itself.
+    project: Option<String>,
     /// Uploads share it, a deletion holds it alone: a file's storage key comes from its
     /// UIDs, so an upload of an instance being deleted would otherwise have its new file
     /// removed by the deletion. One server process; several on one index would need more.
@@ -111,6 +113,7 @@ impl Archive {
             index,
             overwrite: false,
             compression: Compression::default(),
+            project: None,
             writes: Arc::default(),
             read_limit: DEFAULT_READ_LIMIT,
             reading: Arc::new(Semaphore::new(read_permits(DEFAULT_READ_LIMIT))),
@@ -168,6 +171,14 @@ impl Archive {
     /// under its UIDs can change.
     pub fn overwrites(&self) -> bool {
         self.overwrite
+    }
+
+    /// The same archive for what comes in through `project`: its studies are recorded as
+    /// that project's, and an instance for a study of another project, or of none, is
+    /// refused.
+    pub fn for_project(mut self, project: &str) -> Self {
+        self.project = Some(project.to_owned());
+        self
     }
 
     /// How native pixel data is stored; JPEG-LS lossless unless set otherwise.
@@ -248,7 +259,9 @@ impl Archive {
         let (instance, bytes) = self.compress(instance, bytes).await;
         let size = bytes.len();
         let object_key = self.store.put(&instance.key, bytes).await?;
-        let new = match NewInstance::new(&instance, object_key.clone(), size) {
+        let new = NewInstance::new(&instance, object_key.clone(), size)
+            .map(|new| new.in_project(self.project.as_deref()));
+        let new = match new {
             Ok(new) => new,
             Err(e) => {
                 self.store.delete(&object_key).await?;

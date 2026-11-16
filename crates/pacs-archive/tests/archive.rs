@@ -451,3 +451,70 @@ async fn what_a_request_stored_is_handed_to_who_asks() {
         second.1[0].study_instance_uid
     );
 }
+
+#[tokio::test]
+async fn a_project_s_archive_records_its_studies_and_takes_no_other_s() {
+    let archive = uncompressed().await;
+    let liver = archive.clone().for_project("liver");
+    let series = SyntheticSeries::new(71, 2);
+    let study = series.study_uid();
+
+    liver
+        .ingest(Bytes::from(series.slice_bytes(0)))
+        .await
+        .unwrap();
+    let project = archive.index().study_project(&study).await.unwrap();
+    assert_eq!(project, Some(Some("liver".into())));
+
+    // the rest of the study sent to the archive itself, or to another project: refused,
+    // and the file it stored first is removed again
+    for other in [archive.clone(), archive.clone().for_project("lung")] {
+        let err = other
+            .ingest(Bytes::from(series.slice_bytes(1)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, IngestError::Conflict(said) if said.contains("is in project liver")),
+            "{err:?}"
+        );
+    }
+    let stored = archive
+        .index()
+        .instances(&study, &series.series_uid(), None)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        archive
+            .index()
+            .study_statistics(&pacs_core::public_ids::study("SYN71", &study))
+            .await
+            .unwrap()
+            .unwrap()
+            .instances,
+        1
+    );
+
+    // the instance already there, sent another way, is kept as first stored
+    let again = archive
+        .ingest(Bytes::from(series.slice_bytes(0)))
+        .await
+        .unwrap();
+    assert_eq!(again.outcome, Outcome::AlreadyStored);
+    assert_eq!(
+        archive.index().study_project(&study).await.unwrap(),
+        Some(Some("liver".into()))
+    );
+
+    // once the study is deleted, it can come in the other way
+    let id = pacs_core::public_ids::study("SYN71", &study);
+    archive.delete(Level::Study, &id).await.unwrap().unwrap();
+    archive
+        .ingest(Bytes::from(series.slice_bytes(1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        archive.index().study_project(&study).await.unwrap(),
+        Some(None)
+    );
+}
