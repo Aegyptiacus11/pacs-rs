@@ -20,7 +20,7 @@ mdbook serve --open
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash
-git tag -a v0.8.1 -m v0.8.1 && git push origin v0.8.1
+git tag -a v0.9.0 -m v0.9.0 && git push origin v0.9.0
 ```
 
 `.github/workflows/release.yml` first runs every job of `ci.yml` on the tagged commit, and stops
