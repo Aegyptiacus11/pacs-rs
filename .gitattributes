@@ -1,0 +1,2 @@
+# DICOM files are bytes: no line-ending conversion on any platform
+*.dcm binary
