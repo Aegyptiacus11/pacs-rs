@@ -376,6 +376,7 @@ Permission, when the login is on: `write`.
 |---|---|---|
 | 200 | [Stored](#stored) | Stored, or already there. |
 | 400 | [Error](#error) | The body is not a DICOM file. |
+| 403 | [Error](#error) | The account is limited to some projects: what it sent would be in no project, so it stores nothing over HTTP. |
 | 409 | [Error](#error) | The file names a series or instance that is stored under another study or series, or a study that came in through a project: only that project's AE title adds to it. |
 | 413 | [Error](#error) | The file is larger than `PACS_MAX_UPLOAD_BYTES`, or would take too much memory to read. |
 
