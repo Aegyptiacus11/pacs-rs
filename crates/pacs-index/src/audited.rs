@@ -22,6 +22,9 @@ impl Index {
         &self,
         study_instance_uid: &str,
     ) -> Result<Option<AuditedStudy>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(None);
+        }
         Ok(self
             .audited(vec![study_instance_uid.to_owned()])
             .await?
@@ -36,19 +39,32 @@ impl Index {
         public_id: &str,
     ) -> Result<Vec<AuditedStudy>, Error> {
         let sql = match level {
-            Level::Patient => {
-                "SELECT study_instance_uid FROM studies WHERE patient_public_id = $1
-                  ORDER BY study_instance_uid"
-            }
-            Level::Study => "SELECT study_instance_uid FROM studies WHERE public_id = $1",
-            Level::Series => "SELECT study_instance_uid FROM series WHERE public_id = $1",
-            Level::Instance => {
+            Level::Patient => concat!(
+                "SELECT st.study_instance_uid FROM studies st
+                  WHERE st.patient_public_id = $1 AND",
+                seen!("st", "2"),
+                "ORDER BY st.study_instance_uid"
+            ),
+            Level::Study => concat!(
+                "SELECT st.study_instance_uid FROM studies st WHERE st.public_id = $1 AND",
+                seen!("st", "2")
+            ),
+            Level::Series => concat!(
+                "SELECT se.study_instance_uid FROM series se
+                   JOIN studies st USING (study_instance_uid) WHERE se.public_id = $1 AND",
+                seen!("st", "2")
+            ),
+            Level::Instance => concat!(
                 "SELECT se.study_instance_uid FROM instances i
-                   JOIN series se USING (series_instance_uid) WHERE i.public_id = $1"
-            }
+                   JOIN series se USING (series_instance_uid)
+                   JOIN studies st ON st.study_instance_uid = se.study_instance_uid
+                  WHERE i.public_id = $1 AND",
+                seen!("st", "2")
+            ),
         };
         let uids: Vec<String> = sqlx::query_scalar(sql)
             .bind(public_id)
+            .bind(self.account())
             .fetch_all(&self.pool)
             .await?;
         self.audited(uids).await

@@ -71,6 +71,10 @@ deleted or exported is written every time.
 
 - **Quarantined instances.** An instance a project's profile sets aside is logged, not
   audited.
+- **A request outside an account's projects.** An account [limited to some
+  projects](login.md#rights-per-project) that asks for a study outside them is answered 404,
+  and like any 404 on a study that leaves no line: the trail does not yet tell such a
+  request from one for a study that does not exist.
 - **C-ECHO**, and the jobs of `/jobs`, leave no line.
 - **Sending to a repository.** The lines are what IHE's Record Audit Event sends, but pacs-rs
   only writes them to the file. A syslog forwarder can ship the file as it is; sending over

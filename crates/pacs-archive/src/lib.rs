@@ -28,6 +28,9 @@ pub enum IngestError {
         "reading the file would take about {estimate} bytes of memory, over the limit of {limit}"
     )]
     TooCostly { estimate: u64, limit: u64 },
+    /// Sent through an archive value limited to an account ([`Archive::limited_to`]).
+    #[error("an account limited to projects cannot store: what it sends would be in no project")]
+    Limited,
     /// The UIDs contradict what the archive already holds.
     #[error("{0}")]
     Conflict(String),
@@ -181,6 +184,16 @@ impl Archive {
         self
     }
 
+    /// The same archive as `account` sees it ([`Index::limited_to`]): reads and deletions
+    /// stay within the account's projects. Nothing is stored through such a value: what it
+    /// took in would be in no project, so out of its own sight.
+    pub fn limited_to(&self, account: &str) -> Self {
+        Archive {
+            index: self.index.limited_to(account),
+            ..self.clone()
+        }
+    }
+
     /// How native pixel data is stored; JPEG-LS lossless unless set otherwise.
     pub fn with_compression(mut self, compression: Compression) -> Self {
         self.compression = compression;
@@ -215,6 +228,9 @@ impl Archive {
         bytes: Bytes,
         expected_study: Option<&str>,
     ) -> Result<Ingested, IngestError> {
+        if self.index.account().is_some() {
+            return Err(IngestError::Limited);
+        }
         // Before the lock: a deletion waiting for it must not hold up those who have room.
         let _reading = self.admit(&bytes).await?;
         let _writing = self.writes.read().await;

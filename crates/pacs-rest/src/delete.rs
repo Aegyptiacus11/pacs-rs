@@ -3,11 +3,12 @@
 //! closest ancestor still there, as the reference server's does.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::Path;
 use pacs_index::Level;
 use serde_json::{Value, json};
 
 use crate::schema::Deleted;
+use crate::scope::Seen;
 use crate::{AppState, RestError};
 
 async fn delete(state: &AppState, level: Level, id: &str) -> Result<Json<Value>, RestError> {
@@ -41,7 +42,7 @@ async fn delete(state: &AppState, level: Level, id: &str) -> Result<Json<Value>,
     )
 )]
 pub(crate) async fn patient(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     delete(&state, Level::Patient, &id).await
@@ -62,7 +63,7 @@ pub(crate) async fn patient(
     )
 )]
 pub(crate) async fn study(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     delete(&state, Level::Study, &id).await
@@ -83,7 +84,7 @@ pub(crate) async fn study(
     )
 )]
 pub(crate) async fn series(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     delete(&state, Level::Series, &id).await
@@ -104,7 +105,7 @@ pub(crate) async fn series(
     )
 )]
 pub(crate) async fn instance(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     delete(&state, Level::Instance, &id).await

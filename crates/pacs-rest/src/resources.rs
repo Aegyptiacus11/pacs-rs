@@ -3,13 +3,14 @@
 use std::collections::HashMap;
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use pacs_index::{RestInstance, RestPatient, RestSeries, RestStudy, Statistics};
 use serde_json::{Value, json};
 
 use crate::schema::{Error, Instance, Patient, PatientList, Series, Study, StudyList};
+use crate::scope::Seen;
 use crate::{AppState, RestError};
 
 pub(crate) fn patient_json(patient: RestPatient) -> Value {
@@ -113,7 +114,7 @@ fn page(ids: Vec<String>, params: &HashMap<String, String>) -> Result<Vec<String
     )
 )]
 pub(crate) async fn patients(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -142,7 +143,7 @@ pub(crate) async fn patients(
     )
 )]
 pub(crate) async fn patient(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let patient = state.archive.index().rest_patient(&id).await?;
@@ -161,7 +162,7 @@ pub(crate) async fn patient(
     )
 )]
 pub(crate) async fn patient_studies(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -187,7 +188,7 @@ pub(crate) async fn patient_studies(
     )
 )]
 pub(crate) async fn patient_series(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -215,7 +216,7 @@ pub(crate) async fn patient_series(
     )
 )]
 pub(crate) async fn patient_instances(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -240,7 +241,7 @@ pub(crate) async fn patient_instances(
     )
 )]
 pub(crate) async fn patient_statistics(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let stats = state
@@ -270,7 +271,7 @@ pub(crate) async fn patient_statistics(
     )
 )]
 pub(crate) async fn studies(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -299,7 +300,7 @@ pub(crate) async fn studies(
     )
 )]
 pub(crate) async fn study(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let study = state.archive.index().rest_study(&id).await?;
@@ -318,7 +319,7 @@ pub(crate) async fn study(
     )
 )]
 pub(crate) async fn study_series(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -344,7 +345,7 @@ pub(crate) async fn study_series(
     )
 )]
 pub(crate) async fn study_instances(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -369,7 +370,7 @@ pub(crate) async fn study_instances(
     )
 )]
 pub(crate) async fn study_statistics(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let stats = state
@@ -412,7 +413,7 @@ fn statistics_json(stats: Statistics) -> Value {
     )
 )]
 pub(crate) async fn series(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let series = state.archive.index().rest_series(&id).await?;
@@ -431,7 +432,7 @@ pub(crate) async fn series(
     )
 )]
 pub(crate) async fn series_instances(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let index = state.archive.index();
@@ -457,7 +458,7 @@ pub(crate) async fn series_instances(
     )
 )]
 pub(crate) async fn instance(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let instance = state.archive.index().rest_instance(&id).await?;
@@ -479,7 +480,7 @@ pub(crate) async fn instance(
     )
 )]
 pub(crate) async fn instance_file(
-    State(state): State<AppState>,
+    Seen(state): Seen,
     Path(id): Path<String>,
 ) -> Result<Response, RestError> {
     let instance = state
@@ -538,7 +539,7 @@ pub(crate) mod parents {
         )
     )]
     pub(crate) async fn study_patient(
-        State(state): State<AppState>,
+        Seen(state): Seen,
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         patient_of_study(&state, &id).await
@@ -556,7 +557,7 @@ pub(crate) mod parents {
         )
     )]
     pub(crate) async fn series_study(
-        State(state): State<AppState>,
+        Seen(state): Seen,
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         study(&state, &series_of(&state, &id).await?.parent_study).await
@@ -574,7 +575,7 @@ pub(crate) mod parents {
         )
     )]
     pub(crate) async fn series_patient(
-        State(state): State<AppState>,
+        Seen(state): Seen,
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         patient_of_study(&state, &series_of(&state, &id).await?.parent_study).await
@@ -592,7 +593,7 @@ pub(crate) mod parents {
         )
     )]
     pub(crate) async fn instance_series(
-        State(state): State<AppState>,
+        Seen(state): Seen,
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         let instance = instance_of(&state, &id).await?;
@@ -613,7 +614,7 @@ pub(crate) mod parents {
         )
     )]
     pub(crate) async fn instance_study(
-        State(state): State<AppState>,
+        Seen(state): Seen,
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         study(&state, &instance_of(&state, &id).await?.parent_study).await
@@ -631,7 +632,7 @@ pub(crate) mod parents {
         )
     )]
     pub(crate) async fn instance_patient(
-        State(state): State<AppState>,
+        Seen(state): Seen,
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         patient_of_study(&state, &instance_of(&state, &id).await?.parent_study).await

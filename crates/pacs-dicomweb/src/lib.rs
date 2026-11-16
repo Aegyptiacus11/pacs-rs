@@ -16,6 +16,7 @@ mod error;
 pub mod media;
 pub mod multipart;
 mod qido;
+mod scope;
 mod stow;
 mod wado;
 
@@ -108,5 +109,5 @@ pub fn router(archive: Archive, config: Config) -> Router {
             get(wado::frames),
         )
         .layer(DefaultBodyLimit::max(limit))
-        .with_state(state)
+        .with_state(scope::Whole::new(state))
 }

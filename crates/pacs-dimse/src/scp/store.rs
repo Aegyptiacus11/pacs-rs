@@ -126,9 +126,9 @@ pub(super) async fn store(
         Err(Refusal::Ingest(IngestError::Invalid(e))) => {
             (Status::CANNOT_UNDERSTAND, Some(e.to_string()))
         }
-        Err(Refusal::Ingest(e @ (IngestError::Conflict(_) | IngestError::WrongStudy { .. }))) => {
-            (Status::CANNOT_UNDERSTAND_CONFLICT, Some(e.to_string()))
-        }
+        Err(Refusal::Ingest(
+            e @ (IngestError::Conflict(_) | IngestError::WrongStudy { .. } | IngestError::Limited),
+        )) => (Status::CANNOT_UNDERSTAND_CONFLICT, Some(e.to_string())),
         Err(Refusal::Ingest(IngestError::Store(e))) => {
             tracing::error!(error = %e, sop_instance, "C-STORE: the store refused the file");
             (

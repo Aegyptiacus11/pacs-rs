@@ -59,7 +59,49 @@ struct Parents {
 impl Index {
     /// Delete a resource, everything under it and every ancestor it leaves empty. `None`
     /// when no resource has that ID at that level.
+    ///
+    /// For a value limited to an account ([`Index::limited_to`]) the resource must be one
+    /// it sees. Of a patient it deletes the studies it sees and leaves the others; and it
+    /// is not told of an ancestor it does not see.
     pub async fn delete(&self, level: Level, public_id: &str) -> Result<Option<Deleted>, Error> {
+        if self.account().is_none() {
+            return self.delete_any(level, public_id).await;
+        }
+        let whole = self.unlimited();
+        if level == Level::Patient {
+            let Some(patient) = self.rest_patient(public_id).await? else {
+                return Ok(None);
+            };
+            let mut object_keys = Vec::new();
+            for study in &patient.studies {
+                if let Some(deleted) = whole.delete_any(Level::Study, study).await? {
+                    object_keys.extend(deleted.object_keys);
+                }
+            }
+            return Ok(Some(Deleted {
+                object_keys,
+                remaining_ancestor: None,
+            }));
+        }
+        if self
+            .audited_by_public_id(level, public_id)
+            .await?
+            .is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(mut deleted) = whole.delete_any(level, public_id).await? else {
+            return Ok(None);
+        };
+        if let Some((Level::Patient, patient)) = &deleted.remaining_ancestor
+            && self.rest_patient(patient).await?.is_none()
+        {
+            deleted.remaining_ancestor = None;
+        }
+        Ok(Some(deleted))
+    }
+
+    async fn delete_any(&self, level: Level, public_id: &str) -> Result<Option<Deleted>, Error> {
         let mut tx = self.begin_write().await?;
         let conn = &mut *tx;
         let (keys_sql, parents) = match level {

@@ -57,7 +57,7 @@ use jwt_sessions::{
     AccessTokens, Auth, AuthUser, Claims, RefreshTokens, SqlRefreshStore, StoreError, UserStore,
     check_password, hash_password,
 };
-use pacs_index::{Index, StoredClient, StoredUser, UserChange};
+use pacs_index::{Index, SeenBy, StoredClient, StoredUser, UserChange};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -162,7 +162,7 @@ pub fn right_for(method: &Method, path: &str) -> Right {
         path.strip_prefix(prefix)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     };
-    if under("/users") || under("/clients") {
+    if under("/users") || under("/clients") || under("/projects") {
         return Right::Admin;
     }
     // every signed-in user may see the roles (what their own allows); changing them is for
@@ -253,6 +253,8 @@ pub struct Login {
     issuer: String,
     index: Index,
     cookie: CookieSettings,
+    /// The names of the projects of `PACS_PROJECTS`: what an account can be limited to.
+    projects: Arc<Vec<String>>,
 }
 
 /// How long a download token is good for: time for the browser to start the download.
@@ -376,6 +378,12 @@ pub async fn open_login(
         issuer,
         index: index.clone(),
         cookie,
+        projects: Arc::new(
+            crate::projects::project_configs(settings)?
+                .into_iter()
+                .map(|project| project.profile.name)
+                .collect(),
+        ),
     }))
 }
 
@@ -424,7 +432,31 @@ pub struct SignedIn {
     pub client: bool,
 }
 
+/// The projects a request's account is limited to, put there by the guard beside
+/// [`SeenBy`]; absent for an account that sees everything.
+#[derive(Debug, Clone)]
+pub struct Limited(pub Vec<String>);
+
+/// The key of a user's projects in the index.
+fn user_account(id: &str) -> String {
+    format!("user:{id}")
+}
+
+/// The key of a client's projects in the index.
+fn client_account(id: &str) -> String {
+    format!("client:{id}")
+}
+
 impl SignedIn {
+    /// The key of this account's projects in the index.
+    fn account(&self) -> String {
+        if self.client {
+            client_account(&self.id)
+        } else {
+            user_account(&self.id)
+        }
+    }
+
     pub fn may(&self, right: Right) -> bool {
         right
             .permission()
@@ -493,6 +525,24 @@ fn client_refused(error: &'static str, detail: &str) -> Response {
 /// Before every route: let open requests through, refuse the others without a valid access
 /// token (401) or with a role that does not allow them (403). The answer to a request that
 /// came with a valid token carries its [`SignedIn`], refused or not.
+/// Rights per project: for an account limited to some projects, the request is marked with
+/// the account ([`SeenBy`], which bounds every read of the archive behind the guard) and
+/// with its projects ([`Limited`]). Read from the index at each request, so a change holds
+/// at once, for tokens already given out too.
+async fn bound(login: &Login, account: &SignedIn, request: &mut Request) -> Result<(), Refusal> {
+    let key = account.account();
+    let projects = login
+        .index
+        .account_projects(&key)
+        .await
+        .map_err(|e| internal("reading an account's projects", e))?;
+    if let Some(projects) = projects {
+        request.extensions_mut().insert(SeenBy(key));
+        request.extensions_mut().insert(Limited(projects));
+    }
+    Ok(())
+}
+
 async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> Response {
     let (method, path) = (request.method().clone(), request.uri().path().to_owned());
     if is_open(&method, &path) {
@@ -532,6 +582,9 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
                     );
                     response.extensions_mut().insert(client);
                     return response;
+                }
+                if let Err(refusal) = bound(&login, &client, &mut request).await {
+                    return refusal.into_response();
                 }
                 request.extensions_mut().insert(client.clone());
                 let mut response = next.run(request).await;
@@ -583,6 +636,9 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
             refused(StatusCode::FORBIDDEN, "Your role does not allow this").into_response();
         response.extensions_mut().insert(user);
         return response;
+    }
+    if let Err(refusal) = bound(&login, &user, &mut request).await {
+        return refusal.into_response();
     }
     request.extensions_mut().insert(user.clone());
     let mut response = next.run(request).await;
@@ -700,11 +756,75 @@ fn from_index(what: &str, error: pacs_index::Error) -> Refusal {
     }
 }
 
-async fn me(Extension(user): Extension<SignedIn>) -> Json<Value> {
+/// `GET /auth/me`: who the token is, with `projects`: the projects the account is limited
+/// to, or `null` when it sees everything.
+async fn me(
+    Extension(user): Extension<SignedIn>,
+    limited: Option<Extension<Limited>>,
+) -> Json<Value> {
     let permissions: Vec<&str> = user.permissions.iter().map(|p| p.as_str()).collect();
-    Json(
-        json!({ "id": user.id, "login": user.login, "role": user.role, "permissions": permissions }),
-    )
+    let projects = limited.map(|Extension(Limited(projects))| projects);
+    Json(json!({
+        "id": user.id, "login": user.login, "role": user.role, "permissions": permissions,
+        "projects": projects,
+    }))
+}
+
+/// `GET /projects`: the names of this server's projects, for who limits accounts to them.
+async fn list_projects(State(login): State<Login>) -> Json<Value> {
+    Json(json!(*login.projects))
+}
+
+/// A field of an update that may be absent (no change), `null` or a value.
+fn given<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// The projects asked for an account, each one a project of this server, none twice; or
+/// the 422 that names the one that is not.
+fn known_projects(
+    login: &Login,
+    asked: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, Refusal> {
+    let Some(mut asked) = asked else {
+        return Ok(None);
+    };
+    if let Some(unknown) = asked.iter().find(|name| !login.projects.contains(name)) {
+        return Err(unprocessable(format!(
+            "{unknown:?} is not a project of this server"
+        )));
+    }
+    asked.sort();
+    asked.dedup();
+    Ok(Some(asked))
+}
+
+/// Keeps an account's projects (`None`: it sees everything) and answers with them.
+async fn keep_projects(
+    login: &Login,
+    account: &str,
+    projects: Option<Vec<String>>,
+) -> Result<Value, Refusal> {
+    login
+        .index
+        .set_account_projects(account, projects.as_deref())
+        .await
+        .map_err(|e| from_index("keeping an account's projects", e))?;
+    Ok(json!(projects))
+}
+
+/// An account's projects as shown: a list, or `null` when it sees everything.
+async fn shown_projects(login: &Login, account: &str) -> Result<Value, Refusal> {
+    let projects = login
+        .index
+        .account_projects(account)
+        .await
+        .map_err(|e| from_index("reading an account's projects", e))?;
+    Ok(json!(projects))
 }
 
 #[derive(Deserialize)]
@@ -776,7 +896,13 @@ async fn list_users(State(login): State<Login>) -> Result<Json<Value>, Refusal> 
         .users()
         .await
         .map_err(|e| from_index("listing users", e))?;
-    Ok(Json(Value::Array(users.iter().map(shown).collect())))
+    let mut list = Vec::with_capacity(users.len());
+    for user in &users {
+        let mut one = shown(user);
+        one["projects"] = shown_projects(&login, &user_account(&user.id)).await?;
+        list.push(one);
+    }
+    Ok(Json(Value::Array(list)))
 }
 
 #[derive(Deserialize)]
@@ -784,6 +910,9 @@ struct NewUser {
     login: String,
     password: String,
     role: String,
+    /// The projects to limit the user to; absent or `null`: every study.
+    #[serde(default)]
+    projects: Option<Vec<String>>,
 }
 
 async fn create_user(
@@ -793,6 +922,7 @@ async fn create_user(
     let new = body(new)?;
     let name = normal_login(&new.login).map_err(unprocessable)?;
     let role = known_role(&login, &new.role).await?;
+    let projects = known_projects(&login, new.projects)?;
     check_new_password(&new.password).map_err(unprocessable)?;
     let id = new_id().map_err(|e| internal("making a user id", e))?;
     let hash = hashed(new.password)
@@ -803,7 +933,9 @@ async fn create_user(
         .create_user(&id, &name, &hash, &role)
         .await
         .map_err(|e| from_index("making a user", e))?;
-    Ok((StatusCode::CREATED, Json(shown(&user))).into_response())
+    let mut shown = shown(&user);
+    shown["projects"] = keep_projects(&login, &user_account(&user.id), projects).await?;
+    Ok((StatusCode::CREATED, Json(shown)).into_response())
 }
 
 #[derive(Deserialize)]
@@ -811,11 +943,14 @@ struct UserUpdate {
     password: Option<String>,
     role: Option<String>,
     active: Option<bool>,
+    /// Absent: no change. `null`: every study. A list: only those projects.
+    #[serde(default, deserialize_with = "given")]
+    projects: Option<Option<Vec<String>>>,
 }
 
-/// `PUT /users/{id}`: a new password, role or state. A new password or a deactivation ends
-/// the user's sessions; a new role reaches their access token at its next refresh, within
-/// 15 minutes.
+/// `PUT /users/{id}`: a new password, role, state or projects. A new password or a
+/// deactivation ends the user's sessions; a new role reaches their access token at its next
+/// refresh, within 15 minutes; new projects hold from their next request.
 async fn update_user(
     State(login): State<Login>,
     Path(id): Path<String>,
@@ -824,6 +959,10 @@ async fn update_user(
     let update = body(update)?;
     let role = match update.role.as_deref() {
         Some(role) => Some(known_role(&login, role).await?),
+        None => None,
+    };
+    let projects = match update.projects {
+        Some(asked) => Some(known_projects(&login, asked)?),
         None => None,
     };
     let password_hash = match update.password {
@@ -852,7 +991,13 @@ async fn update_user(
     if ends_sessions {
         end_sessions(&login, &id).await?;
     }
-    Ok(Json(shown(&user)).into_response())
+    let account = user_account(&user.id);
+    let mut shown = shown(&user);
+    shown["projects"] = match projects {
+        Some(projects) => keep_projects(&login, &account, projects).await?,
+        None => shown_projects(&login, &account).await?,
+    };
+    Ok(Json(shown).into_response())
 }
 
 async fn delete_user(
@@ -868,6 +1013,7 @@ async fn delete_user(
         return Err(refused(StatusCode::NOT_FOUND, "No such user"));
     }
     end_sessions(&login, &id).await?;
+    keep_projects(&login, &user_account(&id), None).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -1258,15 +1404,22 @@ async fn list_clients(State(login): State<Login>) -> Result<Json<Value>, Refusal
         .clients()
         .await
         .map_err(|e| from_index("listing clients", e))?;
-    Ok(Json(Value::Array(
-        clients.iter().map(shown_client).collect(),
-    )))
+    let mut list = Vec::with_capacity(clients.len());
+    for client in &clients {
+        let mut one = shown_client(client);
+        one["projects"] = shown_projects(&login, &client_account(&client.id)).await?;
+        list.push(one);
+    }
+    Ok(Json(Value::Array(list)))
 }
 
 #[derive(Deserialize)]
 struct NewClient {
     name: String,
     role: String,
+    /// The projects to limit the client to; absent or `null`: every study.
+    #[serde(default)]
+    projects: Option<Vec<String>>,
 }
 
 /// `POST /clients`: a new client. The answer is the only place its `secret` ever appears.
@@ -1278,6 +1431,7 @@ async fn create_client(
     let new = body(new)?;
     let name = client_name(&new.name).map_err(unprocessable)?;
     let role = known_role(&login, &new.role).await?;
+    let projects = known_projects(&login, new.projects)?;
     let id = new_id().map_err(|e| internal("making a client id", e))?;
     let secret = new_secret().map_err(|e| internal("making a client secret", e))?;
     let client = login
@@ -1287,6 +1441,7 @@ async fn create_client(
         .map_err(|e| from_index("making a client", e))?;
     tracing::info!(client = %client.name, role = %client.role, by = %user.login, "client made");
     let mut shown = shown_client(&client);
+    shown["projects"] = keep_projects(&login, &client_account(&client.id), projects).await?;
     shown["secret"] = secret.into();
     Ok(token_reply(StatusCode::CREATED, shown))
 }
@@ -1295,6 +1450,9 @@ async fn create_client(
 struct ClientUpdate {
     name: Option<String>,
     role: Option<String>,
+    /// Absent: no change. `null`: every study. A list: only those projects.
+    #[serde(default, deserialize_with = "given")]
+    projects: Option<Option<Vec<String>>>,
 }
 
 /// `PUT /clients/{id}`: a new name, a new role, or both. The role holds for the client's
@@ -1315,13 +1473,23 @@ async fn update_client(
         Some(role) => Some(known_role(&login, role).await?),
         None => None,
     };
+    let projects = match update.projects {
+        Some(asked) => Some(known_projects(&login, asked)?),
+        None => None,
+    };
     let client = login
         .index
         .update_client(&id, name.as_deref(), role.as_deref())
         .await
         .map_err(|e| from_index("changing a client", e))?
         .ok_or_else(|| refused(StatusCode::NOT_FOUND, "No such client"))?;
-    Ok(Json(shown_client(&client)).into_response())
+    let account = client_account(&client.id);
+    let mut shown = shown_client(&client);
+    shown["projects"] = match projects {
+        Some(projects) => keep_projects(&login, &account, projects).await?,
+        None => shown_projects(&login, &account).await?,
+    };
+    Ok(Json(shown).into_response())
 }
 
 /// `DELETE /clients/{id}`: revoke it. Its secret gets no more tokens, and those it has stop
@@ -1339,6 +1507,7 @@ async fn delete_client(
     if !deleted {
         return Err(refused(StatusCode::NOT_FOUND, "No such client"));
     }
+    keep_projects(&login, &client_account(&id), None).await?;
     tracing::info!(client = %id, by = %user.login, "client removed");
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -1359,6 +1528,7 @@ impl Login {
             .route("/roles", get(list_roles).post(create_role))
             .route("/roles/{id}", put(update_role).delete(delete_role))
             .route("/auth/token", post(token))
+            .route("/projects", get(list_projects))
             .route("/clients", get(list_clients).post(create_client))
             .route("/clients/{id}", put(update_client).delete(delete_client))
             .with_state(self.clone());

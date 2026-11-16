@@ -4,6 +4,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::auth::Limited;
+use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -29,9 +31,29 @@ use super::Remotes;
 /// an unknown id.
 pub(super) async fn move_studies(
     State(remotes): State<Arc<Remotes>>,
+    limited: Option<Extension<Limited>>,
     Path(id): Path<String>,
     body: Option<Json<Value>>,
 ) -> Response {
+    // An account limited to projects brings studies into one of them only: anything else
+    // would arrive where it does not see it, or identified.
+    if let Some(Extension(Limited(projects))) = &limited {
+        let asked = body
+            .as_ref()
+            .and_then(|b| b.get("Project"))
+            .and_then(Value::as_str);
+        if !asked.is_some_and(|name| projects.iter().any(|project| project == name)) {
+            return RestError::Status {
+                status: StatusCode::FORBIDDEN,
+                message: "Limited to projects".into(),
+                details: Some(
+                    r#"this account moves studies into its own projects only: name one in "Project""#
+                        .into(),
+                ),
+            }
+            .into_response();
+        }
+    }
     let config = &remotes.config;
     let Some(remote) = config.remote(&id) else {
         return RestError::NotFound.into_response();

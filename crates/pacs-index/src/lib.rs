@@ -7,6 +7,7 @@
 //! no common one. Each dialect's schema is in `migrations/<dialect>/`, applied on open.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dicom_dictionary_std::tags;
@@ -16,6 +17,23 @@ use sqlx::AnyPool;
 use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
+/// SQL: the study `$alias` is one the account bound as `$n` may see. Always true when that
+/// is NULL (no limit); otherwise the study's project must be one of the account's, so a
+/// study without a project is never seen.
+macro_rules! seen {
+    ($alias:literal, $n:literal) => {
+        concat!(
+            " (CAST($",
+            $n,
+            " AS TEXT) IS NULL OR ",
+            $alias,
+            ".project IN (SELECT project FROM account_projects WHERE account = $",
+            $n,
+            ")) "
+        )
+    };
+}
+
 mod annotations;
 mod audited;
 mod clients;
@@ -23,6 +41,7 @@ mod delete;
 mod protocols;
 mod rest;
 mod roles;
+mod seen;
 mod users;
 mod worklist;
 pub use audited::AuditedStudy;
@@ -31,6 +50,7 @@ pub use delete::{Deleted, Level};
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
 pub use roles::StoredRole;
+pub use seen::SeenBy;
 pub use users::{StoredUser, UserChange};
 pub use worklist::{
     PatientQuery, PatientSort, WorklistFacets, WorklistPatient, WorklistQuery, WorklistSort,
@@ -197,6 +217,9 @@ pub enum Dialect {
 pub struct Index {
     pool: AnyPool,
     dialect: Dialect,
+    /// The account whose projects bound what this value reads ([`Index::limited_to`]);
+    /// none for the whole index.
+    account: Option<Arc<str>>,
 }
 
 /// The study search, with `$modalities` the dialect's way to list a study's modalities
@@ -216,7 +239,9 @@ macro_rules! studies_query {
                 AND (CAST($2 AS TEXT) IS NULL OR st.patient_id = $2)
                 AND (CAST($3 AS TEXT) IS NULL OR st.accession_number = $3)
                 AND (CAST($4 AS TEXT) IS NULL OR st.study_date = $4)
-              ORDER BY st.study_date DESC NULLS LAST, st.study_instance_uid
+                AND",
+            seen!("st", "7"),
+            "ORDER BY st.study_date DESC NULLS LAST, st.study_instance_uid
               LIMIT $5 OFFSET $6"
         )
     };
@@ -286,7 +311,11 @@ impl Index {
             Dialect::Sqlite => sqlx::migrate!("./migrations/sqlite").run(&pool).await?,
             Dialect::Postgres => sqlx::migrate!("./migrations/postgres").run(&pool).await?,
         }
-        Ok(Index { pool, dialect })
+        Ok(Index {
+            pool,
+            dialect,
+            account: None,
+        })
     }
 
     /// A fresh index in memory, for tests.
@@ -323,6 +352,9 @@ impl Index {
         &self,
         study_instance_uid: &str,
     ) -> Result<Option<Option<String>>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(None);
+        }
         Ok(
             sqlx::query_scalar("SELECT project FROM studies WHERE study_instance_uid = $1")
                 .bind(study_instance_uid)
@@ -490,6 +522,7 @@ impl Index {
             .bind(&filter.study_date)
             .bind(filter.limit.unwrap_or(i64::MAX))
             .bind(filter.offset.unwrap_or(0))
+            .bind(self.account())
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -523,6 +556,9 @@ impl Index {
         study_instance_uid: &str,
         series_instance_uid: Option<&str>,
     ) -> Result<Vec<Series>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(Vec::new());
+        }
         let rows = sqlx::query(
             "SELECT se.study_instance_uid, se.series_instance_uid, se.attributes,
                     (SELECT count(*) FROM instances i
@@ -555,6 +591,9 @@ impl Index {
         series_instance_uid: &str,
         sop_instance_uid: Option<&str>,
     ) -> Result<Vec<InstanceEntry>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(Vec::new());
+        }
         let rows = sqlx::query(
             "SELECT se.study_instance_uid, i.series_instance_uid, i.sop_instance_uid,
                     i.sop_class_uid, i.transfer_syntax_uid, i.object_key, i.size_bytes,
@@ -629,6 +668,9 @@ impl Index {
         series_instance_uid: &str,
         sop_instance_uid: Option<&str>,
     ) -> Result<Vec<String>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(Vec::new());
+        }
         Ok(sqlx::query_scalar(
             "SELECT i.metadata
                FROM instances i JOIN series se USING (series_instance_uid)

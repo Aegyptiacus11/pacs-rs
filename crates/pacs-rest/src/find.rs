@@ -4,16 +4,16 @@
 //! answer 400 for now, rather than matching something else.
 
 use axum::Json;
-use axum::extract::State;
 use bytes::Bytes;
 use pacs_index::StudyFilter;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::ToSchema;
 
+use crate::RestError;
 use crate::resources::{instance_json, patient_json, series_json, study_json};
 use crate::schema::{Error, Found};
-use crate::{AppState, RestError};
+use crate::scope::Seen;
 
 /// A search.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -80,10 +80,7 @@ fn only(query: &Map<String, Value>, allowed: &[&str]) -> Result<(), RestError> {
         (status = 400, description = "The body is not a search, or asks for a match that is not supported yet.", body = Error)
     )
 )]
-pub(crate) async fn find(
-    State(state): State<AppState>,
-    body: Bytes,
-) -> Result<Json<Value>, RestError> {
+pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, RestError> {
     let find: Find = serde_json::from_slice(&body)
         .map_err(|e| RestError::bad_request("Bad request", format!("not a search: {e}")))?;
     let index = state.archive.index();

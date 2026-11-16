@@ -5,9 +5,10 @@
 //! Part of the web interface: off with it (`PACS_UI=false`). Behind the login when there is
 //! one (`auth`): reading needs a reader, writing an editor.
 
+use crate::scope::Seen;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -26,7 +27,7 @@ fn valid_uid(uid: &str) -> bool {
     !uid.is_empty() && uid.len() <= 64 && uid.bytes().all(|b| b.is_ascii_digit() || b == b'.')
 }
 
-async fn get_list(State(index): State<Index>, Path(study): Path<String>) -> Response {
+async fn get_list(Seen(index): Seen, Path(study): Path<String>) -> Response {
     if !valid_uid(&study) {
         return error(StatusCode::BAD_REQUEST, "Not a Study Instance UID");
     }
@@ -49,7 +50,7 @@ async fn get_list(State(index): State<Index>, Path(study): Path<String>) -> Resp
     }
 }
 
-async fn put(State(index): State<Index>, Path(study): Path<String>, body: Bytes) -> Response {
+async fn put(Seen(index): Seen, Path(study): Path<String>, body: Bytes) -> Response {
     if !valid_uid(&study) {
         return error(StatusCode::BAD_REQUEST, "Not a Study Instance UID");
     }
@@ -78,5 +79,5 @@ pub fn router(index: Index) -> Router {
     Router::new()
         .route("/ui/api/annotations/{study}", get(get_list).put(put))
         .layer(DefaultBodyLimit::max(MAX_BODY))
-        .with_state(index)
+        .with_state(crate::scope::Whole::new(index))
 }
