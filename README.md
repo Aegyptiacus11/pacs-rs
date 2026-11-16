@@ -44,6 +44,7 @@ an authenticating proxy in front before opening it to a network.
 | [Audit trail](docs/audit.md) | `PACS_AUDIT_FILE`: who signed in, and who stored, read, searched, exported and deleted what, as DICOM audit messages |
 | [Web interface](docs/web-interface.md) | the worklist, patients, the viewer, hanging protocols, measurements |
 | [DICOMweb](docs/dicomweb.md) | QIDO-RS, WADO-RS, STOW-RS; compression, transcoding, caching |
+| [REST API reference](docs/api-reference.md) | every request in full, written from the code; also served at `/openapi.json` |
 | [REST API](docs/rest-api.md) | the reference: resources by public ID, uploads, deletion, find, archives, remote AEs |
 | [DIMSE](docs/dimse.md) | C-ECHO, C-STORE, C-FIND and C-MOVE; statuses, AE titles |
 | [De-identification](docs/de-identification.md) | projects, PS3.15 profiles and options, quarantine |

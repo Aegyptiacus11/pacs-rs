@@ -27,6 +27,7 @@
 # Reference
 
 - [REST API](rest-api.md)
+- [REST API reference](api-reference.md)
 - [DICOMweb](dicomweb.md)
 - [DIMSE](dimse.md)
 

@@ -110,3 +110,26 @@ cargo test -p pacs-server --test docs
 - A page with a `$ curl` line that is not in `PAGES` fails the test.
 - Commands that cannot be run this way (Docker, a login on another host) go in a `bash` block,
   which is not run.
+
+## The API's description
+
+Each handler of the REST API carries its description in a `#[utoipa::path]` attribute: the
+method and path, the parameters, the answers by status. The router is built from those
+attributes (`pacs_rest::router_with_api`), so a route cannot be served without a description
+or described without being served. The answers' fields are the types of
+`crates/pacs-rest/src/schema.rs`.
+
+- **The server** serves the description at `/openapi.json`.
+- **The reference page**, `docs/api-reference.md`, is written from it, with each request's
+  permission taken from the login's own rule (`auth::right_for`):
+
+  ```bash
+  cargo run -p pacs-server --example api_reference
+  ```
+
+  `crates/pacs-server/tests/api_reference.rs` fails while the page is not what that command
+  writes, so after changing a description, run it and commit the page.
+- **The answers are checked against the description**: `crates/pacs-rest/tests/api.rs` reads
+  every answer into its type, and the types refuse a field they do not name. A field added
+  to an answer fails there until it is described.
+

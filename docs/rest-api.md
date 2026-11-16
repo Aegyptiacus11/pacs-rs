@@ -5,7 +5,10 @@ reference server](building.md#comparing-with-a-reference-server)), so its client
 DICOM identifiers (`pacs_core::public_ids`), the same as the reference server gives them.
 
 This page lists every request. [REST API, task by task](rest-guide.md) shows the common ones
-with their answers.
+with their answers, and the [REST API reference](api-reference.md) gives each request of
+patients, studies, series and instances in full: parameters, answers, statuses and the
+permission it needs. That reference is written from the code, and a running server serves
+the same description at `/openapi.json` (OpenAPI 3.1).
 
 | Request | |
 |---|---|

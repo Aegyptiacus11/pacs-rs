@@ -1,7 +1,8 @@
 # REST API, task by task
 
 How a script or a pipeline sends, finds, fetches and deletes studies. This page goes through
-the tasks in order on one study; the [REST API reference](rest-api.md) lists every request.
+the tasks in order on one study; the [REST API reference](api-reference.md) gives every
+request in full.
 
 Every command after a `$` here is run against a real server, with the answer shown, each time
 the documentation changes ([how](building.md#the-documentations-examples)). They assume the
