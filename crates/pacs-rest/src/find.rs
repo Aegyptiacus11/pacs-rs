@@ -9,20 +9,31 @@ use bytes::Bytes;
 use pacs_index::StudyFilter;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use utoipa::ToSchema;
 
 use crate::resources::{instance_json, patient_json, series_json, study_json};
+use crate::schema::{Error, Found};
 use crate::{AppState, RestError};
 
-#[derive(Debug, Deserialize)]
+/// A search.
+#[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct Find {
+    /// `Patient`, `Study`, `Series` or `Instance`, in any case.
     #[serde(rename = "Level")]
     level: String,
+    /// Attributes by keyword and the value each must equal: `{"PatientID": "SYN1"}`.
+    /// Empty or left out, a patient or study search finds them all; a series or instance
+    /// search needs its UID.
     #[serde(rename = "Query", default)]
+    #[schema(value_type = Object)]
     query: Map<String, Value>,
+    /// Answer with the resources instead of their identifiers.
     #[serde(rename = "Expand", default)]
     expand: bool,
+    /// At most this many.
     #[serde(rename = "Limit")]
     limit: Option<i64>,
+    /// Skip this many first.
     #[serde(rename = "Since")]
     since: Option<i64>,
 }
@@ -53,7 +64,22 @@ fn only(query: &Map<String, Value>, allowed: &[&str]) -> Result<(), RestError> {
     }
 }
 
-/// The body is JSON whatever its Content-Type says, as the reference server reads it.
+/// Searches by DICOM attributes at one level.
+///
+/// Exact matching only, on `PatientID` for patients; `StudyInstanceUID`, `PatientID`,
+/// `AccessionNumber` and `StudyDate` for studies; `SeriesInstanceUID` for series;
+/// `SOPInstanceUID` for instances. Wildcards, ranges and other attributes are refused, not
+/// ignored.
+#[utoipa::path(
+    post,
+    path = "/tools/find",
+    tag = "Search and archives",
+    request_body(content = Find, description = "The level and what to match."),
+    responses(
+        (status = 200, description = "The identifiers found, or the resources.", body = Found),
+        (status = 400, description = "The body is not a search, or asks for a match that is not supported yet.", body = Error)
+    )
+)]
 pub(crate) async fn find(
     State(state): State<AppState>,
     body: Bytes,

@@ -21,6 +21,7 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod annotations;
+pub mod api;
 pub mod audit;
 mod audit_routes;
 pub mod auth;
@@ -528,6 +529,10 @@ pub fn app_with_audit(
     );
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
+        .route(
+            "/openapi.json",
+            get(|| async { axum::Json(api::description()) }),
+        )
         .merge(rest)
         .nest(&path, dicomweb);
     if settings.ui {

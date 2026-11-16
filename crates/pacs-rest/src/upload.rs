@@ -7,8 +7,26 @@ use bytes::Bytes;
 use pacs_archive::{IngestError, Outcome};
 use serde_json::{Value, json};
 
+use crate::schema::{Error, Stored};
 use crate::{AppState, RestError};
 
+/// Stores one DICOM file.
+///
+/// The file is filed under the patient, study and series it names. An instance already stored
+/// is kept as it was and answered `AlreadyStored`, unless the server runs with
+/// `PACS_OVERWRITE_INSTANCES`.
+#[utoipa::path(
+    post,
+    path = "/instances",
+    tag = "Instances",
+    request_body(content = crate::schema::Binary, content_type = "application/dicom", description = "One DICOM file, with its preamble and File Meta Information."),
+    responses(
+        (status = 200, description = "Stored, or already there.", body = Stored),
+        (status = 400, description = "The body is not a DICOM file.", body = Error),
+        (status = 409, description = "The file names a study or series that is stored under another patient or study.", body = Error),
+        (status = 413, description = "The file is larger than `PACS_MAX_UPLOAD_BYTES`, or would take too much memory to read.", body = Error)
+    )
+)]
 pub(crate) async fn instance(
     State(state): State<AppState>,
     body: Bytes,

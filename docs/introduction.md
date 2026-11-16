@@ -21,7 +21,7 @@ research archive or a clinical one.
 | start a server and set it up | [Running](running.md) |
 | ask for a login, and manage users and roles | [Login](login.md) |
 | browse and view studies | [Web interface](web-interface.md) |
-| write a script or a pipeline against it | [REST API, task by task](rest-guide.md), then the [reference](rest-api.md) |
+| write a script or a pipeline against it | [REST API, task by task](rest-guide.md), then the [reference](api-reference.md) |
 | connect a viewer over HTTP | [DICOMweb](dicomweb.md) |
 | connect a hospital's PACS or a workstation | [DIMSE](dimse.md) |
 | de-identify what a project pulls in | [De-identification](de-identification.md) |
