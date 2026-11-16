@@ -131,6 +131,20 @@ fn like_escape(word: &str) -> String {
 }
 
 impl Index {
+    /// The condition that `studies st` is one this value's account may see; none without
+    /// an account.
+    fn seen_clause(&self, sql: &mut Sql) -> Option<String> {
+        self.seen_as("st", sql)
+    }
+
+    /// The same for `studies` under another name in the query.
+    fn seen_as(&self, alias: &str, sql: &mut Sql) -> Option<String> {
+        let account = sql.text(self.account()?);
+        Some(format!(
+            "{alias}.project IN (SELECT project FROM account_projects WHERE account = {account})"
+        ))
+    }
+
     /// A main tag of `column` (a JSON object of strings), as SQL text.
     fn main_tag(&self, column: &str, key: &str) -> String {
         match self.dialect {
@@ -187,6 +201,7 @@ impl Index {
     /// The conditions of `query` on `studies st`, its arguments added to `sql`.
     fn worklist_where(&self, query: &WorklistQuery, sql: &mut Sql) -> String {
         let mut and = vec!["st.public_id IS NOT NULL".to_owned()];
+        and.extend(self.seen_clause(sql));
         if let Some(patient) = &query.patient {
             and.push(format!("st.patient_public_id = {}", sql.text(patient)));
         }
@@ -360,12 +375,13 @@ impl Index {
 
     /// What the filters can choose, with counts, over every study or one patient's.
     pub async fn worklist_facets(&self, patient: Option<&str>) -> Result<WorklistFacets, Error> {
-        let scope = |sql: &mut Sql| match patient {
-            Some(p) => format!(
-                "st.public_id IS NOT NULL AND st.patient_public_id = {}",
-                sql.text(p)
-            ),
-            None => "st.public_id IS NOT NULL".to_owned(),
+        let scope = |sql: &mut Sql| {
+            let mut and = vec!["st.public_id IS NOT NULL".to_owned()];
+            and.extend(self.seen_clause(sql));
+            if let Some(p) = patient {
+                and.push(format!("st.patient_public_id = {}", sql.text(p)));
+            }
+            and.join(" AND ")
         };
         let mut modalities = Sql::default();
         let filter = scope(&mut modalities);
@@ -464,6 +480,7 @@ pub struct WorklistPatient {
 impl Index {
     fn patient_where(&self, query: &PatientQuery, sql: &mut Sql) -> String {
         let mut and = vec!["st.public_id IS NOT NULL".to_owned()];
+        and.extend(self.seen_clause(sql));
         for word in query.words.iter().filter(|w| !w.is_empty()) {
             let pattern = sql.text(like_escape(word));
             and.push(format!(
@@ -494,19 +511,24 @@ impl Index {
             PatientSort::LastStudy => "last_study",
             PatientSort::Studies => "studies",
         };
+        // the patient's other studies are counted within the same bounds
+        let also = match self.seen_as("s2", &mut sql) {
+            Some(seen) => format!(" AND {seen}"),
+            None => String::new(),
+        };
         let modalities = match self.dialect {
-            Dialect::Sqlite => {
+            Dialect::Sqlite => format!(
                 "(SELECT group_concat(modality, char(92)) FROM
                    (SELECT DISTINCT se.modality FROM series se
                       JOIN studies s2 ON s2.study_instance_uid = se.study_instance_uid
-                     WHERE s2.patient_public_id = st.patient_public_id
+                     WHERE s2.patient_public_id = st.patient_public_id{also}
                        AND se.modality IS NOT NULL ORDER BY se.modality))"
-            }
-            Dialect::Postgres => {
+            ),
+            Dialect::Postgres => format!(
                 "(SELECT string_agg(DISTINCT se.modality, chr(92) ORDER BY se.modality)
                     FROM series se JOIN studies s2 ON s2.study_instance_uid = se.study_instance_uid
-                   WHERE s2.patient_public_id = st.patient_public_id)"
-            }
+                   WHERE s2.patient_public_id = st.patient_public_id{also})"
+            ),
         };
         let limit = sql.arg(Arg::Int(query.limit.clamp(1, 1000)));
         let offset = sql.arg(Arg::Int(query.offset.max(0)));
@@ -517,7 +539,7 @@ impl Index {
                     max(nullif(st.study_date, '')) AS last_study,
                     (SELECT count(*) FROM instances i JOIN series se USING (series_instance_uid)
                        JOIN studies s2 ON s2.study_instance_uid = se.study_instance_uid
-                      WHERE s2.patient_public_id = st.patient_public_id) AS instances,
+                      WHERE s2.patient_public_id = st.patient_public_id{also}) AS instances,
                     {modalities} AS modalities
                FROM studies st
               WHERE {filter}

@@ -9,6 +9,9 @@ use crate::{Error, Index, now_ms};
 impl Index {
     /// The measurements kept for a study, as JSON text; `None` when it has none.
     pub async fn annotations(&self, study_instance_uid: &str) -> Result<Option<String>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(None);
+        }
         let row = sqlx::query("SELECT body FROM ui_annotations WHERE study_instance_uid = $1")
             .bind(study_instance_uid)
             .fetch_optional(&self.pool)
@@ -31,7 +34,7 @@ impl Index {
                 .bind(study_instance_uid)
                 .fetch_one(&self.pool)
                 .await?;
-        if known == 0 {
+        if known == 0 || !self.sees_study(study_instance_uid).await? {
             return Ok(false);
         }
         match body {

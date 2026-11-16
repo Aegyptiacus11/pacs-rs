@@ -115,10 +115,13 @@ pub struct Statistics {
     pub size_bytes: i64,
 }
 
-/// An instance query: the columns `instance` reads, then `$tail` (a literal), all fixed at
-/// compile time as sqlx wants.
+/// An instance query: the columns `instance` reads, then `$where` on `$1` and `$order`
+/// (literals), all fixed at compile time as sqlx wants. `$2` is the account.
 macro_rules! instance_query {
-    ($tail:literal) => {
+    ($where:literal) => {
+        instance_query!($where, "")
+    };
+    ($where:literal, $order:literal) => {
         concat!(
             "SELECT i.public_id, i.sop_instance_uid, i.series_instance_uid,
                     se.study_instance_uid, se.public_id AS parent_series,
@@ -128,7 +131,10 @@ macro_rules! instance_query {
                FROM instances i
                JOIN series se USING (series_instance_uid)
                JOIN studies st ON st.study_instance_uid = se.study_instance_uid ",
-            $tail
+            $where,
+            " AND",
+            seen!("st", "2"),
+            $order
         )
     };
 }
@@ -147,7 +153,8 @@ macro_rules! statistics_query {
                LEFT JOIN instances i ON i.series_instance_uid = se.series_instance_uid
               WHERE ",
             $key,
-            " = $1"
+            " = $1 AND",
+            seen!("st", "2")
         )
     };
 }
@@ -172,13 +179,16 @@ fn instance(row: AnyRow) -> Result<RestInstance, Error> {
 impl Index {
     /// Public IDs of every patient, or of those with Patient ID `patient_id`.
     pub async fn patient_public_ids(&self, patient_id: Option<&str>) -> Result<Vec<String>, Error> {
-        Ok(sqlx::query_scalar(
-            "SELECT DISTINCT patient_public_id FROM studies
-              WHERE patient_public_id IS NOT NULL
-                AND (CAST($1 AS TEXT) IS NULL OR patient_id = $1)
-              ORDER BY patient_public_id",
-        )
+        Ok(sqlx::query_scalar(concat!(
+            "SELECT DISTINCT st.patient_public_id FROM studies st
+              WHERE st.patient_public_id IS NOT NULL
+                AND (CAST($1 AS TEXT) IS NULL OR st.patient_id = $1)
+                AND",
+            seen!("st", "2"),
+            "ORDER BY st.patient_public_id"
+        ))
         .bind(patient_id)
+        .bind(self.account())
         .fetch_all(&self.pool)
         .await?)
     }
@@ -186,7 +196,7 @@ impl Index {
     pub async fn rest_patient(&self, public_id: &str) -> Result<Option<RestPatient>, Error> {
         // the first study to arrive gives the patient's main tags, as the patient was
         // created with it
-        let rows = sqlx::query(
+        let rows = sqlx::query(concat!(
             "SELECT st.public_id, st.patient_main_tags,
                     (SELECT min(i.received_ms) FROM instances i JOIN series se
                        USING (series_instance_uid)
@@ -194,10 +204,12 @@ impl Index {
                     (SELECT max(i.received_ms) FROM instances i JOIN series se
                        USING (series_instance_uid)
                       WHERE se.study_instance_uid = st.study_instance_uid) AS last_ms
-               FROM studies st WHERE st.patient_public_id = $1
-              ORDER BY st.study_date NULLS LAST, st.study_instance_uid",
-        )
+               FROM studies st WHERE st.patient_public_id = $1 AND",
+            seen!("st", "2"),
+            "ORDER BY st.study_date NULLS LAST, st.study_instance_uid"
+        ))
         .bind(public_id)
+        .bind(self.account())
         .fetch_all(&self.pool)
         .await?;
         let mut first: Option<(i64, &AnyRow)> = None;
@@ -230,13 +242,15 @@ impl Index {
 
     /// Public IDs of a patient's series, by study date then series number.
     pub async fn patient_series_ids(&self, patient_public_id: &str) -> Result<Vec<String>, Error> {
-        Ok(sqlx::query_scalar(
+        Ok(sqlx::query_scalar(concat!(
             "SELECT se.public_id FROM series se JOIN studies st USING (study_instance_uid)
-              WHERE st.patient_public_id = $1 AND se.public_id IS NOT NULL
-              ORDER BY st.study_date NULLS LAST, st.study_instance_uid,
-                       se.series_number IS NULL, se.series_number, se.series_instance_uid",
-        )
+              WHERE st.patient_public_id = $1 AND se.public_id IS NOT NULL AND",
+            seen!("st", "2"),
+            "ORDER BY st.study_date NULLS LAST, st.study_instance_uid,
+                       se.series_number IS NULL, se.series_number, se.series_instance_uid"
+        ))
         .bind(patient_public_id)
+        .bind(self.account())
         .fetch_all(&self.pool)
         .await?)
     }
@@ -247,12 +261,13 @@ impl Index {
         patient_public_id: &str,
     ) -> Result<Vec<RestInstance>, Error> {
         sqlx::query(instance_query!(
-            "WHERE st.patient_public_id = $1
-              ORDER BY st.study_date NULLS LAST, st.study_instance_uid,
+            "WHERE st.patient_public_id = $1",
+            "ORDER BY st.study_date NULLS LAST, st.study_instance_uid,
                        se.series_number IS NULL, se.series_number, se.series_instance_uid,
                        i.instance_number IS NULL, i.instance_number, i.sop_instance_uid"
         ))
         .bind(patient_public_id)
+        .bind(self.account())
         .fetch_all(&self.pool)
         .await?
         .into_iter()
@@ -262,9 +277,12 @@ impl Index {
 
     /// Public IDs of every study.
     pub async fn study_public_ids(&self) -> Result<Vec<String>, Error> {
-        Ok(sqlx::query_scalar(
-            "SELECT public_id FROM studies WHERE public_id IS NOT NULL ORDER BY public_id",
-        )
+        Ok(sqlx::query_scalar(concat!(
+            "SELECT st.public_id FROM studies st WHERE st.public_id IS NOT NULL AND",
+            seen!("st", "1"),
+            "ORDER BY st.public_id"
+        ))
+        .bind(self.account())
         .fetch_all(&self.pool)
         .await?)
     }
@@ -277,9 +295,11 @@ impl Index {
                 "FROM instances i JOIN series se USING (series_instance_uid)
                       WHERE se.study_instance_uid = st.study_instance_uid"
             ),
-            " FROM studies st WHERE st.public_id = $1"
+            " FROM studies st WHERE st.public_id = $1 AND",
+            seen!("st", "2")
         ))
         .bind(public_id)
+        .bind(self.account())
         .fetch_optional(&self.pool)
         .await?
         else {
@@ -312,9 +332,11 @@ impl Index {
                         se.main_tags, st.public_id AS parent_study, ",
             last_arrival!("FROM instances i WHERE i.series_instance_uid = se.series_instance_uid"),
             " FROM series se JOIN studies st USING (study_instance_uid)
-                  WHERE se.public_id = $1"
+                  WHERE se.public_id = $1 AND",
+            seen!("st", "2")
         ))
         .bind(public_id)
+        .bind(self.account())
         .fetch_optional(&self.pool)
         .await?
         else {
@@ -344,6 +366,7 @@ impl Index {
     pub async fn rest_instance(&self, public_id: &str) -> Result<Option<RestInstance>, Error> {
         sqlx::query(instance_query!("WHERE i.public_id = $1"))
             .bind(public_id)
+            .bind(self.account())
             .fetch_optional(&self.pool)
             .await?
             .map(instance)
@@ -355,13 +378,16 @@ impl Index {
         &self,
         series_instance_uid: &str,
     ) -> Result<Option<String>, Error> {
-        Ok(
-            sqlx::query_scalar("SELECT public_id FROM series WHERE series_instance_uid = $1")
-                .bind(series_instance_uid)
-                .fetch_optional(&self.pool)
-                .await?
-                .flatten(),
-        )
+        Ok(sqlx::query_scalar(concat!(
+            "SELECT se.public_id FROM series se JOIN studies st USING (study_instance_uid)
+                  WHERE se.series_instance_uid = $1 AND",
+            seen!("st", "2")
+        ))
+        .bind(series_instance_uid)
+        .bind(self.account())
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten())
     }
 
     pub async fn rest_instance_by_uid(
@@ -370,6 +396,7 @@ impl Index {
     ) -> Result<Option<RestInstance>, Error> {
         sqlx::query(instance_query!("WHERE i.sop_instance_uid = $1"))
             .bind(sop_instance_uid)
+            .bind(self.account())
             .fetch_optional(&self.pool)
             .await?
             .map(instance)
@@ -382,11 +409,12 @@ impl Index {
         study_public_id: &str,
     ) -> Result<Vec<RestInstance>, Error> {
         sqlx::query(instance_query!(
-            "WHERE st.public_id = $1
-              ORDER BY se.series_number IS NULL, se.series_number, se.series_instance_uid,
+            "WHERE st.public_id = $1",
+            "ORDER BY se.series_number IS NULL, se.series_number, se.series_instance_uid,
                        i.instance_number IS NULL, i.instance_number, i.sop_instance_uid"
         ))
         .bind(study_public_id)
+        .bind(self.account())
         .fetch_all(&self.pool)
         .await?
         .into_iter()
@@ -412,7 +440,11 @@ impl Index {
     }
 
     async fn statistics(&self, sql: &'static str, id: &str) -> Result<Option<Statistics>, Error> {
-        let row = sqlx::query(sql).bind(id).fetch_one(&self.pool).await?;
+        let row = sqlx::query(sql)
+            .bind(id)
+            .bind(self.account())
+            .fetch_one(&self.pool)
+            .await?;
         let found: i64 = row.try_get("found")?;
         if found == 0 {
             return Ok(None);
