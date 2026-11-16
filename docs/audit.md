@@ -44,6 +44,15 @@ About the data, for requests that succeeded; each names the study and its patien
 | Export | a ZIP archive or a media file-set downloaded, with the address it went to |
 | Query | a search: QIDO-RS from the root, the REST API's lists and `/tools/find`, the web interface's lists; with what was asked |
 
+**A request outside the account's projects.** An account [limited to some
+projects](login.md#rights-per-project) that asks for a study outside them is answered 404, as
+if the study were not there, and the trail says what happened: DICOM Instances Accessed with
+the action that was tried (read, update or delete), the outcome minor failure, the
+description `outside the account's projects`, and the study and patient that were named.
+This holds for viewing, retrieving, measurements, archives and deletions, over the REST API,
+DICOMweb and download links. A 404 for something that is in no study of the archive leaves no
+line, for any account.
+
 About DIMSE and the remote AEs:
 
 | Event | When |
@@ -71,10 +80,6 @@ deleted or exported is written every time.
 
 - **Quarantined instances.** An instance a project's profile sets aside is logged, not
   audited.
-- **A request outside an account's projects.** An account [limited to some
-  projects](login.md#rights-per-project) that asks for a study outside them is answered 404,
-  and like any 404 on a study that leaves no line: the trail does not yet tell such a
-  request from one for a study that does not exist.
 - **C-ECHO**, and the jobs of `/jobs`, leave no line.
 - **Sending to a repository.** The lines are what IHE's Record Audit Event sends, but pacs-rs
   only writes them to the file. A syslog forwarder can ship the file as it is; sending over
