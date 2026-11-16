@@ -8,7 +8,8 @@ to the documentation alone builds nothing, one to `ui/` builds the web interface
 anything else, a path the script does not know included, runs the Rust jobs.
 
 This documentation is the mdBook in `docs/` (`book.toml`). `.github/workflows/docs.yml` checks its
-links (`scripts/check-doc-links.py`) and builds it on every pull request that touches it, and
+links (`scripts/check-doc-links.py`), builds it and runs [its
+examples](building.md#the-documentations-examples) on every pull request that touches it, and
 publishes it to GitHub Pages on a push to `main`. To read it while writing:
 
 ```bash
