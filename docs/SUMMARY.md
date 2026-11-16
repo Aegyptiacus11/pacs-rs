@@ -7,6 +7,11 @@
 - [Quickstart](quickstart.md)
 - [Two ways to use pacs-rs](two-ways.md)
 
+# Learn
+
+- [DICOM: files and studies](dicom-files.md)
+- [DICOM: the network](dicom-network.md)
+
 # Guides
 
 - [REST API, task by task](rest-guide.md)
