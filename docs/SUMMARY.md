@@ -2,16 +2,28 @@
 
 [Introduction](introduction.md)
 
-# Using pacs-rs
+# Start
+
+- [Quickstart](quickstart.md)
+- [Two ways to use pacs-rs](two-ways.md)
+
+# Guides
+
+- [REST API, task by task](rest-guide.md)
+- [Web interface](web-interface.md)
+- [De-identification](de-identification.md)
+
+# Operate
 
 - [Running](running.md)
 - [Login](login.md)
 - [Audit trail](audit.md)
-- [Web interface](web-interface.md)
-- [DICOMweb](dicomweb.md)
+
+# Reference
+
 - [REST API](rest-api.md)
+- [DICOMweb](dicomweb.md)
 - [DIMSE](dimse.md)
-- [De-identification](de-identification.md)
 
 # Where it is going
 

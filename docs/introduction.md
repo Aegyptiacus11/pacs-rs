@@ -10,12 +10,18 @@ pull them in, de-identified on the way in when a project asks for it.
 
 ## Where to start
 
+New here: the [quickstart](quickstart.md) gets a server running with a first study in it in
+about five minutes, and [two ways to use pacs-rs](two-ways.md) says what to read next for a
+research archive or a clinical one.
+
 | To | Read |
 |---|---|
+| try it | [Quickstart](quickstart.md) |
 | start a server and set it up | [Running](running.md) |
 | ask for a login, and manage users and roles | [Login](login.md) |
 | browse and view studies | [Web interface](web-interface.md) |
-| connect a viewer or a pipeline over HTTP | [DICOMweb](dicomweb.md), [REST API](rest-api.md) |
+| write a script or a pipeline against it | [REST API, task by task](rest-guide.md), then the [reference](rest-api.md) |
+| connect a viewer over HTTP | [DICOMweb](dicomweb.md) |
 | connect a hospital's PACS or a workstation | [DIMSE](dimse.md) |
 | de-identify what a project pulls in | [De-identification](de-identification.md) |
 | see what is not built yet | [Roadmap](roadmap.md) |

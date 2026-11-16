@@ -35,12 +35,15 @@ an authenticating proxy in front before opening it to a network.
 
 | | |
 |---|---|
+| [Quickstart](docs/quickstart.md) | a server, a first study in it, on screen and over HTTP |
+| [Two ways to use pacs-rs](docs/two-ways.md) | what to read for a research archive, and for a clinical one |
+| [REST API, task by task](docs/rest-guide.md) | sending, listing, fetching, searching and deleting, with the answers |
 | [Running](docs/running.md) | Docker, the image, every `PACS_*` setting |
 | [Login](docs/login.md) | `PACS_AUTH`: signing in, roles, users |
 | [Audit trail](docs/audit.md) | `PACS_AUDIT_FILE`: who signed in, and who stored, read, searched, exported and deleted what, as DICOM audit messages |
 | [Web interface](docs/web-interface.md) | the worklist, patients, the viewer, hanging protocols, measurements |
 | [DICOMweb](docs/dicomweb.md) | QIDO-RS, WADO-RS, STOW-RS; compression, transcoding, caching |
-| [REST API](docs/rest-api.md) | resources by public ID, uploads, deletion, find, archives, remote AEs |
+| [REST API](docs/rest-api.md) | the reference: resources by public ID, uploads, deletion, find, archives, remote AEs |
 | [DIMSE](docs/dimse.md) | C-ECHO, C-STORE, C-FIND and C-MOVE; statuses, AE titles |
 | [De-identification](docs/de-identification.md) | projects, PS3.15 profiles and options, quarantine |
 | [Roadmap](docs/roadmap.md) | what is not built yet, towards a research and a clinical PACS in one |
