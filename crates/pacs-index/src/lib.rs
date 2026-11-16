@@ -62,6 +62,8 @@ pub struct NewInstance {
     pub instance_number: Option<i64>,
     pub object_key: String,
     pub size_bytes: i64,
+    /// The project the instance came in through; none when it is stored as received.
+    pub project: Option<String>,
     patient_id: Option<String>,
     patient_name: Option<String>,
     study_date: Option<String>,
@@ -83,6 +85,12 @@ pub struct NewInstance {
 }
 
 impl NewInstance {
+    /// The same instance, come in through `project`.
+    pub fn in_project(mut self, project: Option<&str>) -> Self {
+        self.project = project.map(str::to_owned);
+        self
+    }
+
     /// `object_key` is where the store put the file, `size_bytes` the file's length.
     pub fn new(instance: &Instance, object_key: String, size_bytes: usize) -> Result<Self, Error> {
         let key = &instance.key;
@@ -110,6 +118,7 @@ impl NewInstance {
             instance_number: instance.int(tags::INSTANCE_NUMBER),
             object_key,
             size_bytes: size_bytes as i64,
+            project: None,
             patient_id: instance.string(tags::PATIENT_ID),
             patient_name: instance.string(tags::PATIENT_NAME),
             study_date: instance.string(tags::STUDY_DATE),
@@ -308,6 +317,20 @@ impl Index {
         Ok(tx)
     }
 
+    /// The project of a study: `None` when the index has no such study, `Some(None)` when it
+    /// is stored as received.
+    pub async fn study_project(
+        &self,
+        study_instance_uid: &str,
+    ) -> Result<Option<Option<String>>, Error> {
+        Ok(
+            sqlx::query_scalar("SELECT project FROM studies WHERE study_instance_uid = $1")
+                .bind(study_instance_uid)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
     /// Record a stored instance. Re-sending an instance replaces its entry; study and
     /// series attributes follow the latest instance received.
     pub async fn record(&self, new: &NewInstance) -> Result<Recorded, Error> {
@@ -341,11 +364,35 @@ impl Index {
             )));
         }
 
+        // A study is in one project, or in none, from its first instance on: an instance that
+        // comes another way would put identified and de-identified data in one study, or
+        // move the study out of what its readers may see.
+        let study_project: Option<Option<String>> =
+            sqlx::query_scalar("SELECT project FROM studies WHERE study_instance_uid = $1")
+                .bind(&new.study_instance_uid)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some(project) = study_project.filter(|project| *project != new.project) {
+            let named = |project: &Option<String>| match project {
+                Some(name) => format!("in project {name}"),
+                None => "stored as received, in no project".to_owned(),
+            };
+            return Err(Error::Conflict(format!(
+                "study {} is {}, and this instance comes {}",
+                new.study_instance_uid,
+                named(&project),
+                match &new.project {
+                    Some(name) => format!("for project {name}"),
+                    None => "for no project".to_owned(),
+                }
+            )));
+        }
+
         sqlx::query(
             "INSERT INTO studies (study_instance_uid, patient_id, patient_name, study_date,
                                   accession_number, attributes, public_id, patient_public_id,
-                                  main_tags, patient_main_tags)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                  main_tags, patient_main_tags, project)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (study_instance_uid) DO UPDATE SET
                 patient_id = excluded.patient_id, patient_name = excluded.patient_name,
                 study_date = excluded.study_date, accession_number = excluded.accession_number,
@@ -363,6 +410,7 @@ impl Index {
         .bind(&new.patient_public_id)
         .bind(new.study_main_tags.to_string())
         .bind(new.patient_main_tags.to_string())
+        .bind(&new.project)
         .execute(&mut *tx)
         .await?;
 
