@@ -306,10 +306,8 @@ async fn a_patient_is_the_studies_the_account_sees() {
         let (shared, other) = (ids(&liver).patient, ids(&received).patient);
         assert_eq!(shared, ids(&lung).patient);
 
-        assert_eq!(
-            reader.patient_public_ids(None).await.unwrap(),
-            [shared.clone()]
-        );
+        let patients = reader.patient_public_ids(None).await.unwrap();
+        assert_eq!(patients.as_slice(), std::slice::from_ref(&shared));
         assert!(
             reader
                 .patient_public_ids(Some("SYN83"))
