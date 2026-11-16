@@ -198,6 +198,12 @@ async fn an_instance_sent_to_a_project_is_served_de_identified() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.study_instance_uid, keys.uid(&series.study_uid()));
+    // the study is recorded as the project's
+    let project = index
+        .study_project(&stored.study_instance_uid)
+        .await
+        .unwrap();
+    assert_eq!(project, Some(Some("liver-2026".into())));
 
     // The audit trail names what the archive holds, the pseudonyms: who the patient was is
     // not written there either.
