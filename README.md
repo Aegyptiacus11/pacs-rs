@@ -37,6 +37,7 @@ an authenticating proxy in front before opening it to a network.
 |---|---|
 | [Quickstart](docs/quickstart.md) | a server, a first study in it, on screen and over HTTP |
 | [Two ways to use pacs-rs](docs/two-ways.md) | what to read for a research archive, and for a clinical one |
+| [DICOM: files and studies](docs/dicom-files.md), [the network](docs/dicom-network.md) | what DICOM is, shown on the sample study, with the standard's sections |
 | [REST API, task by task](docs/rest-guide.md) | sending, listing, fetching, searching and deleting, with the answers |
 | [Running](docs/running.md) | Docker, the image, every `PACS_*` setting |
 | [Login](docs/login.md) | `PACS_AUTH`: signing in, roles, users |

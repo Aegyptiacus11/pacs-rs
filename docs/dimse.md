@@ -1,5 +1,7 @@
 # DIMSE
 
+New to the protocol? [DICOM: the network](dicom-network.md) explains the words used here.
+
 Off unless `PACS_DIMSE_LISTEN` names an address. What works now is steps 1 to 4 of
 [the plan for hospital interfaces](interop.md), a research PACS that pulls studies from a
 hospital's PACS and de-identifies them on ingest:

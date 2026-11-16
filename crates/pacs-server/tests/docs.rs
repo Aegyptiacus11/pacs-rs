@@ -31,7 +31,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 /// The pages whose examples are run.
-const PAGES: &[&str] = &["quickstart.md", "rest-guide.md"];
+const PAGES: &[&str] = &["dicom-files.md", "quickstart.md", "rest-guide.md"];
 /// Where the pages say the server is: `compose.yaml`'s port.
 const SERVER: &str = "http://127.0.0.1:8080";
 

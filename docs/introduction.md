@@ -17,6 +17,7 @@ research archive or a clinical one.
 | To | Read |
 |---|---|
 | try it | [Quickstart](quickstart.md) |
+| learn what DICOM is, on a real study | [DICOM: files and studies](dicom-files.md), [DICOM: the network](dicom-network.md) |
 | start a server and set it up | [Running](running.md) |
 | ask for a login, and manage users and roles | [Login](login.md) |
 | browse and view studies | [Web interface](web-interface.md) |
