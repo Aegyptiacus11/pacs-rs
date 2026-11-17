@@ -23,6 +23,7 @@ use tracing::Level;
 mod annotations;
 pub mod api;
 pub mod audit;
+pub mod audit_forward;
 mod audit_routes;
 pub mod auth;
 mod dimse_tls;
@@ -177,6 +178,23 @@ pub struct Settings {
     /// The name this server reports under in its audit messages (`AuditSourceID`).
     #[arg(long, env = "PACS_AUDIT_SOURCE_ID", default_value = "pacs-rs")]
     pub audit_source_id: String,
+
+    /// Send the audit trail to this audit record repository as well, over TLS: `host` or
+    /// `host:port` (6514 unless given). Needs PACS_AUDIT_FILE, which is what is sent.
+    #[arg(long, env = "PACS_AUDIT_REPOSITORY")]
+    pub audit_repository: Option<String>,
+
+    /// The certificate authorities (PEM) that sign the repository's certificate.
+    #[arg(long, env = "PACS_AUDIT_REPOSITORY_CA_FILE")]
+    pub audit_repository_ca_file: Option<PathBuf>,
+
+    /// The certificate pacs-rs shows the repository, with its chain (PEM), and
+    #[arg(long, env = "PACS_AUDIT_REPOSITORY_CERT_FILE")]
+    pub audit_repository_cert_file: Option<PathBuf>,
+
+    /// its private key (PEM).
+    #[arg(long, env = "PACS_AUDIT_REPOSITORY_KEY_FILE")]
+    pub audit_repository_key_file: Option<PathBuf>,
 
     /// Address DIMSE (C-ECHO, C-STORE) listens on, e.g. `0.0.0.0:11112`. None by default:
     /// no DIMSE port is opened.

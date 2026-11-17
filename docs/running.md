@@ -50,6 +50,9 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_AUTH_ISSUER` | `pacs-rs` | the name this server gives itself in the access tokens of [tools](login.md#tools): their `iss` and `aud` |
 | `PACS_AUDIT_FILE` | none | keep an [audit trail](audit.md) in this file, one line per event |
 | `PACS_AUDIT_SOURCE_ID` | `pacs-rs` | the name this server reports under in its audit messages |
+| `PACS_AUDIT_REPOSITORY` | none | [send the audit trail](audit.md#sending-to-a-repository) to this repository over TLS: `host` or `host:port` (6514) |
+| `PACS_AUDIT_REPOSITORY_CA_FILE` | | the authorities (PEM) that sign the repository's certificate; needed with it |
+| `PACS_AUDIT_REPOSITORY_CERT_FILE`, `PACS_AUDIT_REPOSITORY_KEY_FILE` | none | the certificate and key (PEM) pacs-rs shows the repository |
 | `PACS_HEADER_TIMEOUT` | `30` | seconds a client has to send a request's head; an idle connection is closed after it. `0`: no [limit](#limits-on-requests) |
 | `PACS_BODY_TIMEOUT` | `60` | seconds a request's body may pause |
 | `PACS_REQUEST_TIMEOUT` | `300` | seconds within which a request without a body must be answered |

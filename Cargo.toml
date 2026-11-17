@@ -67,6 +67,8 @@ rcgen = { version = "0.14.10", default-features = false, features = ["pem", "rin
 # TLS on DIMSE (PS3.15 B.12): the library dicom-ul speaks TLS with, and ring as its
 # cryptography, named explicitly since the build holds two
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+# the audit trail sent to a repository over TLS (RFC 5425)
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 # the description of the HTTP API, written beside each handler
 utoipa = "6.0.0"
 utoipa-axum = "0.3.0"
