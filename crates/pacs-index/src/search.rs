@@ -187,6 +187,31 @@ fn answers(study: &Study, search: &StudySearch) -> bool {
     })
 }
 
+impl StudySearch {
+    /// What is wrong with the search as a whole, if anything: a range of times that ends
+    /// before it starts, which has a meaning only as the ends of a range of moments,
+    /// beside a range of dates of the same form in a search that combines them.
+    pub fn check(&self) -> Result<(), String> {
+        let key = |tag: &str| self.keys.iter().find(|key| key.tag == tag);
+        let Some(time) = key(STUDY_TIME).filter(|time| time.asked.reversed()) else {
+            return Ok(());
+        };
+        let combined = self.combined_date_time
+            && matches!(
+                (key(STUDY_DATE).map(|date| &date.asked), &time.asked),
+                (
+                    Some(Match::Between(Some(_), Some(_))),
+                    Match::Between(Some(_), Some(_))
+                )
+            );
+        if combined {
+            Ok(())
+        } else {
+            Err("the range of times ends before it starts: a range does not cross midnight, unless it comes with a range of dates, from a date to a date".into())
+        }
+    }
+}
+
 impl Index {
     /// The studies that answer `search`, newest first, within what this value's account
     /// may see.

@@ -183,11 +183,12 @@ impl Match {
                         (low, high)
                     }
                 };
+                // A range of times that ends before it starts is not refused here: beside a
+                // range of dates it is the two ends of one range of moments
+                // (C.2.2.2.5.4). On its own it matches nothing, since a range does not
+                // cross midnight (C.2.2.2.5.2): see [`Match::reversed`].
                 match (&from, &to) {
                     (None, None) => return Err("a range needs one end at least".into()),
-                    (Some(a), Some(b)) if a > b => {
-                        return Err(format!("the range {value} ends before it starts"));
-                    }
                     _ => Match::Between(from, to),
                 }
             }
@@ -198,6 +199,12 @@ impl Match {
                 Match::Is(number.to_string())
             }
         }))
+    }
+
+    /// Whether this is a range that ends before it starts: of times, which only has a
+    /// meaning beside a range of dates.
+    pub fn reversed(&self) -> bool {
+        matches!(self, Match::Between(Some(from), Some(to)) if from > to)
     }
 
     /// Whether a stored value answers this. A missing value answers nothing.
@@ -427,6 +434,13 @@ mod tests {
         assert!(!asked(Kind::Time, "-12").matches(Kind::Time, Some("130000")));
         assert!(asked(Kind::Time, "12-").matches(Kind::Time, Some("235959")));
 
+        // across midnight: no time of a day is in it
+        let night = asked(Kind::Time, "1800-1000");
+        assert!(night.reversed() && !office.reversed());
+        for stored in ["190000", "090000", "120000"] {
+            assert!(!night.matches(Kind::Time, Some(stored)), "{stored}");
+        }
+
         for bad in [
             "1",
             "123",
@@ -435,7 +449,6 @@ mod tests {
             "120061",
             "12.5",
             "120000.1234567",
-            "1800-1000",
             "-",
         ] {
             assert!(Match::parse(Kind::Time, bad).is_err(), "{bad}");

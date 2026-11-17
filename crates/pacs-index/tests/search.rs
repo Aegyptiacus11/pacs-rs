@@ -260,26 +260,13 @@ async fn studies_by_every_kind_of_match() {
 async fn a_range_of_dates_with_a_range_of_times_is_one_range_of_moments() {
     for index in common::indexes().await {
         five(&index).await;
-        // the time range ends before it starts within a day: only as one range of moments
-        // does this have a meaning, from the 5th at 11:00 to the 7th at 10:00
-        assert!(Match::parse(Kind::Time, "1100-1000").is_err());
+        // a range of dates and a range of times, each from an end to an end
         let moments = |from: &str, to: &str| {
             let (d1, t1) = from.split_once(' ').unwrap();
             let (d2, t2) = to.split_once(' ').unwrap();
             vec![
                 key(DATE, Kind::Date, &format!("{d1}-{d2}")),
-                Key {
-                    tag: TIME,
-                    kind: Kind::Time,
-                    // the ends as times, each read on its own
-                    asked: Match::Between(
-                        Some(format!("{t1:0<6}.000000")),
-                        Some(format!(
-                            "{t2}{}.999999",
-                            if t2.len() == 4 { "59" } else { "" }
-                        )),
-                    ),
-                },
+                key(TIME, Kind::Time, &format!("{t1}-{t2}")),
             ]
         };
         // from the 5th at 11:00 to the 7th at 10:00: the evening of the 5th, the 6th, and
@@ -288,11 +275,35 @@ async fn a_range_of_dates_with_a_range_of_times_is_one_range_of_moments() {
             found(&index, moments("20260105 1100", "20260107 1000"), true).await,
             [202, 203, 204]
         );
-        // the same two ranges read apart: each day from 11:00 to 10:00, which no time is in
+        // the same two ranges read apart: each day from 11:00 to 10:00, which no time is in,
+        // and which a search that reads them apart says is wrong
         assert_eq!(
             found(&index, moments("20260105 1100", "20260107 1000"), false).await,
             Vec::<u32>::new()
         );
+        let apart = StudySearch {
+            keys: moments("20260105 1100", "20260107 1000"),
+            combined_date_time: false,
+            ..StudySearch::default()
+        };
+        assert!(
+            apart
+                .check()
+                .unwrap_err()
+                .contains("does not cross midnight")
+        );
+        let together = StudySearch {
+            combined_date_time: true,
+            ..apart.clone()
+        };
+        together.check().unwrap();
+        // without a date range beside it, combined or not
+        let alone = StudySearch {
+            keys: vec![key(TIME, Kind::Time, "1100-1000")],
+            combined_date_time: true,
+            ..StudySearch::default()
+        };
+        assert!(alone.check().is_err());
         // from the 5th at 10:00 to the 5th at 18:00: the first study only, by a minute
         assert_eq!(
             found(&index, moments("20260105 1000", "20260105 1800"), true).await,
