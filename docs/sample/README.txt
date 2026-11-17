@@ -6,4 +6,4 @@ doi:10.1016/j.media.2022.102680), written as DICOM by `scripts/sample-from-lits.
 These files are not under the licences of pacs-rs: they are adapted from LiTS and shared
 under CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/).
 
-Where they come from and what was changed: [docs/sample-study.md](../sample-study.md).
+Where they come from and what was changed: docs/sample-study.md.
