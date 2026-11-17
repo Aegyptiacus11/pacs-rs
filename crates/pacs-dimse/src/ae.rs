@@ -73,15 +73,44 @@ pub struct RemoteAe {
     pub ae_title: AeTitle,
     pub host: String,
     pub port: u16,
+    /// Reached over TLS only (`/tls` after the port).
+    pub secure: bool,
+    /// How to speak TLS to it: set by who configures the AEs, for a `secure` one.
+    pub tls: Option<ClientTls>,
 }
+
+/// What pacs-rs speaks TLS to a remote AE with: the authorities it accepts the AE's
+/// certificate by, and its own certificate if it shows one.
+#[derive(Clone)]
+pub struct ClientTls(pub std::sync::Arc<rustls::ClientConfig>);
+
+impl std::fmt::Debug for ClientTls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClientTls")
+    }
+}
+
+impl PartialEq for ClientTls {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ClientTls {}
 
 impl FromStr for RemoteAe {
     type Err = AeError;
 
-    /// `id=AE_TITLE@host:port`; an IPv6 host goes in brackets, `[::1]:104`.
+    /// `id=AE_TITLE@host:port`, or `id=AE_TITLE@host:port/tls` for an AE reached over TLS;
+    /// an IPv6 host goes in brackets, `[::1]:104`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let syntax = || AeError::RemoteSyntax(s.to_owned());
         let (id, rest) = s.trim().split_once('=').ok_or_else(syntax)?;
+        let (rest, secure) = match rest.rsplit_once('/') {
+            Some((rest, "tls")) => (rest, true),
+            Some(_) => return Err(syntax()),
+            None => (rest, false),
+        };
         let (ae_title, address) = rest.rsplit_once('@').ok_or_else(syntax)?;
         let (host, port) = address.rsplit_once(':').ok_or_else(syntax)?;
         let host = host
@@ -107,6 +136,8 @@ impl FromStr for RemoteAe {
             ae_title: AeTitle::new(ae_title)?,
             host: host.to_owned(),
             port,
+            secure,
+            tls: None,
         })
     }
 }

@@ -60,7 +60,10 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
 | `PACS_DIMSE_AE_TITLE` | `PACSRS` | pacs-rs's AE title, called and calling |
 | `PACS_DIMSE_EXTRA_AE_TITLES` | none | further called AE titles accepted, comma-separated |
-| `PACS_DIMSE_REMOTES` | none | remote AEs, comma-separated, each `id=AE_TITLE@host:port` |
+| `PACS_DIMSE_REMOTES` | none | remote AEs, comma-separated, each `id=AE_TITLE@host:port`, with `/tls` after the port for one reached [over TLS](dimse.md#dimse-over-tls) |
+| `PACS_DIMSE_TLS_CERT_FILE`, `PACS_DIMSE_TLS_KEY_FILE` | none | pacs-rs's certificate (with its chain) and private key, PEM: with them the DIMSE port speaks TLS only |
+| `PACS_DIMSE_TLS_CA_FILE` | none | the authorities (PEM) that sign the certificates of DIMSE callers and of the remote AEs called over TLS |
+| `PACS_DIMSE_TLS_CLIENT_AUTH` | `required` | whether a DIMSE caller must show a certificate; `off` takes any caller that speaks TLS |
 | `PACS_DIMSE_KNOWN_CALLERS_ONLY` | `false` | accept associations only from the remotes' AE titles |
 | `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
 | `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |

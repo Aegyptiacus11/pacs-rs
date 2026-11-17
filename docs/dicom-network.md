@@ -19,8 +19,9 @@ you need three things, and its administrator needs yours:
 **The AE title is a name, not a password.** It is sent in clear and anyone can claim one.
 An archive can refuse callers it has not been told about, and so can pacs-rs
 (`PACS_DIMSE_KNOWN_CALLERS_ONLY`), but that keeps out mistakes, not attackers: who may
-connect is decided by the network. pacs-rs does not encrypt this protocol yet
-([roadmap](roadmap.md#1-safe-to-expose)).
+connect is decided by the network, or by certificates: pacs-rs can speak this protocol
+[over TLS](dimse.md#dimse-over-tls) and then takes only callers whose certificate a known
+authority signed.
 
 ## Agreeing first: the association
 

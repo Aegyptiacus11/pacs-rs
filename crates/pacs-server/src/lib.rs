@@ -25,6 +25,7 @@ pub mod api;
 pub mod audit;
 mod audit_routes;
 pub mod auth;
+mod dimse_tls;
 pub mod limits;
 mod modalities;
 pub mod projects;
@@ -222,6 +223,41 @@ pub struct Settings {
     /// a large study to pacs-rs.
     #[arg(long, env = "PACS_DIMSE_MOVE_TIMEOUT", default_value_t = 600)]
     pub dimse_move_timeout: u64,
+
+    /// pacs-rs's certificate for DIMSE over TLS, with its chain (PEM). With it and its key
+    /// the DIMSE port speaks TLS only, and pacs-rs shows this certificate to the remote AEs
+    /// it calls over TLS.
+    #[arg(long, env = "PACS_DIMSE_TLS_CERT_FILE")]
+    pub dimse_tls_cert_file: Option<PathBuf>,
+
+    /// The private key of that certificate (PEM).
+    #[arg(long, env = "PACS_DIMSE_TLS_KEY_FILE")]
+    pub dimse_tls_key_file: Option<PathBuf>,
+
+    /// The certificate authorities (PEM) pacs-rs accepts its DIMSE peers by: the callers'
+    /// certificates, and those of the remote AEs it calls over TLS.
+    #[arg(long, env = "PACS_DIMSE_TLS_CA_FILE")]
+    pub dimse_tls_ca_file: Option<PathBuf>,
+
+    /// Whether a caller must show a certificate signed by one of those authorities:
+    /// `required`, or `off` to take any caller that speaks TLS.
+    #[arg(
+        long,
+        env = "PACS_DIMSE_TLS_CLIENT_AUTH",
+        value_enum,
+        default_value = "required"
+    )]
+    pub dimse_tls_client_auth: ClientAuth,
+}
+
+/// Whether the DIMSE listener asks its callers for a certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ClientAuth {
+    /// A caller without a certificate signed by a known authority is refused.
+    Required,
+    /// Any caller that speaks TLS is taken: the connection is encrypted, the caller is
+    /// not identified.
+    Off,
 }
 
 /// How the connection to a Postgres index is protected.
@@ -383,6 +419,11 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
     config.timeout = std::time::Duration::from_secs(settings.dimse_timeout.max(1));
     config.move_timeout = std::time::Duration::from_secs(settings.dimse_move_timeout.max(1));
     config.max_data_set_bytes = settings.max_upload_bytes;
+    let tls = dimse_tls::open(settings, config.remotes.iter().any(|remote| remote.secure))?;
+    config.tls = tls.listener;
+    for remote in config.remotes.iter_mut().filter(|remote| remote.secure) {
+        remote.tls = tls.caller.clone();
+    }
     Ok(config)
 }
 
