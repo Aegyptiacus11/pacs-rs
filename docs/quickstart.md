@@ -20,7 +20,8 @@ files are in the `pacs-data` volume, so they survive a restart.
 ## 2. Get a study to try
 
 Any DICOM files you have will do. To follow this page to the letter, take the three slices of
-the sample study, a 64 × 64 synthetic CT with no patient behind it:
+the sample study: three slices of an abdominal CT from a public research dataset
+([LiTS](sample-study.md), volume 0), about half a megabyte each:
 
 ```bash
 for n in 1 2 3; do
@@ -42,11 +43,11 @@ The answer to the last one:
 
 ```json
 {
-  "ID": "fbb232a1-b9bb23aa-d6fa59e2-a3d394f3-1e7dadde",
-  "ParentPatient": "11e5f1cd-80b3a875-5b7068ee-30e57e66-ca92c84c",
-  "ParentSeries": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-  "ParentStudy": "da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9",
-  "Path": "/instances/fbb232a1-b9bb23aa-d6fa59e2-a3d394f3-1e7dadde",
+  "ID": "9cd16b73-7d0f8d85-241e9bbc-f9ddb0a0-afb3d988",
+  "ParentPatient": "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055",
+  "ParentSeries": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+  "ParentStudy": "478cde9c-3f36815e-7253a722-f52d98c8-d15779eb",
+  "Path": "/instances/9cd16b73-7d0f8d85-241e9bbc-f9ddb0a0-afb3d988",
   "Status": "Success"
 }
 ```
@@ -60,8 +61,8 @@ Dragging the files onto the web interface does the same thing: it sends each one
 
 ## 4. See it
 
-Open <http://127.0.0.1:8080/ui/>. The study list has one line: the patient Series Synthetic
-(`SYN1`), a CT study of one series and three images. Open it to get the
+Open <http://127.0.0.1:8080/ui/>. The study list has one line: the patient `LITS-0`,
+a CT study of one series and three images. Open it to get the
 [viewer](web-interface.md).
 
 ![The study list of the web interface with the sample study](images/quickstart-studies.jpg)
@@ -76,33 +77,33 @@ $ curl http://127.0.0.1:8080/studies
 ```
 
 ```json
-["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"]
+["478cde9c-3f36815e-7253a722-f52d98c8-d15779eb"]
 ```
 
 [DICOMweb](dicomweb.md), the standard's own HTTP interface (PS3.18), names them by their
 DICOM UIDs and answers in DICOM JSON. It is the interface web viewers are written for:
 
 ```console
-$ curl -H 'Accept: application/dicom+json' http://127.0.0.1:8080/dicom-web/studies/2.25.1100000/series
+$ curl -H 'Accept: application/dicom+json' http://127.0.0.1:8080/dicom-web/studies/2.25.3100000/series
 ```
 
 ```json
 [
   {
-    "00080020": {"vr": "DA", "Value": ["20260101"]},
+    "00080020": {"vr": "DA", "Value": ["20261117"]},
     "00080030": {"vr": "TM", "Value": ["120000"]},
-    "00080050": {"vr": "SH", "Value": ["ACC1"]},
-    "00080090": {"vr": "PN", "Value": [{"Alphabetic": "REFERRING^PHYSICIAN"}]},
-    "00081030": {"vr": "LO", "Value": ["Synthetic study"]},
-    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "SYNTHETIC^SERIES"}]},
-    "00100020": {"vr": "LO", "Value": ["SYN1"]},
-    "00100030": {"vr": "DA", "Value": ["19700101"]},
-    "00100040": {"vr": "CS", "Value": ["O"]},
-    "0020000D": {"vr": "UI", "Value": ["2.25.1100000"]},
-    "00200010": {"vr": "SH", "Value": ["S1"]},
+    "00080050": {"vr": "SH"},
+    "00080090": {"vr": "PN"},
+    "00081030": {"vr": "LO", "Value": ["Three slices of LiTS volume 0"]},
+    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "VOLUME 0^LITS"}]},
+    "00100020": {"vr": "LO", "Value": ["LITS-0"]},
+    "00100030": {"vr": "DA"},
+    "00100040": {"vr": "CS"},
+    "0020000D": {"vr": "UI", "Value": ["2.25.3100000"]},
+    "00200010": {"vr": "SH", "Value": ["1"]},
     "00080060": {"vr": "CS", "Value": ["CT"]},
-    "0008103E": {"vr": "LO", "Value": ["Synthetic series 1"]},
-    "0020000E": {"vr": "UI", "Value": ["2.25.1200000"]},
+    "0008103E": {"vr": "LO", "Value": ["Axial 5 mm"]},
+    "0020000E": {"vr": "UI", "Value": ["2.25.3200000"]},
     "00200011": {"vr": "IS", "Value": [1]},
     "00201209": {"vr": "IS", "Value": [3]},
     "00081190": {"vr": "UR", "Value": ["..."]},

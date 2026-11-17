@@ -10,14 +10,14 @@ A DICOM file holds one object, most often one image, together with everything kn
 it: whose it is, when and how it was made, and the pixels. The standard calls the object a
 *SOP Instance*; this book says *instance*.
 
-The file `00001.dcm` of the sample has 8968 bytes, in three parts (PS3.10 Section 7.1):
+The file `00001.dcm` of the sample has 525190 bytes, in three parts (PS3.10 Section 7.1):
 
 | Bytes | What |
 |---|---|
 | 0 to 127 | the preamble: 128 bytes with no meaning to DICOM, all zero here |
 | 128 to 131 | the four letters `DICM` |
-| 132 to 315 | the File Meta Information: what kind of object follows and how it is encoded |
-| 316 to the end | the data set: the object itself, pixels last |
+| 132 to 297 | the File Meta Information: what kind of object follows and how it is encoded |
+| 298 to the end | the data set: the object itself, pixels last |
 
 ```bash
 xxd -s 128 -l 4 00001.dcm
@@ -37,13 +37,13 @@ Everything after `DICM` is a list of *data elements*. Each is one fact, in four 
 | Tag | `(0008,0020)` | which fact: a group and an element number, both in hexadecimal. This one is Study Date |
 | Value Representation (VR) | `DA` | the type of the value: `DA` is a date, `PN` a person's name, `UI` a unique identifier, `US` an unsigned 16-bit number |
 | Length | `8` | bytes in the value |
-| Value | `20260101` | the fact itself |
+| Value | `20261117` | the fact itself |
 
 In the file those are sixteen bytes, the numbers with their low byte first:
 
 ```text
-08 00 20 00   44 41   08 00   32 30 32 36 30 31 30 31
-(0008,0020)   D  A    8       2  0  2  6  0  1  0  1
+08 00 20 00   44 41   08 00   32 30 32 36 31 31 31 37
+(0008,0020)   D  A    8       2  0  2  6  1  1  1  7
 ```
 
 Two rules make a data set easy to read and to check: the elements come in increasing order
@@ -57,55 +57,67 @@ To see the elements of an instance without its pixels, ask DICOMweb for its meta
 
 ```console
 $ curl --data-binary @00001.dcm http://127.0.0.1:8080/instances
-$ curl http://127.0.0.1:8080/dicom-web/studies/2.25.1100000/series/2.25.1200000/instances/2.25.1300001/metadata
+$ curl http://127.0.0.1:8080/dicom-web/studies/2.25.3100000/series/2.25.3200000/instances/2.25.3300001/metadata
 ```
 
 ```json
 [
   {
+    "00080008": {"vr": "CS", "Value": ["DERIVED", "SECONDARY", "AXIAL"]},
     "00080016": {"vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.2"]},
-    "00080018": {"vr": "UI", "Value": ["2.25.1300001"]},
-    "00080020": {"vr": "DA", "Value": ["20260101"]},
+    "00080018": {"vr": "UI", "Value": ["2.25.3300001"]},
+    "00080020": {"vr": "DA", "Value": ["20261117"]},
     "00080030": {"vr": "TM", "Value": ["120000"]},
-    "00080050": {"vr": "SH", "Value": ["ACC1"]},
+    "00080050": {"vr": "SH"},
     "00080060": {"vr": "CS", "Value": ["CT"]},
-    "00080090": {"vr": "PN", "Value": [{"Alphabetic": "REFERRING^PHYSICIAN"}]},
-    "00081030": {"vr": "LO", "Value": ["Synthetic study"]},
-    "0008103E": {"vr": "LO", "Value": ["Synthetic series 1"]},
-    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "SYNTHETIC^SERIES"}]},
-    "00100020": {"vr": "LO", "Value": ["SYN1"]},
-    "00100030": {"vr": "DA", "Value": ["19700101"]},
-    "00100040": {"vr": "CS", "Value": ["O"]},
-    "00180050": {"vr": "DS", "Value": ["2.5"]},
-    "0020000D": {"vr": "UI", "Value": ["2.25.1100000"]},
-    "0020000E": {"vr": "UI", "Value": ["2.25.1200000"]},
-    "00200010": {"vr": "SH", "Value": ["S1"]},
+    "00080090": {"vr": "PN"},
+    "00081030": {"vr": "LO", "Value": ["Three slices of LiTS volume 0"]},
+    "0008103E": {"vr": "LO", "Value": ["Axial 5 mm"]},
+    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "VOLUME 0^LITS"}]},
+    "00100020": {"vr": "LO", "Value": ["LITS-0"]},
+    "00100030": {"vr": "DA"},
+    "00100040": {"vr": "CS"},
+    "00180050": {"vr": "DS", "Value": ["5"]},
+    "00185100": {"vr": "CS", "Value": ["HFS"]},
+    "0020000D": {"vr": "UI", "Value": ["2.25.3100000"]},
+    "0020000E": {"vr": "UI", "Value": ["2.25.3200000"]},
+    "00200010": {"vr": "SH", "Value": ["1"]},
     "00200011": {"vr": "IS", "Value": [1]},
     "00200013": {"vr": "IS", "Value": [1]},
-    "00200032": {"vr": "DS", "Value": ["0", "0", "0"]},
+    "00200032": {"vr": "DS", "Value": ["-172.899994", "-180", "-48"]},
+    "00200037": {"vr": "DS", "Value": ["1", "0", "0", "0", "1", "0"]},
+    "00200052": {"vr": "UI", "Value": ["2.25.3200000.1"]},
+    "00201041": {"vr": "DS", "Value": ["-48"]},
     "00280002": {"vr": "US", "Value": [1]},
     "00280004": {"vr": "CS", "Value": ["MONOCHROME2"]},
-    "00280010": {"vr": "US", "Value": [64]},
-    "00280011": {"vr": "US", "Value": [64]},
-    "00280030": {"vr": "DS", "Value": ["0.5", "0.5"]},
+    "00280010": {"vr": "US", "Value": [512]},
+    "00280011": {"vr": "US", "Value": [512]},
+    "00280030": {"vr": "DS", "Value": ["0.703125", "0.703125"]},
     "00280100": {"vr": "US", "Value": [16]},
-    "00280101": {"vr": "US", "Value": [12]},
-    "00280102": {"vr": "US", "Value": [11]},
-    "00280103": {"vr": "US", "Value": [0]}
+    "00280101": {"vr": "US", "Value": [16]},
+    "00280102": {"vr": "US", "Value": [15]},
+    "00280103": {"vr": "US", "Value": [1]},
+    "00281050": {"vr": "DS", "Value": ["40"]},
+    "00281051": {"vr": "DS", "Value": ["400"]},
+    "00281052": {"vr": "DS", "Value": ["0"]},
+    "00281053": {"vr": "DS", "Value": ["1"]},
+    "00281054": {"vr": "LO", "Value": ["HU"]}
   }
 ]
 ```
 
 This is the same data set written as JSON (PS3.18 Annex F): the tag without its brackets,
 the VR, the values. Read down it and the file describes itself: a CT image (`00080060`),
-64 rows by 64 columns (`00280010`, `00280011`), one sample a pixel, shown as shades of grey
-(`00280002`, `00280004`), each pixel stored in 16 bits of which 12 are used (`00280100`,
-`00280101`).
+512 rows by 512 columns (`00280010`, `00280011`), one sample a pixel, shown as shades of grey
+(`00280002`, `00280004`), each pixel stored in 16 bits, all of them used, as a signed number
+(`00280100`, `00280101`, `00280103`). An element with a VR and no value, such as the
+Accession Number (`00080050`), is in the file and empty: the dataset the scan comes from
+does not give it.
 
 ## Pixels and transfer syntaxes
 
-The last element, `(7FE0,0010)` Pixel Data, holds the image: here 64 × 64 pixels of two
-bytes, 8192 bytes of the file's 8968.
+The last element, `(7FE0,0010)` Pixel Data, holds the image: here 512 × 512 pixels of two
+bytes, 524288 bytes of the file's 525190.
 
 How the elements and the pixels are written as bytes is the file's *transfer syntax*, named
 by a UID in the File Meta Information. Three things vary: whether the VR is written
@@ -133,10 +145,10 @@ belong together (PS3.3 Section A.1.2).
 
 | Level | What it is | Identified by | In the sample |
 |---|---|---|---|
-| Patient | a person | `(0010,0020)` Patient ID | `SYN1` |
-| Study | one examination of that person: one visit to the scanner | `(0020,000D)` Study Instance UID | `2.25.1100000` |
-| Series | one acquisition within the study, from one device | `(0020,000E)` Series Instance UID | `2.25.1200000` |
-| Instance | one object: an image, most often | `(0008,0018)` SOP Instance UID | `2.25.1300001` to `...3` |
+| Patient | a person | `(0010,0020)` Patient ID | `LITS-0` |
+| Study | one examination of that person: one visit to the scanner | `(0020,000D)` Study Instance UID | `2.25.3100000` |
+| Series | one acquisition within the study, from one device | `(0020,000E)` Series Instance UID | `2.25.3200000` |
+| Instance | one object: an image, most often | `(0008,0018)` SOP Instance UID | `2.25.3300001` to `...3` |
 
 A study belongs to exactly one patient and a series to exactly one study. So a server never
 needs to be told where a file goes: it reads the four identifiers and files it. That is
@@ -165,7 +177,8 @@ under it names something the standard defines, such as the transfer syntaxes abo
 `1.2.840.10008.5.1.4.1.1.2`, CT Image Storage, the kind of object the sample files hold.
 `2.25.` followed by one large number is the root for UIDs made from a UUID, for those who
 have no root of their own (PS3.5 Annex B.2); the sample's UIDs use it with small numbers so
-that they can be read.
+that they can be read. The dataset the sample comes from has no UIDs of its own: these were
+given when its slices were written as DICOM.
 
 **A UID carries no meaning.** Do not read a date or a hospital out of one, and never edit
 one by hand: two different objects with one UID is the error DICOM systems forgive least.

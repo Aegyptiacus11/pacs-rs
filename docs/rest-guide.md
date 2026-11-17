@@ -19,11 +19,11 @@ $ curl --data-binary @00001.dcm http://127.0.0.1:8080/instances
 
 ```json
 {
-  "ID": "3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d",
-  "ParentPatient": "11e5f1cd-80b3a875-5b7068ee-30e57e66-ca92c84c",
-  "ParentSeries": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-  "ParentStudy": "da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9",
-  "Path": "/instances/3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d",
+  "ID": "518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
+  "ParentPatient": "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055",
+  "ParentSeries": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+  "ParentStudy": "478cde9c-3f36815e-7253a722-f52d98c8-d15779eb",
+  "Path": "/instances/518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
   "Status": "Success"
 }
 ```
@@ -45,11 +45,11 @@ $ curl --data-binary @00001.dcm http://127.0.0.1:8080/instances
 
 ```json
 {
-  "ID": "3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d",
-  "ParentPatient": "11e5f1cd-80b3a875-5b7068ee-30e57e66-ca92c84c",
-  "ParentSeries": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-  "ParentStudy": "da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9",
-  "Path": "/instances/3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d",
+  "ID": "518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
+  "ParentPatient": "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055",
+  "ParentSeries": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+  "ParentStudy": "478cde9c-3f36815e-7253a722-f52d98c8-d15779eb",
+  "Path": "/instances/518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
   "Status": "AlreadyStored"
 }
 ```
@@ -82,17 +82,17 @@ down to that level, joined by `|`.
 
 | Level | SHA-1 of | For the sample |
 |---|---|---|
-| Patient | Patient ID | `SYN1` |
-| Study | Patient ID, Study Instance UID | `SYN1\|2.25.1100000` |
-| Series | the same, then Series Instance UID | `SYN1\|2.25.1100000\|2.25.1200000` |
-| Instance | the same, then SOP Instance UID | `SYN1\|2.25.1100000\|2.25.1200000\|2.25.1300001` |
+| Patient | Patient ID | `LITS-0` |
+| Study | Patient ID, Study Instance UID | `LITS-0\|2.25.3100000` |
+| Series | the same, then Series Instance UID | `LITS-0\|2.25.3100000\|2.25.3200000` |
+| Instance | the same, then SOP Instance UID | `LITS-0\|2.25.3100000\|2.25.3200000\|2.25.3300001` |
 
 So a script that knows the DICOM identifiers can compute the address without asking:
 
 ```bash
-printf 'SYN1|2.25.1100000' | sha1sum
-# da6c0de8a32029efd216100a7bdd48563ea9bed9
-# so the study is /studies/da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9
+printf 'LITS-0|2.25.3100000' | sha1sum
+# 478cde9c3f36815e7253a722f52d98c8d15779eb
+# so the study is /studies/478cde9c-3f36815e-7253a722-f52d98c8-d15779eb
 ```
 
 Two consequences. The same study has the same identifier on every pacs-rs server. And a
@@ -106,7 +106,7 @@ $ curl http://127.0.0.1:8080/patients
 ```
 
 ```json
-["11e5f1cd-80b3a875-5b7068ee-30e57e66-ca92c84c"]
+["64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055"]
 ```
 
 ```console
@@ -114,7 +114,7 @@ $ curl http://127.0.0.1:8080/studies
 ```
 
 ```json
-["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"]
+["478cde9c-3f36815e-7253a722-f52d98c8-d15779eb"]
 ```
 
 With `?expand` the list holds the resources themselves instead of their identifiers. On a
@@ -127,27 +127,27 @@ $ curl 'http://127.0.0.1:8080/studies?expand&limit=50&since=0'
 ```json
 [
   {
-    "ID": "da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9",
+    "ID": "478cde9c-3f36815e-7253a722-f52d98c8-d15779eb",
     "IsStable": false,
     "Labels": [],
     "LastUpdate": "...",
     "MainDicomTags": {
-      "StudyDate": "20260101",
+      "StudyDate": "20261117",
       "StudyTime": "120000",
-      "AccessionNumber": "ACC1",
-      "ReferringPhysicianName": "REFERRING^PHYSICIAN",
-      "StudyDescription": "Synthetic study",
-      "StudyInstanceUID": "2.25.1100000",
-      "StudyID": "S1"
+      "AccessionNumber": "",
+      "ReferringPhysicianName": "",
+      "StudyDescription": "Three slices of LiTS volume 0",
+      "StudyInstanceUID": "2.25.3100000",
+      "StudyID": "1"
     },
-    "ParentPatient": "11e5f1cd-80b3a875-5b7068ee-30e57e66-ca92c84c",
+    "ParentPatient": "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055",
     "PatientMainDicomTags": {
-      "PatientName": "SYNTHETIC^SERIES",
-      "PatientID": "SYN1",
-      "PatientBirthDate": "19700101",
-      "PatientSex": "O"
+      "PatientName": "VOLUME 0^LITS",
+      "PatientID": "LITS-0",
+      "PatientBirthDate": "",
+      "PatientSex": ""
     },
-    "Series": ["cd952d29-4afeecc6-6399a89b-609f9514-4198538e"],
+    "Series": ["95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05"],
     "Type": "Study"
   }
 ]
@@ -162,29 +162,30 @@ Each resource has an address of its own, `/patients/{id}`, `/studies/{id}`, `/se
 `/instances/{id}`, and answers with the object shown above. From one, the levels under it:
 
 ```console
-$ curl http://127.0.0.1:8080/studies/da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9/series
+$ curl http://127.0.0.1:8080/studies/478cde9c-3f36815e-7253a722-f52d98c8-d15779eb/series
 ```
 
 ```json
 [
   {
     "ExpectedNumberOfInstances": null,
-    "ID": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
+    "ID": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
     "Instances": [
-      "3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d",
-      "75d96295-373fe1cb-fc1a3f93-632477fc-ac17415d",
-      "fbb232a1-b9bb23aa-d6fa59e2-a3d394f3-1e7dadde"
+      "518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
+      "8a3affa1-2acb2dfe-012c8fcf-a1d113d6-bdf4a1fb",
+      "9cd16b73-7d0f8d85-241e9bbc-f9ddb0a0-afb3d988"
     ],
     "IsStable": false,
     "Labels": [],
     "LastUpdate": "...",
     "MainDicomTags": {
       "Modality": "CT",
-      "SeriesDescription": "Synthetic series 1",
-      "SeriesInstanceUID": "2.25.1200000",
-      "SeriesNumber": "1"
+      "SeriesDescription": "Axial 5 mm",
+      "SeriesInstanceUID": "2.25.3200000",
+      "SeriesNumber": "1",
+      "ImageOrientationPatient": "1\\0\\0\\0\\1\\0"
     },
-    "ParentStudy": "da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9",
+    "ParentStudy": "478cde9c-3f36815e-7253a722-f52d98c8-d15779eb",
     "Status": "Unknown",
     "Type": "Series"
   }
@@ -194,49 +195,52 @@ $ curl http://127.0.0.1:8080/studies/da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed
 The instances of a series come in the order of their Instance Number:
 
 ```console
-$ curl http://127.0.0.1:8080/series/cd952d29-4afeecc6-6399a89b-609f9514-4198538e/instances
+$ curl http://127.0.0.1:8080/series/95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05/instances
 ```
 
 ```json
 [
   {
-    "FileSize": 1480,
-    "ID": "3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d",
-    "IndexInSeries": 1,
+    "FileSize": 146666,
+    "ID": "518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
     "Labels": [],
     "MainDicomTags": {
-      "SOPInstanceUID": "2.25.1300001",
+      "SOPInstanceUID": "2.25.3300001",
       "InstanceNumber": "1",
-      "ImagePositionPatient": "0\\0\\0"
+      "ImagePositionPatient": "-172.899994\\-180\\-48",
+      "ImageOrientationPatient": "1\\0\\0\\0\\1\\0"
     },
-    "ParentSeries": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-    "Type": "Instance"
+    "ParentSeries": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+    "Type": "Instance",
+    "IndexInSeries": 1
   },
   {
-    "FileSize": 1628,
-    "ID": "75d96295-373fe1cb-fc1a3f93-632477fc-ac17415d",
-    "IndexInSeries": 2,
+    "FileSize": 145784,
+    "ID": "8a3affa1-2acb2dfe-012c8fcf-a1d113d6-bdf4a1fb",
     "Labels": [],
     "MainDicomTags": {
-      "SOPInstanceUID": "2.25.1300002",
+      "SOPInstanceUID": "2.25.3300002",
       "InstanceNumber": "2",
-      "ImagePositionPatient": "0\\0\\2.5"
+      "ImagePositionPatient": "-172.899994\\-180\\-43",
+      "ImageOrientationPatient": "1\\0\\0\\0\\1\\0"
     },
-    "ParentSeries": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-    "Type": "Instance"
+    "ParentSeries": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+    "Type": "Instance",
+    "IndexInSeries": 2
   },
   {
-    "FileSize": 1626,
-    "ID": "fbb232a1-b9bb23aa-d6fa59e2-a3d394f3-1e7dadde",
-    "IndexInSeries": 3,
+    "FileSize": 143670,
+    "ID": "9cd16b73-7d0f8d85-241e9bbc-f9ddb0a0-afb3d988",
     "Labels": [],
     "MainDicomTags": {
-      "SOPInstanceUID": "2.25.1300003",
+      "SOPInstanceUID": "2.25.3300003",
       "InstanceNumber": "3",
-      "ImagePositionPatient": "0\\0\\5"
+      "ImagePositionPatient": "-172.899994\\-180\\-38",
+      "ImageOrientationPatient": "1\\0\\0\\0\\1\\0"
     },
-    "ParentSeries": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-    "Type": "Instance"
+    "ParentSeries": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+    "Type": "Instance",
+    "IndexInSeries": 3
   }
 ]
 ```
@@ -244,23 +248,23 @@ $ curl http://127.0.0.1:8080/series/cd952d29-4afeecc6-6399a89b-609f9514-4198538e
 And from any resource, the ones above it, here the patient of a series:
 
 ```console
-$ curl http://127.0.0.1:8080/series/cd952d29-4afeecc6-6399a89b-609f9514-4198538e/patient
+$ curl http://127.0.0.1:8080/series/95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05/patient
 ```
 
 ```json
 {
-  "ID": "11e5f1cd-80b3a875-5b7068ee-30e57e66-ca92c84c",
+  "ID": "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055",
   "IsProtected": false,
   "IsStable": false,
   "Labels": [],
   "LastUpdate": "...",
   "MainDicomTags": {
-    "PatientName": "SYNTHETIC^SERIES",
-    "PatientID": "SYN1",
-    "PatientBirthDate": "19700101",
-    "PatientSex": "O"
+    "PatientName": "VOLUME 0^LITS",
+    "PatientID": "LITS-0",
+    "PatientBirthDate": "",
+    "PatientSex": ""
   },
-  "Studies": ["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"],
+  "Studies": ["478cde9c-3f36815e-7253a722-f52d98c8-d15779eb"],
   "Type": "Patient"
 }
 ```
@@ -268,25 +272,25 @@ $ curl http://127.0.0.1:8080/series/cd952d29-4afeecc6-6399a89b-609f9514-4198538e
 How much a study or a patient holds:
 
 ```console
-$ curl http://127.0.0.1:8080/studies/da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9/statistics
+$ curl http://127.0.0.1:8080/studies/478cde9c-3f36815e-7253a722-f52d98c8-d15779eb/statistics
 ```
 
 ```json
 {
   "CountInstances": 3,
   "CountSeries": 1,
-  "DicomDiskSize": "4734",
+  "DicomDiskSize": "436120",
   "DicomDiskSizeMB": 0,
-  "DicomUncompressedSize": "4734",
+  "DicomUncompressedSize": "436120",
   "DicomUncompressedSizeMB": 0,
-  "DiskSize": "4734",
+  "DiskSize": "436120",
   "DiskSizeMB": 0,
-  "UncompressedSize": "4734",
+  "UncompressedSize": "436120",
   "UncompressedSizeMB": 0
 }
 ```
 
-**Why 1480 bytes, when the file sent had 8968?** pacs-rs stores uncompressed images in
+**Why 146666 bytes, when the file sent had 525190?** pacs-rs stores uncompressed images in
 JPEG-LS, which is lossless: every pixel value comes back as it was sent, and the server
 checks that before it keeps the compressed copy. `FileSize` and the statistics count the
 files as stored. `PACS_COMPRESSION=off` keeps them as received
@@ -297,21 +301,21 @@ files as stored. `PACS_COMPRESSION=off` keeps them as received
 One instance, as the DICOM file the server keeps:
 
 ```console
-$ curl -o slice.dcm http://127.0.0.1:8080/instances/3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d/file
+$ curl -o slice.dcm http://127.0.0.1:8080/instances/518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2/file
 ```
 
 A whole study or patient as a ZIP, in folders by patient, study and series
-(`SYN1 - SYNTHETIC^SERIES/ACC1 - Synthetic study/1 - CT - Synthetic series 1/CT000001.dcm`).
+(`LITS-0 - VOLUME 0^LITS/Three slices of LiTS volume 0/1 - CT - Axial 5 mm/CT000001.dcm`).
 It is sent file by file as it is built, so a large study does not wait in memory:
 
 ```console
-$ curl -o study.zip http://127.0.0.1:8080/studies/da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9/archive
+$ curl -o study.zip http://127.0.0.1:8080/studies/478cde9c-3f36815e-7253a722-f52d98c8-d15779eb/archive
 ```
 
 Several resources of any level in one ZIP, each file once:
 
 ```console
-$ curl -o some.zip -d '{"Resources": ["3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d", "cd952d29-4afeecc6-6399a89b-609f9514-4198538e"]}' \
+$ curl -o some.zip -d '{"Resources": ["518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2", "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05"]}' \
     http://127.0.0.1:8080/tools/create-archive
 ```
 
@@ -324,12 +328,12 @@ or pixels without the file around them, asks through
 `POST /tools/find` takes a level and the attributes to match, and answers with identifiers:
 
 ```console
-$ curl -d '{"Level": "Study", "Query": {"PatientID": "SYN1", "StudyDate": "20260101"}}' \
+$ curl -d '{"Level": "Study", "Query": {"PatientID": "LITS-0", "StudyDate": "20261117"}}' \
     http://127.0.0.1:8080/tools/find
 ```
 
 ```json
-["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"]
+["478cde9c-3f36815e-7253a722-f52d98c8-d15779eb"]
 ```
 
 A value matches the way DICOM matches its attribute (PS3.4 C.2.2.2):
@@ -342,15 +346,15 @@ A value matches the way DICOM matches its attribute (PS3.4 C.2.2.2):
 | `\` between UIDs | any of them | UIDs |
 | an empty value, or `*` alone | anything | every attribute |
 
-A name by its start, in whatever case, among the studies of January:
+A name by its start, in whatever case, among the studies of November:
 
 ```console
-$ curl -d '{"Level": "Study", "Query": {"PatientName": "synth*", "StudyDate": "20260101-20260131"}}' \
+$ curl -d '{"Level": "Study", "Query": {"PatientName": "volume*", "StudyDate": "20261101-20261130"}}' \
     http://127.0.0.1:8080/tools/find
 ```
 
 ```json
-["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"]
+["478cde9c-3f36815e-7253a722-f52d98c8-d15779eb"]
 ```
 
 `"Expand": true` answers with the resources, and `"Limit"` and `"Since"` page through them,
@@ -367,7 +371,7 @@ A search the server cannot do as asked is refused with the reason, never answere
 something else. Here, a date that is not written as DICOM writes dates:
 
 ```console
-$ curl -d '{"Level": "Study", "Query": {"StudyDate": "2026-01-01"}}' \
+$ curl -d '{"Level": "Study", "Query": {"StudyDate": "2026-11-17"}}' \
     http://127.0.0.1:8080/tools/find
 ```
 
@@ -389,14 +393,14 @@ Deleting a resource deletes everything under it, and every level above it that i
 empty. The answer names the closest level still there:
 
 ```console
-$ curl -X DELETE http://127.0.0.1:8080/instances/3040830e-df3d6ba4-4ae11444-4aa8466e-e749ba5d
+$ curl -X DELETE http://127.0.0.1:8080/instances/518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2
 ```
 
 ```json
 {
   "RemainingAncestor": {
-    "ID": "cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
-    "Path": "/series/cd952d29-4afeecc6-6399a89b-609f9514-4198538e",
+    "ID": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+    "Path": "/series/95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
     "Type": "Series"
   }
 }
@@ -406,7 +410,7 @@ The series still has two instances, so it stays. Deleting the study takes the se
 instances and the patient, who has no other study:
 
 ```console
-$ curl -X DELETE http://127.0.0.1:8080/studies/da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9
+$ curl -X DELETE http://127.0.0.1:8080/studies/478cde9c-3f36815e-7253a722-f52d98c8-d15779eb
 ```
 
 ```json

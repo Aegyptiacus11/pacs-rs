@@ -5,6 +5,7 @@
 # Start
 
 - [Quickstart](quickstart.md)
+- [The sample study](sample-study.md)
 - [Two ways to use pacs-rs](two-ways.md)
 
 # Learn

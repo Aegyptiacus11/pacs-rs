@@ -84,6 +84,10 @@ Licensed under either of
 
 at your option.
 
+The sample study in `docs/sample/` and the pictures that show it are not under these
+licences: they are adapted from a public research dataset and shared under CC BY-NC-SA 4.0
+([The sample study](docs/sample-study.md)).
+
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
 the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
 any additional terms or conditions.
