@@ -147,3 +147,10 @@ or described without being served. The answers' fields are the types of
   every answer into its type, and the types refuse a field they do not name. A field added
   to an answer fails there until it is described.
 
+## The settings page
+
+`docs/settings.md` is written by hand, and `crates/pacs-server/tests/settings_page.rs` holds
+it to the program: every setting the program takes must be on the page, every variable on
+the page must be one the program reads, and a default written on the page in code style must
+be the program's. After adding a setting, the test says what the page lacks.
+

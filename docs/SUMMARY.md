@@ -21,6 +21,7 @@
 # Operate
 
 - [Running](running.md)
+- [Settings](settings.md)
 - [Login](login.md)
 - [Audit trail](audit.md)
 

@@ -90,6 +90,8 @@ jobs:
         run: cargo test -p pacs-server --test docs --locked
       - name: The API reference is what the handlers say
         run: cargo test -p pacs-server --test api_reference --locked
+      - name: The settings page has every setting, with its default
+        run: cargo test -p pacs-server --test settings_page --locked
 
   publish:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

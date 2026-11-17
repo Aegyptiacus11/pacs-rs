@@ -1,6 +1,6 @@
 # DICOMweb
 
-Served under `/dicom-web` (`PACS_DICOMWEB_PATH`, see [Running](running.md)).
+Served under `/dicom-web` (`PACS_DICOMWEB_PATH`, see [Settings](settings.md#addresses)).
 
 | Request | |
 |---|---|
