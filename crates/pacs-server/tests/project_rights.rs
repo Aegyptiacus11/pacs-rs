@@ -14,7 +14,7 @@ use pacs_archive::Archive;
 use pacs_core::public_ids;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_server::auth::open_login;
-use pacs_server::{Settings, app_with_login, open_archive};
+use pacs_server::{Settings, open_archive};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -37,6 +37,8 @@ fn settings_in(dir: &Path) -> Settings {
         "true",
         "--auth-cookie-secure",
         "false",
+        "--audit-file",
+        &dir.join("audit.log").display().to_string(),
     ]
     .map(String::from);
     Settings::try_parse_from(args).unwrap()
@@ -183,7 +185,7 @@ struct Server {
     lung: SyntheticSeries,
     /// Stored as received, of another patient.
     received: SyntheticSeries,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 async fn server() -> Server {
@@ -191,7 +193,8 @@ async fn server() -> Server {
     let settings = settings_in(dir.path());
     let archive = open_archive(&settings).await.unwrap();
     let login = open_login(&settings, archive.index(), env).await.unwrap();
-    let app = app_with_login(archive.clone(), &settings, login).unwrap();
+    let audit = pacs_server::audit::open_audit(&settings).unwrap();
+    let app = pacs_server::app_with_audit(archive.clone(), &settings, login, audit).unwrap();
     let liver = SyntheticSeries::new(91, 2).for_patient(90);
     let lung = SyntheticSeries::new(92, 2).for_patient(90);
     let received = SyntheticSeries::new(93, 2);
@@ -216,7 +219,7 @@ async fn server() -> Server {
         liver,
         lung,
         received,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -777,4 +780,160 @@ async fn projects_are_set_changed_and_lifted_by_who_manages_users() {
             .unwrap(),
         None
     );
+}
+
+/// The message of an audit line is valid against DICOM's schema, when `PACS_TEST_XMLLINT`
+/// names `xmllint` (as in CI).
+fn valid(line: &str) {
+    let Ok(xmllint) = std::env::var("PACS_TEST_XMLLINT") else {
+        return;
+    };
+    let xml = &line[line.find("<AuditMessage>").expect("an audit message")..];
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("message.xml");
+    std::fs::write(&file, xml).unwrap();
+    let schema =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../pacs-audit/tests/dicom-audit-message.rng");
+    let output = std::process::Command::new(&xmllint)
+        .arg("--noout")
+        .arg("--relaxng")
+        .arg(schema)
+        .arg(&file)
+        .output()
+        .unwrap_or_else(|e| panic!("PACS_TEST_XMLLINT names {xmllint:?}, which did not run: {e}"));
+    assert!(
+        output.status.success(),
+        "{}\n{xml}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The lines the audit trail gained since `from`, and the new count.
+fn audited(s: &Server, from: &mut usize) -> Vec<String> {
+    let trail = std::fs::read_to_string(s.dir.path().join("audit.log")).unwrap();
+    let lines: Vec<String> = trail.lines().skip(*from).map(str::to_owned).collect();
+    *from += lines.len();
+    lines
+}
+
+#[tokio::test]
+async fn a_request_outside_the_account_s_projects_is_in_the_audit_trail() {
+    let s = server().await;
+    let app = &s.app;
+    let (liver, lung, received) = (ids(&s.liver), ids(&s.lung), ids(&s.received));
+    let (_, reader) = user(app, &s.admin, "reader", "reader", json!(["liver-2026"])).await;
+    let (_, second) = user(app, &s.admin, "second", "admin", json!(["liver-2026"])).await;
+    let mut seen = 0;
+    audited(&s, &mut seen);
+
+    const ACCESSED: &str = "csd-code=\"110103\"";
+    const REFUSED: &str = "EventOutcomeIndicator=\"4\"";
+    const WHY: &str =
+        "<EventOutcomeDescription>outside the account&apos;s projects</EventOutcomeDescription>";
+    let one = |lines: Vec<String>, what: &str| -> String {
+        assert_eq!(lines.len(), 1, "{what}: {lines:#?}");
+        valid(&lines[0]);
+        lines.into_iter().next().unwrap()
+    };
+
+    // a study of another project, asked for by its identifier: refused, and written
+    let path = format!("/studies/{}", lung.study);
+    assert_eq!(get(app, &path, &reader).await.status, StatusCode::NOT_FOUND);
+    let line = one(audited(&s, &mut seen), "a hidden study");
+    for part in [
+        ACCESSED,
+        REFUSED,
+        "EventActionCode=\"R\"",
+        "UserName=\"reader\"",
+        &lung.study_uid,
+    ] {
+        assert!(line.contains(part), "{part}: {line}");
+    }
+    assert!(
+        line.contains("outside the account") && line.contains("projects</EventOutcomeDescription>"),
+        "{WHY}: {line}"
+    );
+    assert!(!line.contains(&liver.study_uid), "{line}");
+
+    // asked again at once: no second line, as for a study read again
+    assert_eq!(get(app, &path, &reader).await.status, StatusCode::NOT_FOUND);
+    assert!(audited(&s, &mut seen).is_empty());
+
+    // what is in no study of the archive: a 404 like any other, and no line
+    for path in [
+        "/studies/nothing",
+        "/dicom-web/studies/1.2.3/metadata",
+        "/series/nothing/instances",
+    ] {
+        assert_eq!(
+            get(app, path, &reader).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        delete(app, "/studies/nothing", &second).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert!(audited(&s, &mut seen).is_empty());
+
+    // over DICOMweb, a study in no project
+    let path = format!(
+        "/dicom-web/studies/{}/series/{}/metadata",
+        received.study_uid, received.series_uid
+    );
+    assert_eq!(get(app, &path, &reader).await.status, StatusCode::NOT_FOUND);
+    let line = one(audited(&s, &mut seen), "DICOMweb");
+    assert!(
+        line.contains(REFUSED) && line.contains(&received.study_uid),
+        "{line}"
+    );
+
+    // a deletion that found nothing to delete, because the account does not see it
+    let path = format!("/series/{}", lung.series);
+    assert_eq!(
+        delete(app, &path, &second).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let line = one(audited(&s, &mut seen), "a deletion");
+    for part in [
+        ACCESSED,
+        REFUSED,
+        "EventActionCode=\"D\"",
+        "UserName=\"second\"",
+        &lung.study_uid,
+    ] {
+        assert!(line.contains(part), "{part}: {line}");
+    }
+
+    // an archive of something seen and something hidden: the hidden study is named
+    let order = json!({"Resources": [liver.instance, received.series]});
+    assert_eq!(
+        post(app, "/tools/create-archive", &reader, order)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    let line = one(audited(&s, &mut seen), "an archive");
+    assert!(
+        line.contains(REFUSED) && line.contains(&received.study_uid),
+        "{line}"
+    );
+    assert!(!line.contains(&liver.study_uid), "{line}");
+
+    // its own study: a success, as before
+    let path = format!("/studies/{}", liver.study);
+    assert_eq!(get(app, &path, &reader).await.status, StatusCode::OK);
+    let line = one(audited(&s, &mut seen), "its own study");
+    assert!(
+        line.contains("EventOutcomeIndicator=\"0\"") && line.contains(&liver.study_uid),
+        "{line}"
+    );
+
+    // an account that is not limited: a 404 is a study that is not there, and no line
+    assert_eq!(
+        get(app, "/studies/nothing", &s.admin).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert!(audited(&s, &mut seen).is_empty());
 }

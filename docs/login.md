@@ -217,6 +217,8 @@ there.
   on every route: the REST API, DICOMweb, the web interface's lists, archives, searches and
   download links. Lists and counts hold only what it sees. A patient is the studies of
   theirs that it sees.
+- **The attempt is recorded.** The answer is 404, and the [audit
+  trail](audit.md#what-is-recorded) names the account and the study it asked for.
 - **Writing.** Measurements go on the studies it sees. Deleting takes only what it sees: of
   a patient, the studies in its projects, and the others stay. It stores nothing over HTTP
   (403): what it sent would be in no project, out of its own sight. A study comes into a

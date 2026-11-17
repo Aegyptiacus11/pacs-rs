@@ -67,6 +67,7 @@ use pacs_archive::observed::{Stored, stored_during};
 use pacs_audit::events::{self, access_point, kind};
 use pacs_audit::syslog::{self, Sender};
 use pacs_audit::{AccessPoint, Action, Code, Message, Outcome, Participant, SopClass, Source};
+use pacs_index::SeenBy;
 use pacs_index::{AuditedStudy, Index, Level};
 
 use crate::Settings;
@@ -581,7 +582,82 @@ struct Asked {
     doomed: Vec<AuditedStudy>,
 }
 
+/// What is said of a request refused for being outside its account's projects.
+const OUTSIDE: &str = "outside the account's projects";
+
 impl Observer {
+    /// A request answered 404 to an account limited to some projects. When what it named
+    /// is in the archive, outside those projects, the request was an attempt on a study the
+    /// account may not see: written as the event it would have been, with a failure
+    /// outcome and the studies it named. When nothing of that name exists, there is
+    /// nothing to say, as for any other 404.
+    async fn outside_events(
+        &self,
+        trail: &Trail,
+        asked: Asked,
+        account: &str,
+        who: Participant,
+        ip: Option<IpAddr>,
+        now: SystemTime,
+    ) -> Result<(), pacs_index::Error> {
+        let (action, named) = match &asked.subject {
+            Subject::Viewed(target) | Subject::Sent(target) => {
+                (Action::Read, studies_of(&self.index, target, &[]).await?)
+            }
+            Subject::Annotated(target) => {
+                (Action::Update, studies_of(&self.index, target, &[]).await?)
+            }
+            Subject::Exported(target) => {
+                let listed = listed_resources(asked.query.as_deref(), &asked.body);
+                (
+                    Action::Read,
+                    studies_of(&self.index, target, &listed).await?,
+                )
+            }
+            Subject::Deleted(..) => (Action::Delete, asked.doomed.clone()),
+            // nothing here names a study of this archive
+            Subject::Search
+            | Subject::Stores
+            | Subject::RemoteSearch(_)
+            | Subject::RemoteMove(_) => {
+                return Ok(());
+            }
+        };
+        // of an archive order that mixes both, only what the account does not see
+        let theirs = self.index.limited_to(account);
+        let mut hidden = Vec::new();
+        for study in named {
+            if theirs
+                .audited_study(&study.study_instance_uid)
+                .await?
+                .is_none()
+            {
+                hidden.push(described(&study, false));
+            }
+        }
+        if hidden.is_empty() {
+            return Ok(());
+        }
+        // asked again within the window: one line, as for a study read again
+        let what = format!("{}|{ip:?}|outside|{:?}", who.user_id, asked.subject);
+        if trail.repeated(what, Instant::now()) {
+            return Ok(());
+        }
+        for group in by_patient(hidden) {
+            let mut event = events::instances_accessed(
+                &trail.source,
+                now,
+                action,
+                Outcome::MinorFailure,
+                vec![who.clone()],
+                &group,
+            );
+            event.outcome_description = Some(OUTSIDE.to_owned());
+            self.audit.record(event);
+        }
+        Ok(())
+    }
+
     async fn data_events(
         &self,
         trail: &Trail,
@@ -881,8 +957,13 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             }
         }
     }
-    if status.is_success()
-        && let Some(subject) = subject
+    // an account limited to some projects, told that what it asked for is not there
+    let outside = match response.extensions().get::<SeenBy>() {
+        Some(SeenBy(account)) if status == StatusCode::NOT_FOUND => Some(account.clone()),
+        _ => None,
+    };
+    if let Some(subject) = subject
+        && (status.is_success() || outside.is_some())
     {
         let asked = Asked {
             subject,
@@ -891,7 +972,15 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             body: asked_body,
             doomed,
         };
-        if let Err(error) = observer.data_events(&trail, asked, who, ip, now).await {
+        let written = match &outside {
+            Some(account) => {
+                observer
+                    .outside_events(&trail, asked, account, who, ip, now)
+                    .await
+            }
+            None => observer.data_events(&trail, asked, who, ip, now).await,
+        };
+        if let Err(error) = written {
             // the request is done; what cannot be said of it is said in the other log
             tracing::error!(%error, %method, %path, "an audit message was not written");
         }

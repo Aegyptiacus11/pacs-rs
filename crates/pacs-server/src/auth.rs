@@ -529,18 +529,28 @@ fn client_refused(error: &'static str, detail: &str) -> Response {
 /// the account ([`SeenBy`], which bounds every read of the archive behind the guard) and
 /// with its projects ([`Limited`]). Read from the index at each request, so a change holds
 /// at once, for tokens already given out too.
-async fn bound(login: &Login, account: &SignedIn, request: &mut Request) -> Result<(), Refusal> {
+///
+/// The answer is the mark, for an account that is limited: the guard leaves it on the
+/// response too, so that the audit trail around it can tell a study that is not there from
+/// one the account may not see.
+async fn bound(
+    login: &Login,
+    account: &SignedIn,
+    request: &mut Request,
+) -> Result<Option<SeenBy>, Refusal> {
     let key = account.account();
     let projects = login
         .index
         .account_projects(&key)
         .await
         .map_err(|e| internal("reading an account's projects", e))?;
-    if let Some(projects) = projects {
-        request.extensions_mut().insert(SeenBy(key));
-        request.extensions_mut().insert(Limited(projects));
-    }
-    Ok(())
+    let Some(projects) = projects else {
+        return Ok(None);
+    };
+    let seen = SeenBy(key);
+    request.extensions_mut().insert(seen.clone());
+    request.extensions_mut().insert(Limited(projects));
+    Ok(Some(seen))
 }
 
 async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> Response {
@@ -583,12 +593,16 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
                     response.extensions_mut().insert(client);
                     return response;
                 }
-                if let Err(refusal) = bound(&login, &client, &mut request).await {
-                    return refusal.into_response();
-                }
+                let seen = match bound(&login, &client, &mut request).await {
+                    Ok(seen) => seen,
+                    Err(refusal) => return refusal.into_response(),
+                };
                 request.extensions_mut().insert(client.clone());
                 let mut response = next.run(request).await;
                 response.extensions_mut().insert(client);
+                if let Some(seen) = seen {
+                    response.extensions_mut().insert(seen);
+                }
                 return response;
             };
             // a download token is for a URL, and for nothing else
@@ -637,13 +651,17 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
         response.extensions_mut().insert(user);
         return response;
     }
-    if let Err(refusal) = bound(&login, &user, &mut request).await {
-        return refusal.into_response();
-    }
+    let seen = match bound(&login, &user, &mut request).await {
+        Ok(seen) => seen,
+        Err(refusal) => return refusal.into_response(),
+    };
     request.extensions_mut().insert(user.clone());
     let mut response = next.run(request).await;
     // who asked, for the audit trail around the guard
     response.extensions_mut().insert(user);
+    if let Some(seen) = seen {
+        response.extensions_mut().insert(seen);
+    }
     response
 }
 
