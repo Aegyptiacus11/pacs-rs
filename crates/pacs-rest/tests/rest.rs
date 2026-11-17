@@ -230,7 +230,7 @@ async fn series_instances_and_files() {
 }
 
 #[tokio::test]
-async fn unknown_ids_are_a_bare_404_and_unsupported_searches_400() {
+async fn unknown_ids_are_a_bare_404_and_searches_it_cannot_do_are_400() {
     let app = app().await;
     for uri in [
         "/studies/x",
@@ -242,19 +242,220 @@ async fn unknown_ids_are_a_bare_404_and_unsupported_searches_400() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
         assert!(body.is_empty());
     }
-    for query in [
-        json!({"Level": "Study", "Query": {"PatientID": "SYN*"}}),
-        json!({"Level": "Study", "Query": {"PatientName": "X"}}),
-        json!({"Level": "Patient", "Query": {"PatientName": "X"}}),
+    for (query, why) in [
+        // an attribute its level does not search on
+        (
+            json!({"Level": "Study", "Query": {"PatientWeight": "70"}}),
+            "cannot search on PatientWeight",
+        ),
+        (
+            json!({"Level": "Patient", "Query": {"StudyDate": "20260101"}}),
+            "cannot search on StudyDate",
+        ),
+        (
+            json!({"Level": "Series", "Query": {"Modality": "CT"}}),
+            "cannot search on Modality",
+        ),
+        (
+            json!({"Level": "Series", "Query": {}}),
+            "a series search needs SeriesInstanceUID",
+        ),
+        (
+            json!({"Level": "Instance", "Query": {"SOPInstanceUID": ""}}),
+            "an instance search needs SOPInstanceUID",
+        ),
+        // a value that is not a match for its attribute
+        (
+            json!({"Level": "Study", "Query": {"StudyDate": "2026-01-01"}}),
+            "is not a date",
+        ),
+        (
+            json!({"Level": "Study", "Query": {"StudyDate": "20260131-20260101"}}),
+            "ends before it starts",
+        ),
+        (
+            json!({"Level": "Study", "Query": {"StudyTime": "1800-1000"}}),
+            "does not cross midnight",
+        ),
+        (
+            json!({"Level": "Study", "Query": {"StudyInstanceUID": "2.25.*"}}),
+            "is not a UID",
+        ),
+        (
+            json!({"Level": "Study", "Query": {"PatientID": 7}}),
+            "is not a string",
+        ),
+        (json!({"Level": "Volume"}), ""),
     ] {
-        let (status, _, _) = call(&app, "POST", "/tools/find", query.to_string().into()).await;
+        let (status, _, body) = call(&app, "POST", "/tools/find", query.to_string().into()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert!(
+            String::from_utf8_lossy(&body).contains(why),
+            "{query}: {}",
+            String::from_utf8_lossy(&body)
+        );
     }
     let empty = json!({"Level": "Study", "Query": {"StudyInstanceUID": "2.25.1"}});
     assert_eq!(
         json(&app, "POST", "/tools/find", empty.to_string().into()).await,
         json!([])
     );
+}
+
+#[tokio::test]
+async fn find_matches_as_the_standard_says() {
+    let app = app().await;
+    for series in [
+        SyntheticSeries::new(301, 1)
+            .with_patient("Doe^Jane", None)
+            .at("20260105", "103000"),
+        SyntheticSeries::new(302, 1)
+            .with_patient("DOE^JOHN", None)
+            .at("20260107", "090000")
+            .of_modality("MR"),
+        SyntheticSeries::new(303, 1)
+            .with_patient("Roe^Jane", None)
+            .at("20260201", "180000"),
+        // a second study of the first patient
+        SyntheticSeries::new(304, 1)
+            .for_patient(301)
+            .with_patient("Doe^Jane", None)
+            .at("20260301", "120000"),
+    ] {
+        upload_all(&app, &series).await;
+    }
+    let study = |seed: u32, patient: u32| {
+        public_ids::study(
+            &format!("SYN{patient}"),
+            &SyntheticSeries::new(seed, 1).study_uid(),
+        )
+    };
+    let patient = |seed: u32| public_ids::patient(&format!("SYN{seed}"));
+    let find = async |level: &str, query: Value| -> Vec<String> {
+        let body = json!({"Level": level, "Query": query}).to_string();
+        let mut found: Vec<String> = json(&app, "POST", "/tools/find", body.into())
+            .await
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_owned())
+            .collect();
+        found.sort();
+        found
+    };
+    let sorted = |mut ids: Vec<String>| {
+        ids.sort();
+        ids
+    };
+
+    for (query, expected) in [
+        (
+            json!({"PatientName": "doe*"}),
+            vec![study(301, 301), study(302, 302), study(304, 301)],
+        ),
+        (
+            json!({"PatientName": "Doe^Jane"}),
+            vec![study(301, 301), study(304, 301)],
+        ),
+        (
+            json!({"PatientID": "SYN30?"}),
+            vec![
+                study(301, 301),
+                study(302, 302),
+                study(303, 303),
+                study(304, 301),
+            ],
+        ),
+        (json!({"PatientID": "syn30?"}), vec![]),
+        (
+            json!({"StudyDate": "20260105-20260131"}),
+            vec![study(301, 301), study(302, 302)],
+        ),
+        (
+            json!({"StudyDate": "20260201-"}),
+            vec![study(303, 303), study(304, 301)],
+        ),
+        (
+            json!({"StudyTime": "0900-1100"}),
+            vec![study(301, 301), study(302, 302)],
+        ),
+        (json!({"ModalitiesInStudy": "MR"}), vec![study(302, 302)]),
+        (
+            json!({"StudyInstanceUID": "2.25.301100000\\2.25.303100000"}),
+            vec![study(301, 301), study(303, 303)],
+        ),
+        (
+            json!({"PatientName": "*", "AccessionNumber": ""}),
+            vec![
+                study(301, 301),
+                study(302, 302),
+                study(303, 303),
+                study(304, 301),
+            ],
+        ),
+        (
+            json!({"PatientName": "doe*", "StudyDate": "-20260106"}),
+            vec![study(301, 301)],
+        ),
+        // a range of dates and a range of times are read apart here: each day, those hours
+        (
+            json!({"StudyDate": "20260105-20260107", "StudyTime": "1000-1100"}),
+            vec![study(301, 301)],
+        ),
+    ] {
+        assert_eq!(
+            find("Study", query.clone()).await,
+            sorted(expected),
+            "{query}"
+        );
+    }
+    // a patient is found by any of their studies, once
+    for (query, expected) in [
+        (
+            json!({"PatientName": "doe*"}),
+            vec![patient(301), patient(302)],
+        ),
+        (
+            json!({"PatientName": "*^jane"}),
+            vec![patient(301), patient(303)],
+        ),
+        (json!({"PatientID": "SYN303"}), vec![patient(303)]),
+        (
+            json!({"PatientID": "SYN30*", "PatientSex": "O"}),
+            vec![patient(301), patient(302), patient(303)],
+        ),
+        (json!({"PatientID": "SYN9*"}), vec![]),
+    ] {
+        assert_eq!(
+            find("Patient", query.clone()).await,
+            sorted(expected),
+            "{query}"
+        );
+    }
+    // series and instances by a list of UIDs, those that are not there left out
+    let series = SyntheticSeries::new(301, 1);
+    let both = format!(
+        "{}\\{}\\2.25.9",
+        series.series_uid(),
+        SyntheticSeries::new(303, 1).series_uid()
+    );
+    assert_eq!(
+        find("Series", json!({"SeriesInstanceUID": both}))
+            .await
+            .len(),
+        2
+    );
+    let one = format!("{}\\2.25.9", series.instance_uid(0));
+    assert_eq!(
+        find("Instance", json!({"SOPInstanceUID": one})).await.len(),
+        1
+    );
+
+    // pages, and the resources themselves
+    let page = json!({"Level": "Study", "Query": {"PatientName": "doe*"}, "Limit": 2, "Since": 1, "Expand": true});
+    let found = json(&app, "POST", "/tools/find", page.to_string().into()).await;
+    assert_eq!(found.as_array().unwrap().len(), 2);
+    assert_eq!(found[0]["Type"], "Study");
 }
 
 #[tokio::test]

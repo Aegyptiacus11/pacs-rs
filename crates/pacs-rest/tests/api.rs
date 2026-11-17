@@ -178,7 +178,19 @@ async fn every_answer_is_what_the_description_says() {
         let all = json!({"Level": level}).to_string();
         let _: Error = answer(&app, "POST", "/tools/find", all, StatusCode::BAD_REQUEST).await;
     }
-    let search = json!({"Level": "Study", "Query": {"PatientName": "S*"}});
+    // a wild card and a range find the study; a value that is not a date is refused
+    let search =
+        json!({"Level": "Study", "Query": {"PatientName": "s*", "StudyDate": "20260101-"}});
+    let found: Found = answer(
+        &app,
+        "POST",
+        "/tools/find",
+        search.to_string(),
+        StatusCode::OK,
+    )
+    .await;
+    assert!(matches!(found, Found::Ids(ids) if ids.len() == 1));
+    let search = json!({"Level": "Study", "Query": {"StudyDate": "2026-01-01"}});
     let _: Error = answer(
         &app,
         "POST",

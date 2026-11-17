@@ -332,21 +332,42 @@ $ curl -d '{"Level": "Study", "Query": {"PatientID": "SYN1", "StudyDate": "20260
 ["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"]
 ```
 
+A value matches the way DICOM matches its attribute (PS3.4 C.2.2.2):
+
+| In the value | Meaning | For |
+|---|---|---|
+| nothing special | this value: with regard to case, except for names | every attribute |
+| `*` and `?` | any run of characters, and any one character | text and names |
+| `from-to`, `from-`, `-to` | a range, both ends included | dates and times |
+| `\` between UIDs | any of them | UIDs |
+| an empty value, or `*` alone | anything | every attribute |
+
+A name by its start, in whatever case, among the studies of January:
+
+```console
+$ curl -d '{"Level": "Study", "Query": {"PatientName": "synth*", "StudyDate": "20260101-20260131"}}' \
+    http://127.0.0.1:8080/tools/find
+```
+
+```json
+["da6c0de8-a32029ef-d216100a-7bdd4856-3ea9bed9"]
+```
+
 `"Expand": true` answers with the resources, and `"Limit"` and `"Since"` page through them,
 as in the lists above. What can be matched depends on the level:
 
 | `Level` | Attributes |
 |---|---|
-| `Patient` | `PatientID` |
-| `Study` | `StudyInstanceUID`, `PatientID`, `AccessionNumber`, `StudyDate` |
-| `Series` | `SeriesInstanceUID` |
-| `Instance` | `SOPInstanceUID` |
+| `Patient` | `PatientID`, `PatientName`, `PatientBirthDate`, `PatientSex` |
+| `Study` | those, and `StudyInstanceUID`, `StudyDate`, `StudyTime`, `AccessionNumber`, `StudyID`, `StudyDescription`, `ReferringPhysicianName`, `ModalitiesInStudy` |
+| `Series` | `SeriesInstanceUID`, which it needs |
+| `Instance` | `SOPInstanceUID`, which it needs |
 
-The match is exact. A search the server cannot do yet is refused with the reason, never
-answered with something else:
+A search the server cannot do as asked is refused with the reason, never answered with
+something else. Here, a date that is not written as DICOM writes dates:
 
 ```console
-$ curl -d '{"Level": "Study", "Query": {"StudyDate": "20260101-20261231"}}' \
+$ curl -d '{"Level": "Study", "Query": {"StudyDate": "2026-01-01"}}' \
     http://127.0.0.1:8080/tools/find
 ```
 
@@ -354,13 +375,13 @@ $ curl -d '{"Level": "Study", "Query": {"StudyDate": "20260101-20261231"}}' \
 {
   "HttpError": "Bad Request",
   "HttpStatus": 400,
-  "Message": "Not supported yet",
-  "Details": "only exact matching is supported yet: StudyDate=20260101-20261231"
+  "Message": "Bad request",
+  "Details": "..."
 }
 ```
 
-Ranges, wildcards and more attributes are on the
-[roadmap](roadmap.md#4-complete-query-and-retrieve).
+To search the series of a study by modality or number, or its instances, use DICOMweb's
+search, which matches the same way ([DICOMweb](dicomweb.md)).
 
 ## Delete
 

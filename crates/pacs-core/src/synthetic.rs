@@ -21,6 +21,11 @@ pub struct SyntheticSeries {
     pub patient_name: String,
     /// Specific Character Set, when the patient name needs one.
     pub character_set: Option<&'static str>,
+    /// Study Date and Study Time, `20260101` and `120000` unless set.
+    pub study_date: String,
+    pub study_time: String,
+    /// `CT` unless set.
+    pub modality: String,
 }
 
 impl SyntheticSeries {
@@ -35,6 +40,9 @@ impl SyntheticSeries {
             columns: 4,
             patient_name: "SYNTHETIC^SERIES".into(),
             character_set: None,
+            study_date: "20260101".into(),
+            study_time: "120000".into(),
+            modality: "CT".into(),
         }
     }
 
@@ -53,6 +61,19 @@ impl SyntheticSeries {
 
     pub fn patient_id(&self) -> String {
         format!("SYN{}", self.patient_seed.unwrap_or(self.study_seed))
+    }
+
+    /// The same series, of a study at `date` (YYYYMMDD) and `time` (HHMMSS).
+    pub fn at(mut self, date: &str, time: &str) -> Self {
+        self.study_date = date.into();
+        self.study_time = time.into();
+        self
+    }
+
+    /// The same series, of another modality than CT.
+    pub fn of_modality(mut self, modality: &str) -> Self {
+        self.modality = modality.into();
+        self
     }
 
     /// The same series for a patient named `name`, in `character_set` (e.g. `ISO_IR 100`).
@@ -137,13 +158,13 @@ impl SyntheticSeries {
         let mut object = InMemDicomObject::from_element_iter([
             DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
             DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, self.instance_uid(slice)),
-            DataElement::new(tags::MODALITY, VR::CS, "CT"),
+            DataElement::new(tags::MODALITY, VR::CS, self.modality.as_str()),
             DataElement::new(tags::PATIENT_NAME, VR::PN, self.patient_name.as_str()),
             DataElement::new(tags::PATIENT_ID, VR::LO, self.patient_id()),
             DataElement::new(tags::PATIENT_BIRTH_DATE, VR::DA, "19700101"),
             DataElement::new(tags::PATIENT_SEX, VR::CS, "O"),
-            DataElement::new(tags::STUDY_DATE, VR::DA, "20260101"),
-            DataElement::new(tags::STUDY_TIME, VR::TM, "120000"),
+            DataElement::new(tags::STUDY_DATE, VR::DA, self.study_date.as_str()),
+            DataElement::new(tags::STUDY_TIME, VR::TM, self.study_time.as_str()),
             DataElement::new(
                 tags::ACCESSION_NUMBER,
                 VR::SH,

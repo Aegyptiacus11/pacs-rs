@@ -59,7 +59,7 @@ So that workstations, viewers and other archives can use pacs-rs as they use any
 
 | Item | Done when |
 |---|---|
-| One matcher | single value, list of UID, universal, wildcard, range and sequence matching of PS3.4 C.2.2.2, shared by QIDO-RS, `/tools/find` and C-FIND |
+| Sequence matching, and the matcher for C-FIND | sequence matching of PS3.4 C.2.2.2.6 is added to the [one matcher](dicomweb.md#searching) that QIDO-RS and `/tools/find` already share (single value, list of UID, universal, wild card and range), and the C-FIND SCP below answers with it |
 | C-FIND, C-MOVE and C-GET as SCP | DCMTK's `findscu`, `movescu` and `getscu` query and retrieve from pacs-rs (step 8 of the [plan](interop.md#rules-for-the-scp-side-step-8)) |
 | Patient Root | both information models of PS3.4 C.6, as SCU and SCP |
 | C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |

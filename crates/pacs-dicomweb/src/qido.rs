@@ -1,7 +1,8 @@
 //! QIDO-RS: search for studies, a study's series, a series' instances (PS3.18 10.6).
 //!
-//! Matching is exact, on the keys the index has columns for; wildcards, ranges and
-//! fuzzy matching answer 400 rather than quietly matching something else. Every answer
+//! Matching is that of PS3.4 C.2.2.2 (`pacs_index::matching`): single value, wild card,
+//! list of UIDs and range, on the required keys of PS3.18 Table 10.6.1-5 that the index
+//! keeps. A key it does not know answers 400 rather than quietly matching something else. Every answer
 //! carries the computed attributes (counts, Modalities in Study, Retrieve URL), so
 //! `includefield` for them is satisfied without asking.
 
@@ -9,7 +10,7 @@ use axum::extract::{Path, Query};
 use axum::http::HeaderMap;
 use axum::http::header::ACCEPT;
 use axum::response::{IntoResponse, Response};
-use pacs_index::StudyFilter;
+use pacs_index::{Key, Kind, Match, StudySearch, first_value};
 use serde_json::{Value, json};
 
 use crate::media::{Accept, accepts_json};
@@ -32,32 +33,83 @@ pub(crate) fn instance_url(base: &str, study: &str, series: &str, instance: &str
     format!("{base}/studies/{study}/series/{series}/instances/{instance}")
 }
 
-/// The query keys one level understands, as (keyword, tag).
-const STUDY_KEYS: &[(&str, &str)] = &[
-    ("StudyInstanceUID", "0020000D"),
-    ("PatientID", "00100020"),
-    ("AccessionNumber", "00080050"),
-    ("StudyDate", "00080020"),
+/// The matching keys one level understands, as (keyword, tag, how its values match): the
+/// required ones of PS3.18 Table 10.6.1-5 that the index keeps, and a few more it keeps.
+const STUDY_KEYS: &[(&str, &str, Kind)] = &[
+    ("StudyDate", "00080020", Kind::Date),
+    ("StudyTime", "00080030", Kind::Time),
+    ("AccessionNumber", "00080050", Kind::Text),
+    ("ModalitiesInStudy", "00080061", Kind::Text),
+    ("ReferringPhysicianName", "00080090", Kind::Name),
+    ("PatientName", "00100010", Kind::Name),
+    ("PatientID", "00100020", Kind::Text),
+    ("StudyInstanceUID", "0020000D", Kind::Uid),
+    ("StudyID", "00200010", Kind::Text),
+    ("StudyDescription", "00081030", Kind::Text),
+    ("PatientBirthDate", "00100030", Kind::Date),
+    ("PatientSex", "00100040", Kind::Text),
 ];
-const SERIES_KEYS: &[(&str, &str)] = &[("SeriesInstanceUID", "0020000E"), ("Modality", "00080060")];
-const INSTANCE_KEYS: &[(&str, &str)] =
-    &[("SOPInstanceUID", "00080018"), ("SOPClassUID", "00080016")];
+const SERIES_KEYS: &[(&str, &str, Kind)] = &[
+    ("Modality", "00080060", Kind::Text),
+    ("SeriesInstanceUID", "0020000E", Kind::Uid),
+    ("SeriesNumber", "00200011", Kind::Number),
+    ("PerformedProcedureStepStartDate", "00400244", Kind::Date),
+    ("PerformedProcedureStepStartTime", "00400245", Kind::Time),
+    ("SeriesDescription", "0008103E", Kind::Text),
+];
+const INSTANCE_KEYS: &[(&str, &str, Kind)] = &[
+    ("SOPClassUID", "00080016", Kind::Uid),
+    ("SOPInstanceUID", "00080018", Kind::Uid),
+    ("InstanceNumber", "00200013", Kind::Number),
+];
 
-/// A parsed search query: matching keys by tag, and paging.
+/// The kinds of matching a search may ask for by a parameter of their own, none of which
+/// is done here: asked for, the search is made without, and the answer says so
+/// (PS3.18 8.3.4.2, 8.3.4.5, 8.3.4.6).
+const NOT_DONE: &[(&str, &str)] = &[
+    (
+        "fuzzymatching",
+        "The fuzzymatching parameter is not supported. Only literal matching has been performed.",
+    ),
+    (
+        "emptyvaluematching",
+        "The emptyvaluematching parameter is not supported. Empty Value Matching has not been performed.",
+    ),
+    (
+        "multiplevaluematching",
+        "The multiplevaluematching parameter is not supported. Multiple Value Matching has not been performed.",
+    ),
+];
+
+/// A parsed search query: its matching keys, its page, and what it asked for that is not
+/// done.
 #[derive(Debug, Default)]
 struct Search {
-    matches: Vec<(&'static str, String)>,
+    keys: Vec<Key>,
     limit: Option<usize>,
     offset: usize,
+    not_done: Vec<&'static str>,
 }
 
 impl Search {
     fn parse(
         params: &[(String, String)],
-        keys: &[(&'static str, &'static str)],
+        keys: &[(&'static str, &'static str, Kind)],
     ) -> Result<Self, ApiError> {
         let mut search = Search::default();
         for (name, value) in params {
+            if let Some((_, said)) = NOT_DONE.iter().find(|(parameter, _)| name == parameter) {
+                match value.as_str() {
+                    "false" => {}
+                    "true" => search.not_done.push(said),
+                    _ => {
+                        return Err(ApiError::bad_request(format!(
+                            "{name} is true or false, not {value:?}"
+                        )));
+                    }
+                }
+                continue;
+            }
             match name.as_str() {
                 "limit" => {
                     search.limit = Some(value.parse().map_err(|_| {
@@ -71,34 +123,50 @@ impl Search {
                 }
                 // the computed attributes are always returned; others are not yet
                 "includefield" => {}
-                "fuzzymatching" if value == "false" => {}
                 _ => {
-                    let tag = keys
+                    let (_, tag, kind) = keys
                         .iter()
-                        .find(|(keyword, tag)| name == keyword || name.eq_ignore_ascii_case(tag))
-                        .map(|(_, tag)| *tag)
+                        .find(|(keyword, tag, _)| name == keyword || name.eq_ignore_ascii_case(tag))
                         .ok_or_else(|| {
                             ApiError::bad_request(format!("cannot search on {name} here yet"))
                         })?;
-                    if value.contains(['*', '?', '\\', ','])
-                        || (tag == "00080020" && value.contains('-'))
-                    {
-                        return Err(ApiError::bad_request(format!(
-                            "only exact matching is supported yet: {name}={value}"
-                        )));
+                    // "Each attribute in the Query Parameter shall be not be repeated"
+                    if search.keys.iter().any(|key| key.tag == *tag) {
+                        return Err(ApiError::bad_request(format!("{name} is given twice")));
                     }
-                    search.matches.push((tag, value.clone()));
+                    // an empty value matches everything: nothing to ask
+                    if let Some(asked) = Match::parse(*kind, value)
+                        .map_err(|e| ApiError::bad_request(format!("{name}: {e}")))?
+                    {
+                        search.keys.push(Key {
+                            tag,
+                            kind: *kind,
+                            asked,
+                        });
+                    }
                 }
             }
         }
         Ok(search)
     }
 
-    fn get(&self, tag: &str) -> Option<&str> {
-        self.matches
-            .iter()
-            .find(|(t, _)| *t == tag)
-            .map(|(_, v)| v.as_str())
+    /// A range of times that ends before it starts matches nothing at these levels,
+    /// where no date comes with it: refused, so that it is not taken for an empty result.
+    fn no_reversed_range(&self) -> Result<(), ApiError> {
+        match self.keys.iter().find(|key| key.asked.reversed()) {
+            Some(_) => Err(ApiError::bad_request(
+                "the range of times ends before it starts: a range does not cross midnight",
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether a series' or an instance's attributes answer every key.
+    fn answered_by(&self, attributes: &Value) -> bool {
+        self.keys.iter().all(|key| {
+            key.asked
+                .matches(key.kind, first_value(attributes, key.tag).as_deref())
+        })
     }
 
     fn page<T>(&self, items: Vec<T>) -> Vec<T> {
@@ -107,6 +175,19 @@ impl Search {
             Some(limit) => items.take(limit).collect(),
             None => items.collect(),
         }
+    }
+
+    /// The answer, with a warning for each kind of matching asked for and not done.
+    fn response(&self, base: &str, body: Value) -> Response {
+        let mut response = json_response(body);
+        for said in &self.not_done {
+            if let Ok(warning) = format!("299 {base}: {said}").parse() {
+                response
+                    .headers_mut()
+                    .append(axum::http::header::WARNING, warning);
+            }
+        }
+        response
     }
 }
 
@@ -184,16 +265,17 @@ pub(crate) async fn studies(
 ) -> Result<Response, ApiError> {
     check_accept(&headers)?;
     let search = Search::parse(&params, STUDY_KEYS)?;
-    let filter = StudyFilter {
-        study_instance_uid: search.get("0020000D").map(str::to_owned),
-        patient_id: search.get("00100020").map(str::to_owned),
-        accession_number: search.get("00080050").map(str::to_owned),
-        study_date: search.get("00080020").map(str::to_owned),
-        limit: search.limit.map(|l| l as i64),
-        offset: Some(search.offset as i64),
-    };
     let base = state.base_url(&headers);
-    let studies = state.archive.index().studies(&filter).await?;
+    let asked = StudySearch {
+        keys: search.keys.clone(),
+        // a range of dates with a range of times is one range of moments here
+        // (PS3.18 8.3.4.1.1)
+        combined_date_time: true,
+        limit: search.limit,
+        offset: search.offset,
+    };
+    asked.check().map_err(ApiError::bad_request)?;
+    let studies = state.archive.index().search_studies(&asked).await?;
     let body: Vec<Value> = studies
         .into_iter()
         .map(|study| {
@@ -215,7 +297,7 @@ pub(crate) async fn studies(
             attributes
         })
         .collect();
-    Ok(json_response(Value::Array(body)))
+    Ok(search.response(&base, Value::Array(body)))
 }
 
 pub(crate) async fn series(
@@ -226,15 +308,10 @@ pub(crate) async fn series(
 ) -> Result<Response, ApiError> {
     check_accept(&headers)?;
     let search = Search::parse(&params, SERIES_KEYS)?;
+    search.no_reversed_range()?;
     let base = state.base_url(&headers);
-    let mut series = state
-        .archive
-        .index()
-        .series(&study, search.get("0020000E"))
-        .await?;
-    if let Some(modality) = search.get("00080060") {
-        series.retain(|s| s.attributes["00080060"]["Value"][0] == modality);
-    }
+    let mut series = state.archive.index().series(&study, None).await?;
+    series.retain(|s| search.answered_by(&s.attributes));
     let study_attributes = study_attributes(&state, &study).await?;
     let body: Vec<Value> = search
         .page(series)
@@ -256,7 +333,7 @@ pub(crate) async fn series(
             attributes
         })
         .collect();
-    Ok(json_response(Value::Array(body)))
+    Ok(search.response(&base, Value::Array(body)))
 }
 
 pub(crate) async fn instances(
@@ -267,15 +344,14 @@ pub(crate) async fn instances(
 ) -> Result<Response, ApiError> {
     check_accept(&headers)?;
     let search = Search::parse(&params, INSTANCE_KEYS)?;
+    search.no_reversed_range()?;
     let base = state.base_url(&headers);
     let mut instances = state
         .archive
         .index()
-        .instances(&study, &series, search.get("00080018"))
+        .instances(&study, &series, None)
         .await?;
-    if let Some(class) = search.get("00080016") {
-        instances.retain(|i| i.sop_class_uid == class);
-    }
+    instances.retain(|i| search.answered_by(&i.attributes));
     let upper = match state
         .archive
         .index()
@@ -322,5 +398,5 @@ pub(crate) async fn instances(
             attributes
         })
         .collect();
-    Ok(json_response(Value::Array(body)))
+    Ok(search.response(&base, Value::Array(body)))
 }

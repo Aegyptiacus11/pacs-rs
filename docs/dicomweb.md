@@ -10,9 +10,49 @@ Served under `/dicom-web` (`PACS_DICOMWEB_PATH`, see [Running](running.md)).
 | `GET .../instances/{instance}/frames/{list}` | frames as stored or transcoded: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
 | `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
 
-Not yet: wildcard, range, list and fuzzy matching (answered with 400, not ignored);
+Not yet: fuzzy, empty value, multiple value and sequence matching ([below](#searching));
 `includefield` for attributes beyond the stored levels; rendered media; JSON/XML + bulk data
 STOW; BulkDataURI in metadata.
+
+## Searching
+
+QIDO-RS matches as C-FIND does (PS3.18 8.3.4.1, PS3.4 C.2.2.2), on the required keys of
+PS3.18 Table 10.6.1-5 and a few more the index keeps.
+
+| A value | Matches | For |
+|---|---|---|
+| `SYN1` | that value: with regard to case, except for names | every key |
+| `DOE*`, `D?E^*` | wild cards: `*` any run of characters, `?` any one | text and names |
+| `20260101-20260131`, `20260101-`, `-20260131` | a range, both ends included | dates and times |
+| `1.2.3,1.2.4` | any of the UIDs | UIDs |
+| empty, or `*` alone | everything | every key |
+
+| Level | Keys |
+|---|---|
+| Studies | Study Date, Study Time, Accession Number, Modalities In Study, Referring Physician Name, Patient Name, Patient ID, Study Instance UID, Study ID; and Study Description, Patient Birth Date, Patient Sex |
+| A study's series | Modality, Series Instance UID, Series Number, Performed Procedure Step Start Date and Time; and Series Description |
+| A series' instances | SOP Class UID, SOP Instance UID, Instance Number |
+
+- **Names** are matched without regard to case, as the standard lets a server choose
+  (C.2.2.2.1.1); everything else is case-sensitive. Only the alphabetic group of a name is
+  matched.
+- **A time is matched by its meaning**: `1030` is every time in that minute, and `0900-1100`
+  ends at 11:00:59.999999.
+- **A range of dates with a range of times is one range of moments** (PS3.18 8.3.4.1.1):
+  `StudyDate=20260105-20260107&StudyTime=1100-1000` is from the 5th at 11:00 to the 7th at
+  10:00. A range of times that ends before it starts is refused on its own.
+- **Modalities In Study** matches a study when any of its series does.
+- A key given twice, one this level does not have, or a value that is not a match for its
+  key (a date that is not `YYYYMMDD`, a wild card in a UID) is answered 400 with the reason,
+  never by matching something else.
+- `fuzzymatching=true`, `emptyvaluematching=true` and `multiplevaluematching=true` are not
+  done: the search is made without, and the answer carries the `Warning: 299` header the
+  standard gives for each (PS3.18 8.3.4.2, 8.3.4.5, 8.3.4.6).
+- Not a key yet: Request Attributes Sequence and its items (sequence matching), and the
+  searches from the root for all series or all instances.
+
+SQLite and Postgres answer the same: one rule in the code decides every match, and the
+database only narrows what it is asked about.
 
 ## Compression and transcoding
 

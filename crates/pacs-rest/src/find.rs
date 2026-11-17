@@ -1,11 +1,13 @@
 //! `POST /tools/find`: search by DICOM attributes at one level.
 //!
-//! Exact matching on the attributes the index has columns for. Wildcards and ranges
-//! answer 400 for now, rather than matching something else.
+//! Matching is that of PS3.4 C.2.2.2 (`pacs_index::matching`): single value, wild card
+//! (`*`, `?`), list of UIDs (separated by `\\` or `,`) and range of dates or times, on
+//! the attributes the index keeps with each study. What a level cannot search on answers
+//! 400, rather than matching something else.
 
 use axum::Json;
 use bytes::Bytes;
-use pacs_index::StudyFilter;
+use pacs_index::{Key, Kind, Match, StudySearch};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::ToSchema;
@@ -38,38 +40,102 @@ pub(crate) struct Find {
     since: Option<i64>,
 }
 
-fn exact<'a>(query: &'a Map<String, Value>, key: &str) -> Result<Option<&'a str>, RestError> {
-    let Some(value) = query.get(key) else {
-        return Ok(None);
-    };
-    let value = value
-        .as_str()
-        .ok_or_else(|| RestError::bad_request("Bad request", format!("{key} is not a string")))?;
-    if value.contains(['*', '?', '\\']) || (key.ends_with("Date") && value.contains('-')) {
-        return Err(RestError::bad_request(
-            "Not supported yet",
-            format!("only exact matching is supported yet: {key}={value}"),
-        ));
+/// The attributes a search may match at the study level, as (keyword, tag, how its values
+/// match): those the index keeps with each study.
+const STUDY_KEYS: &[(&str, &str, Kind)] = &[
+    ("StudyDate", "00080020", Kind::Date),
+    ("StudyTime", "00080030", Kind::Time),
+    ("AccessionNumber", "00080050", Kind::Text),
+    ("ModalitiesInStudy", "00080061", Kind::Text),
+    ("ReferringPhysicianName", "00080090", Kind::Name),
+    ("PatientName", "00100010", Kind::Name),
+    ("PatientID", "00100020", Kind::Text),
+    ("PatientBirthDate", "00100030", Kind::Date),
+    ("PatientSex", "00100040", Kind::Text),
+    ("StudyInstanceUID", "0020000D", Kind::Uid),
+    ("StudyID", "00200010", Kind::Text),
+    ("StudyDescription", "00081030", Kind::Text),
+];
+/// And at the patient level: a patient is found by any of their studies.
+const PATIENT_KEYS: &[(&str, &str, Kind)] = &[
+    ("PatientName", "00100010", Kind::Name),
+    ("PatientID", "00100020", Kind::Text),
+    ("PatientBirthDate", "00100030", Kind::Date),
+    ("PatientSex", "00100040", Kind::Text),
+];
+
+/// The matching keys of a query, each attribute one of `allowed`. An empty value, or `*`,
+/// asks nothing. An attribute this level does not know, a value that is not text, or one
+/// that is not a match for its attribute (a range that ends before it starts, a UID that
+/// is not one) is refused, never read as something else.
+fn keys(
+    query: &Map<String, Value>,
+    allowed: &[(&'static str, &'static str, Kind)],
+) -> Result<Vec<Key>, RestError> {
+    let mut keys = Vec::new();
+    for (name, value) in query {
+        let Some((_, tag, kind)) = allowed.iter().find(|(keyword, _, _)| name == keyword) else {
+            return Err(RestError::bad_request(
+                "Not supported yet",
+                format!("cannot search on {name} at this level yet"),
+            ));
+        };
+        let value = value.as_str().ok_or_else(|| {
+            RestError::bad_request("Bad request", format!("{name} is not a string"))
+        })?;
+        if let Some(asked) = Match::parse(*kind, value)
+            .map_err(|e| RestError::bad_request("Bad request", format!("{name}: {e}")))?
+        {
+            keys.push(Key {
+                tag,
+                kind: *kind,
+                asked,
+            });
+        }
     }
-    Ok(Some(value))
+    Ok(keys)
 }
 
-fn only(query: &Map<String, Value>, allowed: &[&str]) -> Result<(), RestError> {
-    match query.keys().find(|k| !allowed.contains(&k.as_str())) {
-        Some(key) => Err(RestError::bad_request(
+/// The UIDs a series or instance search names: one, or a list.
+fn uids(
+    query: &Map<String, Value>,
+    name: &'static str,
+    what: &str,
+) -> Result<Vec<String>, RestError> {
+    if let Some(other) = query.keys().find(|key| *key != name) {
+        return Err(RestError::bad_request(
             "Not supported yet",
-            format!("cannot search on {key} at this level yet"),
-        )),
-        None => Ok(()),
+            format!("cannot search on {other} at this level yet"),
+        ));
+    }
+    let needed =
+        || RestError::bad_request("Not supported yet", format!("{what} search needs {name}"));
+    let value = query.get(name).ok_or_else(needed)?;
+    let value = value
+        .as_str()
+        .ok_or_else(|| RestError::bad_request("Bad request", format!("{name} is not a string")))?;
+    match Match::parse(Kind::Uid, value)
+        .map_err(|e| RestError::bad_request("Bad request", format!("{name}: {e}")))?
+    {
+        Some(Match::Is(uid)) => Ok(vec![uid]),
+        Some(Match::AnyOf(uids)) => Ok(uids),
+        _ => Err(needed()),
     }
 }
 
 /// Searches by DICOM attributes at one level.
 ///
-/// Exact matching only, on `PatientID` for patients; `StudyInstanceUID`, `PatientID`,
-/// `AccessionNumber` and `StudyDate` for studies; `SeriesInstanceUID` for series;
-/// `SOPInstanceUID` for instances. Wildcards, ranges and other attributes are refused, not
-/// ignored.
+/// A value matches as its attribute allows (PS3.4 C.2.2.2): itself; with `*` and `?` as
+/// wild cards, for text and names; a range `from-to`, `from-` or `-to` for dates and
+/// times; a list of UIDs separated by `\\`. Names match without regard to case, the rest
+/// with. An empty value, or `*`, asks nothing.
+///
+/// - `Patient`: `PatientID`, `PatientName`, `PatientBirthDate`, `PatientSex`.
+/// - `Study`: those, and `StudyInstanceUID`, `StudyDate`, `StudyTime`, `AccessionNumber`,
+///   `StudyID`, `StudyDescription`, `ReferringPhysicianName`, `ModalitiesInStudy`.
+/// - `Series`: `SeriesInstanceUID`, needed. `Instance`: `SOPInstanceUID`, needed.
+///
+/// Another attribute, or a value that is not a match for its attribute, is refused.
 #[utoipa::path(
     post,
     path = "/tools/find",
@@ -77,7 +143,7 @@ fn only(query: &Map<String, Value>, allowed: &[&str]) -> Result<(), RestError> {
     request_body(content = Find, description = "The level and what to match."),
     responses(
         (status = 200, description = "The identifiers found, or the resources.", body = Found),
-        (status = 400, description = "The body is not a search, or asks for a match that is not supported yet.", body = Error)
+        (status = 400, description = "The body is not a search, names an attribute its level cannot search on, or gives a value that is not a match for its attribute.", body = Error)
     )
 )]
 pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, RestError> {
@@ -87,10 +153,28 @@ pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, 
     let q = &find.query;
     let found: Vec<Value> = match find.level.to_ascii_lowercase().as_str() {
         "patient" => {
-            only(q, &["PatientID"])?;
-            let ids = index
-                .patient_public_ids(exact(q, "PatientID")?)
-                .await?
+            let keys = keys(q, PATIENT_KEYS)?;
+            let ids = if keys.is_empty() {
+                index.patient_public_ids(None).await?
+            } else {
+                // a patient is found by any of their studies
+                let search = StudySearch {
+                    keys,
+                    ..StudySearch::default()
+                };
+                let mut ids: Vec<String> = Vec::new();
+                for study in index.search_studies(&search).await? {
+                    let Some(id) = study.public_id else { continue };
+                    if let Some(study) = index.rest_study(&id).await?
+                        && !ids.contains(&study.patient_public_id)
+                    {
+                        ids.push(study.patient_public_id);
+                    }
+                }
+                ids.sort();
+                ids
+            };
+            let ids = ids
                 .into_iter()
                 .skip(find.since.unwrap_or(0).max(0) as usize)
                 .take(find.limit.map_or(usize::MAX, |l| l.max(0) as usize));
@@ -107,25 +191,19 @@ pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, 
             found
         }
         "study" => {
-            only(
-                q,
-                &[
-                    "StudyInstanceUID",
-                    "PatientID",
-                    "AccessionNumber",
-                    "StudyDate",
-                ],
-            )?;
-            let filter = StudyFilter {
-                study_instance_uid: exact(q, "StudyInstanceUID")?.map(str::to_owned),
-                patient_id: exact(q, "PatientID")?.map(str::to_owned),
-                accession_number: exact(q, "AccessionNumber")?.map(str::to_owned),
-                study_date: exact(q, "StudyDate")?.map(str::to_owned),
-                limit: find.limit,
-                offset: find.since,
+            let search = StudySearch {
+                keys: keys(q, STUDY_KEYS)?,
+                // a range of dates and a range of times are read apart, as C-FIND reads
+                // them without negotiation (PS3.4 C.2.2.2.5.4)
+                combined_date_time: false,
+                limit: find.limit.map(|limit| limit.max(0) as usize),
+                offset: find.since.unwrap_or(0).max(0) as usize,
             };
+            search
+                .check()
+                .map_err(|e| RestError::bad_request("Bad request", e))?;
             let mut found = Vec::new();
-            for study in index.studies(&filter).await? {
+            for study in index.search_studies(&search).await? {
                 let Some(id) = study.public_id else { continue };
                 if find.expand {
                     if let Some(s) = index.rest_study(&id).await? {
@@ -138,37 +216,32 @@ pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, 
             found
         }
         "series" => {
-            only(q, &["SeriesInstanceUID"])?;
-            let uid = exact(q, "SeriesInstanceUID")?.ok_or_else(|| {
-                RestError::bad_request(
-                    "Not supported yet",
-                    "a series search needs SeriesInstanceUID",
-                )
-            })?;
-            match index.series_public_id(uid).await? {
-                Some(id) if find.expand => index
-                    .rest_series(&id)
-                    .await?
-                    .map(series_json)
-                    .into_iter()
-                    .collect(),
-                Some(id) => vec![json!(id)],
-                None => vec![],
+            let mut found = Vec::new();
+            for uid in uids(q, "SeriesInstanceUID", "a series")? {
+                let Some(id) = index.series_public_id(&uid).await? else {
+                    continue;
+                };
+                if find.expand {
+                    found.extend(index.rest_series(&id).await?.map(series_json));
+                } else {
+                    found.push(json!(id));
+                }
             }
+            found
         }
         "instance" => {
-            only(q, &["SOPInstanceUID"])?;
-            let uid = exact(q, "SOPInstanceUID")?.ok_or_else(|| {
-                RestError::bad_request(
-                    "Not supported yet",
-                    "an instance search needs SOPInstanceUID",
-                )
-            })?;
-            match index.rest_instance_by_uid(uid).await? {
-                Some(i) if find.expand => vec![instance_json(i)],
-                Some(i) => vec![json!(i.public_id)],
-                None => vec![],
+            let mut found = Vec::new();
+            for uid in uids(q, "SOPInstanceUID", "an instance")? {
+                let Some(instance) = index.rest_instance_by_uid(&uid).await? else {
+                    continue;
+                };
+                found.push(if find.expand {
+                    instance_json(instance)
+                } else {
+                    json!(instance.public_id)
+                });
             }
+            found
         }
         other => {
             return Err(RestError::bad_request(

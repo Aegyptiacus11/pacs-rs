@@ -511,48 +511,228 @@ async fn stow_reports_what_it_stored_and_what_it_did_not() {
 }
 
 #[tokio::test]
-async fn searches_it_cannot_do_exactly_are_refused() {
+async fn searches_match_as_the_standard_says() {
     let app = app().await;
     two_series_study(&app).await;
+    // two more studies, at other dates and times, one of another modality
+    for series in [
+        SyntheticSeries::new(63, 1)
+            .with_patient("Doe^Jane", None)
+            .at("20260105", "103000"),
+        SyntheticSeries::new(64, 1)
+            .with_patient("DOE^JOHN", None)
+            .at("20260107", "090000")
+            .of_modality("MR"),
+    ] {
+        assert_eq!(
+            stow(&app, "/studies", series.all_bytes()).await.status,
+            StatusCode::OK
+        );
+    }
     let json = "application/dicom+json";
+    // the Patient IDs of the studies a search finds, sorted
+    let found = async |query: &str| -> Vec<String> {
+        let reply = get(&app, &format!("/studies?{query}"), json).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::OK,
+            "{query}: {}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        let mut ids: Vec<String> = reply
+            .json()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|study| value(study, "00100020").as_str().unwrap().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
 
-    let reply = get(&app, "/studies?StudyInstanceUID=2.25.999", json).await;
+    for (query, expected) in [
+        ("StudyInstanceUID=2.25.999", vec![]),
+        // single value, by keyword and by tag
+        ("PatientID=SYN61", vec!["SYN61"]),
+        ("00100020=SYN61", vec!["SYN61"]),
+        // wild cards: case-sensitive for text, not for names
+        ("PatientID=SYN6?", vec!["SYN61", "SYN63", "SYN64"]),
+        ("PatientID=syn6?", vec![]),
+        ("PatientName=doe*", vec!["SYN63", "SYN64"]),
+        ("PatientName=*%5EJane", vec!["SYN63"]),
+        ("PatientName=Doe%5EJane", vec!["SYN63"]),
+        // an empty value, and a lone star: everything
+        ("PatientName=", vec!["SYN61", "SYN63", "SYN64"]),
+        ("PatientName=*", vec!["SYN61", "SYN63", "SYN64"]),
+        // ranges of dates and of times
+        ("StudyDate=20260105-20260107", vec!["SYN63", "SYN64"]),
+        ("StudyDate=20260106-", vec!["SYN64"]),
+        ("StudyDate=-20260101", vec!["SYN61"]),
+        ("StudyDate=20260105", vec!["SYN63"]),
+        ("StudyTime=0900-1100", vec!["SYN63", "SYN64"]),
+        ("StudyTime=1030", vec!["SYN63"]),
+        // a range of dates with a range of times: from the 5th at 11:00 to the 7th at 10:00
+        (
+            "StudyDate=20260105-20260107&StudyTime=1100-1000",
+            vec!["SYN64"],
+        ),
+        (
+            "StudyDate=20260105-20260107&StudyTime=1000-1000",
+            vec!["SYN63", "SYN64"],
+        ),
+        // a list of UIDs
+        (
+            "StudyInstanceUID=2.25.63100000%2C2.25.64100000%2C2.25.9",
+            vec!["SYN63", "SYN64"],
+        ),
+        // the modalities of a study's series
+        ("ModalitiesInStudy=MR", vec!["SYN64"]),
+        ("ModalitiesInStudy=CT", vec!["SYN61", "SYN63"]),
+        // the other required keys
+        ("AccessionNumber=ACC6*", vec!["SYN61", "SYN63", "SYN64"]),
+        ("StudyID=S63", vec!["SYN63"]),
+        (
+            "ReferringPhysicianName=referring*",
+            vec!["SYN61", "SYN63", "SYN64"],
+        ),
+        // several keys, and a page of the result
+        ("PatientName=doe*&ModalitiesInStudy=MR", vec!["SYN64"]),
+        ("PatientName=doe*&limit=1&offset=1", vec!["SYN63"]),
+        ("limit=1&offset=3", vec![]),
+        // parameters it knows and does nothing with
+        (
+            "PatientID=SYN61&includefield=all&fuzzymatching=false",
+            vec!["SYN61"],
+        ),
+    ] {
+        assert_eq!(found(query).await, expected, "{query}");
+    }
+
+    // what is not a match for its attribute, or not a key here, is refused, with the reason
+    for (query, why) in [
+        ("StudyDate=2026-01-05", "StudyDate"),
+        ("StudyDate=20260107-20260105", "ends before it starts"),
+        ("StudyDate=-", "one end at least"),
+        ("StudyTime=2500", "is not a time"),
+        ("StudyInstanceUID=2.25.*", "is not a UID"),
+        ("PatientID=SYN61&PatientID=SYN63", "given twice"),
+        ("PatientID=SYN61&00100020=SYN63", "given twice"),
+        ("PatientWeight=70", "cannot search on PatientWeight"),
+        ("limit=x", "limit is not a number"),
+        ("fuzzymatching=maybe", "true or false"),
+    ] {
+        let reply = get(&app, &format!("/studies?{query}"), json).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+        assert!(
+            String::from_utf8_lossy(&reply.body).contains(why),
+            "{query}: {}",
+            String::from_utf8_lossy(&reply.body)
+        );
+    }
+
+    // kinds of matching asked for and not done: the search is made without, and says so
+    let reply = get(
+        &app,
+        "/studies?PatientName=doe*&fuzzymatching=true&emptyvaluematching=true",
+        json,
+    )
+    .await;
     assert_eq!(reply.status, StatusCode::OK);
-    assert_eq!(reply.json(), serde_json::json!([]));
-
-    assert_eq!(
-        get(&app, "/studies?PatientName=SYN*", json).await.status,
-        StatusCode::BAD_REQUEST
+    assert_eq!(reply.json().as_array().unwrap().len(), 2);
+    let warnings: Vec<&str> = reply
+        .headers
+        .get_all("warning")
+        .iter()
+        .map(|w| w.to_str().unwrap())
+        .collect();
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(warnings[0].starts_with("299 ") && warnings[0].ends_with("The fuzzymatching parameter is not supported. Only literal matching has been performed."), "{warnings:?}");
+    assert!(
+        warnings[1].ends_with("Empty Value Matching has not been performed."),
+        "{warnings:?}"
     );
-    assert_eq!(
-        get(&app, "/studies?PatientID=SYN*", json).await.status,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        get(&app, "/studies?StudyDate=20200101-20201231", json)
+    assert!(
+        get(&app, "/studies?PatientName=doe*", json)
             .await
-            .status,
-        StatusCode::BAD_REQUEST
+            .headers
+            .get("warning")
+            .is_none()
     );
-    assert_eq!(
-        get(&app, "/studies?limit=x", json).await.status,
-        StatusCode::BAD_REQUEST
-    );
-
-    let reply = get(&app, "/studies?00100020=SYN61", json).await;
-    assert_eq!(reply.json().as_array().unwrap().len(), 1);
-    let reply = get(&app, "/studies?limit=1&offset=1", json).await;
-    assert_eq!(reply.json(), serde_json::json!([]));
 
     let reply = get(&app, "/studies", "application/dicom+xml").await;
     assert_eq!(reply.status, StatusCode::NOT_ACCEPTABLE);
 
+    // a study's series, and a series' instances
     let study = SyntheticSeries::new(61, 1).study_uid();
-    let reply = get(&app, &format!("/studies/{study}/series?Modality=MR"), json).await;
-    assert_eq!(reply.json(), serde_json::json!([]));
-    let reply = get(&app, &format!("/studies/{study}/series?Modality=CT"), json).await;
-    assert_eq!(reply.json().as_array().unwrap().len(), 2);
-
+    let count = async |path: &str| -> usize {
+        let reply = get(&app, &format!("/studies/{study}/{path}"), json).await;
+        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        reply.json().as_array().unwrap().len()
+    };
+    let (big, small) = (
+        SyntheticSeries::new(61, 3),
+        SyntheticSeries::new(62, 2).in_study(61, 2),
+    );
+    for (path, expected) in [
+        ("series?Modality=MR".to_owned(), 0),
+        ("series?Modality=CT".to_owned(), 2),
+        ("series?Modality=C*".to_owned(), 2),
+        ("series?Modality=ct".to_owned(), 0),
+        ("series?SeriesNumber=2".to_owned(), 1),
+        ("series?SeriesNumber=02".to_owned(), 1),
+        ("series?SeriesDescription=*series%201".to_owned(), 1),
+        (
+            format!(
+                "series?SeriesInstanceUID={}%2C{}",
+                big.series_uid(),
+                small.series_uid()
+            ),
+            2,
+        ),
+        (
+            format!("series?SeriesInstanceUID={}", small.series_uid()),
+            1,
+        ),
+        ("series?limit=1&offset=1".to_owned(), 1),
+        (format!("series/{}/instances", big.series_uid()), 3),
+        (
+            format!("series/{}/instances?InstanceNumber=2", big.series_uid()),
+            1,
+        ),
+        (
+            format!(
+                "series/{}/instances?SOPInstanceUID={}%2C{}",
+                big.series_uid(),
+                big.instance_uid(0),
+                big.instance_uid(2)
+            ),
+            2,
+        ),
+        (
+            format!(
+                "series/{}/instances?SOPClassUID=1.2.840.10008.5.1.4.1.1.2",
+                big.series_uid()
+            ),
+            3,
+        ),
+        (
+            format!(
+                "series/{}/instances?SOPClassUID=1.2.840.10008.5.1.4.1.1.4",
+                big.series_uid()
+            ),
+            0,
+        ),
+    ] {
+        assert_eq!(count(&path).await, expected, "{path}");
+    }
+    for bad in [
+        "series?SeriesNumber=two",
+        "series?Modality=CT&00080060=MR",
+        "series?PatientID=SYN61",
+    ] {
+        let reply = get(&app, &format!("/studies/{study}/{bad}"), json).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
     let reply = get(
         &app,
         &format!("/studies/{study}/series/2.25.1/metadata"),
