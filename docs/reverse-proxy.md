@@ -57,7 +57,7 @@ What was seen with it:
 | `PACS_AUTH_COOKIE_SECURE=true` | the default; leave it. The cookie is then sent over HTTPS only, which the proxy provides |
 | `PACS_BASE_URL=https://pacs.example/dicom-web` | when the proxy cannot set the `X-Forwarded-*` headers: the Retrieve URLs are then built from this |
 | `PACS_MAX_REQUESTS_PER_CLIENT` | raise it, or set it to `0`: see below |
-| `PACS_CORS_ORIGINS` | only when a viewer served from another address calls pacs-rs from the browser |
+| `PACS_CORS_ORIGINS` | only when a [viewer served from another address](viewers.md) calls pacs-rs from the browser |
 
 **Every visitor looks like the proxy.** pacs-rs sees the address that connected to it,
 which is the proxy's. Two things follow:

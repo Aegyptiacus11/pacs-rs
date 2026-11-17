@@ -16,6 +16,7 @@
 
 - [REST API, task by task](rest-guide.md)
 - [Web interface](web-interface.md)
+- [Connecting another viewer](viewers.md)
 - [De-identification](de-identification.md)
 
 # Operate
