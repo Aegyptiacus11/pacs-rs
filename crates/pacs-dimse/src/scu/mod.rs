@@ -49,7 +49,7 @@ pub enum ConnectError {
 
 /// An association pacs-rs opened, over TCP or over TLS: the same messages either way.
 pub(crate) enum Link {
-    Plain(AsyncClientAssociation<TcpStream>),
+    Plain(Box<AsyncClientAssociation<TcpStream>>),
     Tls(Box<AsyncClientAssociation<AsyncTlsStream>>),
 }
 
@@ -61,7 +61,9 @@ impl Link {
         data: Option<&[u8]>,
     ) -> Result<(), MessageError> {
         match self {
-            Link::Plain(association) => message::send(association, context, command, data).await,
+            Link::Plain(association) => {
+                message::send(association.as_mut(), context, command, data).await
+            }
             Link::Tls(association) => {
                 message::send(association.as_mut(), context, command, data).await
             }
@@ -70,7 +72,7 @@ impl Link {
 
     pub async fn receive(&mut self, max_data: usize) -> Result<Incoming, MessageError> {
         match self {
-            Link::Plain(association) => message::receive(association, max_data).await,
+            Link::Plain(association) => message::receive(association.as_mut(), max_data).await,
             Link::Tls(association) => message::receive(association.as_mut(), max_data).await,
         }
     }
@@ -141,7 +143,7 @@ pub(crate) async fn connect(
     } else {
         let association = options.establish_async(address).await.map_err(refused)?;
         let contexts = association.presentation_contexts().to_vec();
-        (Link::Plain(association), contexts)
+        (Link::Plain(Box::new(association)), contexts)
     };
     let Some((context, transfer_syntax)) = contexts
         .iter()
