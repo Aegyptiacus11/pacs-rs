@@ -177,7 +177,7 @@ fn permission(method: &str, path: &str) -> Result<String, String> {
     let method = Method::from_bytes(method.to_uppercase().as_bytes())
         .map_err(|e| format!("{method} {path}: {e}"))?;
     if is_open(&method, path) {
-        return Ok("none: this is how one gets a token".to_owned());
+        return Ok("none: it needs no token".to_owned());
     }
     Ok(match right_for(&method, path) {
         Right::SignedIn => "any signed-in user".to_owned(),

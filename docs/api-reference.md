@@ -716,7 +716,7 @@ Signs in.
 The access token comes in the answer, and the refresh token in an `HttpOnly` cookie
 sent to `/auth/*` alone. A wrong password and an unknown login get the same answer.
 
-Permission, when the login is on: none: this is how one gets a token.
+Permission, when the login is on: none: it needs no token.
 
 | Send | Where | Type | |
 |---|---|---|---|
@@ -733,7 +733,7 @@ Signs out of this session.
 
 By the refresh cookie; the access token already given lasts until it runs out.
 
-Permission, when the login is on: none: this is how one gets a token.
+Permission, when the login is on: none: it needs no token.
 
 | Status | Answer | |
 |---|---|---|
@@ -788,7 +788,7 @@ Carries a session on.
 Spends the refresh cookie and sets its successor. A cookie already spent ends the
 session, since two parties then hold it.
 
-Permission, when the login is on: none: this is how one gets a token.
+Permission, when the login is on: none: it needs no token.
 
 | Status | Answer | |
 |---|---|---|
@@ -953,7 +953,7 @@ Gives a tool an access token.
 
 The client credentials grant, as IHE's Internet User Authorization profile uses it (Get Access Token, ITI-71): the tool's id and secret go in `Authorization: Basic`, the rest in a form. The token is good for five minutes; the tool asks again when it has run out.
 
-Permission, when the login is on: none: this is how one gets a token.
+Permission, when the login is on: none: it needs no token.
 
 | Send | Where | Type | |
 |---|---|---|---|
