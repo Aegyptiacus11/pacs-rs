@@ -646,3 +646,245 @@ async fn the_server_on_postgres() {
         series.study_uid()
     );
 }
+
+#[test]
+fn the_index_s_tls_goes_into_the_postgres_url() {
+    use pacs_server::{IndexTls, with_tls};
+    let url = "postgres://pacs@db/pacs";
+    assert_eq!(
+        with_tls(url, IndexTls::Off, None).unwrap(),
+        format!("{url}?sslmode=disable")
+    );
+    assert_eq!(
+        with_tls(url, IndexTls::Prefer, None).unwrap(),
+        format!("{url}?sslmode=prefer")
+    );
+    assert_eq!(
+        with_tls(url, IndexTls::VerifyFull, None).unwrap(),
+        format!("{url}?sslmode=verify-full")
+    );
+    // after the parameters the URL has already
+    assert_eq!(
+        with_tls(
+            "postgres://pacs@db/pacs?application_name=pacs",
+            IndexTls::Off,
+            None
+        )
+        .unwrap(),
+        "postgres://pacs@db/pacs?application_name=pacs&sslmode=disable"
+    );
+    // the authority's file, its path encoded for a URL
+    let dir = tempfile::tempdir().unwrap();
+    let ca = dir.path().join("the ca&more.crt");
+    std::fs::write(&ca, "-----BEGIN CERTIFICATE-----\n").unwrap();
+    let with_ca = with_tls(url, IndexTls::VerifyFull, Some(&ca)).unwrap();
+    assert!(
+        with_ca.starts_with("postgres://pacs@db/pacs?sslmode=verify-full&sslrootcert="),
+        "{with_ca}"
+    );
+    assert!(with_ca.ends_with("the%20ca%26more.crt"), "{with_ca}");
+
+    for (url, tls, file, why) in [
+        (
+            "postgres://pacs@db/pacs?sslmode=disable",
+            IndexTls::VerifyFull,
+            None,
+            "sets sslmode",
+        ),
+        (
+            "postgres://pacs@db/pacs?a=b&sslrootcert=/x",
+            IndexTls::Prefer,
+            None,
+            "sets sslrootcert",
+        ),
+        (
+            url,
+            IndexTls::Prefer,
+            Some(ca.clone()),
+            "only with PACS_INDEX_TLS=verify-full",
+        ),
+        (
+            url,
+            IndexTls::Off,
+            Some(ca.clone()),
+            "only with PACS_INDEX_TLS=verify-full",
+        ),
+        (
+            url,
+            IndexTls::VerifyFull,
+            Some(dir.path().join("none.crt")),
+            "reading PACS_INDEX_CA_FILE",
+        ),
+    ] {
+        let error = with_tls(url, tls, file.as_deref()).unwrap_err();
+        assert!(format!("{error:#}").contains(why), "{why}: {error:#}");
+    }
+}
+
+#[tokio::test]
+async fn tls_settings_are_refused_for_a_sqlite_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let ca = dir.path().join("ca.crt");
+    std::fs::write(&ca, "x").unwrap();
+    for extra in [
+        vec!["--index-tls", "verify-full"],
+        vec!["--index-ca-file", ca.to_str().unwrap()],
+    ] {
+        let error = open_archive(&settings_in(dir.path(), &extra))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("are for a Postgres index"),
+            "{error:#}"
+        );
+    }
+    // the default asks nothing of SQLite
+    assert_eq!(
+        settings_in(dir.path(), &[]).index_tls,
+        pacs_server::IndexTls::Prefer
+    );
+    open_archive(&settings_in(dir.path(), &[])).await.unwrap();
+}
+
+/// TLS to a Postgres index, against the server of `scripts/postgres-tls.sh`, when
+/// `PACS_TEST_POSTGRES_TLS_URL` and `PACS_TEST_POSTGRES_TLS_CERTS` name it.
+#[tokio::test]
+async fn the_index_over_tls() {
+    let (Ok(server), Ok(certs)) = (
+        std::env::var("PACS_TEST_POSTGRES_TLS_URL"),
+        std::env::var("PACS_TEST_POSTGRES_TLS_CERTS"),
+    ) else {
+        eprintln!("PACS_TEST_POSTGRES_TLS_URL and PACS_TEST_POSTGRES_TLS_CERTS not set; skipping");
+        return;
+    };
+    let server = server.trim_end_matches('/');
+    let (ca, other) = (format!("{certs}/ca.crt"), format!("{certs}/other.crt"));
+    let dir = tempfile::tempdir().unwrap();
+    let storage = format!("file:{}", dir.path().join("files").display());
+    // each case in a database of its own, made over a connection that checks nothing
+    sqlx::any::install_default_drivers();
+    let mut admin =
+        <sqlx::AnyConnection as sqlx::Connection>::connect(&format!("{server}/postgres"))
+            .await
+            .unwrap();
+    let mut made = 0;
+    let mut open = async |host_url: &str, extra: &[&str]| {
+        made += 1;
+        let name = format!("pacs_tls_test_{}_{made}", std::process::id());
+        for sql in [
+            format!("DROP DATABASE IF EXISTS {name}"),
+            format!("CREATE DATABASE {name}"),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&mut admin)
+                .await
+                .unwrap();
+        }
+        let url = format!("{host_url}/{name}");
+        let mut args = vec!["pacs-server", "--index", &url, "--storage", &storage];
+        args.extend(extra);
+        let settings = Settings::try_parse_from(args).unwrap();
+        open_archive(&settings).await
+    };
+    // whether the connection the index reads through is encrypted, as the server sees it
+    let encrypted = async |archive: &pacs_archive::Archive| -> bool {
+        let row = sqlx::query(
+            "SELECT CAST(ssl AS INT) AS ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+        )
+        .fetch_one(archive.index().pool())
+        .await
+        .unwrap();
+        sqlx::Row::get::<i32, _>(&row, "ssl") == 1
+    };
+
+    // the certificate checked against its authority, for the address it names
+    let archive = open(
+        server,
+        &["--index-tls", "verify-full", "--index-ca-file", &ca],
+    )
+    .await
+    .unwrap();
+    assert!(encrypted(&archive).await);
+    // and the archive works over it
+    let series = SyntheticSeries::new(74, 1);
+    archive.ingest(series.slice_bytes(0).into()).await.unwrap();
+    assert!(
+        archive
+            .index()
+            .study(&series.study_uid())
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // refused: an authority that did not sign it, the web's authorities, and a name the
+    // certificate does not have
+    let by_name = server.replace("127.0.0.1", "localhost");
+    for (url, extra, what) in [
+        (
+            server,
+            vec!["--index-tls", "verify-full", "--index-ca-file", &other],
+            "another authority",
+        ),
+        (
+            server,
+            vec!["--index-tls", "verify-full"],
+            "the web's authorities",
+        ),
+        (
+            by_name.as_str(),
+            vec!["--index-tls", "verify-full", "--index-ca-file", &ca],
+            "another name",
+        ),
+    ] {
+        let error = open(url, &extra)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{what}: accepted"));
+        let said = format!("{error:#}");
+        assert!(
+            said.contains("opening the Postgres index"),
+            "{what}: {said}"
+        );
+        assert!(
+            !said.contains("test@"),
+            "the password is in the error: {said}"
+        );
+    }
+
+    // without the check: encrypted by default, since the server offers it; plain when off
+    assert!(encrypted(&open(server, &[]).await.unwrap()).await);
+    assert!(encrypted(&open(&by_name, &["--index-tls", "prefer"]).await.unwrap()).await);
+    assert!(!encrypted(&open(server, &["--index-tls", "off"]).await.unwrap()).await);
+
+    // a server that does not speak TLS is refused by verify-full, and taken by prefer
+    if let Ok(plain) = std::env::var("PACS_TEST_POSTGRES_URL") {
+        let plain = plain.trim_end_matches('/');
+        let mut plain_admin =
+            <sqlx::AnyConnection as sqlx::Connection>::connect(&format!("{plain}/postgres"))
+                .await
+                .unwrap();
+        let name = format!("pacs_tls_test_{}_plain", std::process::id());
+        for sql in [
+            format!("DROP DATABASE IF EXISTS {name}"),
+            format!("CREATE DATABASE {name}"),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&mut plain_admin)
+                .await
+                .unwrap();
+        }
+        let url = format!("{plain}/{name}");
+        let settings = |extra: &[&str]| {
+            let mut args = vec!["pacs-server", "--index", &url, "--storage", &storage];
+            args.extend(extra);
+            Settings::try_parse_from(args).unwrap()
+        };
+        assert!(
+            open_archive(&settings(&["--index-tls", "verify-full"]))
+                .await
+                .is_err()
+        );
+        assert!(!encrypted(&open_archive(&settings(&[])).await.unwrap()).await);
+    }
+}
