@@ -14,6 +14,7 @@ use pacs_index::{Key, Kind, Match, StudySearch, first_value};
 use serde_json::{Value, json};
 
 use crate::media::{Accept, accepts_json};
+use crate::schema::{Attributes, Problem};
 use crate::scope::Seen;
 use crate::{ApiError, AppState};
 
@@ -258,6 +259,20 @@ async fn study_attributes(state: &AppState, study: &str) -> Result<Value, ApiErr
         .map_or_else(|| json!({}), |s| s.attributes))
 }
 
+/// Searches for studies (QIDO-RS).
+///
+/// Each study with its attributes, its counts of series and instances, the modalities of its series and the address to retrieve it from.
+#[utoipa::path(
+    get,
+    path = "/studies",
+    tag = "DICOMweb",
+    params(("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
+    responses(
+        (status = 200, description = "The studies, newest first.", body = Vec<Attributes>, content_type = "application/dicom+json"),
+        (status = 400, description = "A key this level does not have, one given twice, or a value that is not a match for its key.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn studies(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -300,6 +315,18 @@ pub(crate) async fn studies(
     Ok(search.response(&base, Value::Array(body)))
 }
 
+/// Lists and searches a study's series (QIDO-RS).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
+    responses(
+        (status = 200, description = "The series, by Series Number; none for a study that is not there.", body = Vec<Attributes>, content_type = "application/dicom+json"),
+        (status = 400, description = "A key this level does not have, one given twice, or a value that is not a match for its key.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn series(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -336,6 +363,18 @@ pub(crate) async fn series(
     Ok(search.response(&base, Value::Array(body)))
 }
 
+/// Lists and searches a series' instances (QIDO-RS).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series/{series}/instances",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID."), ("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
+    responses(
+        (status = 200, description = "The instances, by Instance Number; none for a series that is not there.", body = Vec<Attributes>, content_type = "application/dicom+json"),
+        (status = 400, description = "A key this level does not have, one given twice, or a value that is not a match for its key.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn instances(
     Seen(state): Seen,
     headers: HeaderMap,

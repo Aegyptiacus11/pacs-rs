@@ -623,6 +623,8 @@ async fn searches_match_as_the_standard_says() {
     ] {
         let reply = get(&app, &format!("/studies?{query}"), json).await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+        // a refusal is what the API's description says it is
+        serde_json::from_slice::<pacs_dicomweb::schema::Problem>(&reply.body).unwrap();
         assert!(
             String::from_utf8_lossy(&reply.body).contains(why),
             "{query}: {}",

@@ -2154,9 +2154,12 @@ dependencies = [
  "pacs-core",
  "pacs-index",
  "pacs-store",
+ "serde",
  "serde_json",
  "tokio",
  "tower",
+ "utoipa",
+ "utoipa-axum",
 ]
 
 [[package]]

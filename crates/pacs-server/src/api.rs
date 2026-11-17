@@ -13,7 +13,7 @@ use utoipa::openapi::{Info, License, OpenApi};
 use crate::auth::{Right, is_open, right_for};
 
 /// The sections of the reference, in order, each with what it is about.
-const TAGS: [(&str, &str); 11] = [
+const TAGS: [(&str, &str); 12] = [
     (
         "Patients",
         "A patient is the studies that share a Patient ID.",
@@ -27,6 +27,10 @@ const TAGS: [(&str, &str); 11] = [
     (
         "Search and archives",
         "Finding resources by their DICOM attributes, and several resources in one ZIP.",
+    ),
+    (
+        "DICOMweb",
+        "The standard's own HTTP interface (PS3.18), under `/dicom-web` unless `PACS_DICOMWEB_PATH` says otherwise: what viewers speak. What of it is served, and how it matches and transcodes, is on [DICOMweb](dicomweb.md).",
     ),
     (
         "Remote archives",
@@ -68,7 +72,9 @@ const METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 
 /// The description of the API this server serves.
 pub fn description() -> OpenApi {
-    let mut api = pacs_rest::api();
+    let api = pacs_rest::api();
+    // under the path it is served at unless the settings say otherwise
+    let mut api = api.nest("/dicom-web", pacs_dicomweb::api());
     api.merge(crate::modalities::api());
     api.merge(crate::auth::api());
     let mut info = Info::new("pacs-rs", env!("CARGO_PKG_VERSION"));
@@ -335,7 +341,7 @@ pub fn reference_of(api: &Value) -> Result<String, String> {
          refusal is an [Error](#error); the login's own routes refuse with \
          [Refused](#refused). With the [login](login.md) on, a request without a \
          valid token, or with one that lacks the permission, is answered 401.\n\n\
-         Not on this page: [DICOMweb](dicomweb.md), which the standard describes.\n\n",
+         DICOMweb's own refusals are a [Problem](#problem).\n\n",
     );
 
     let mut shown = 0;

@@ -154,7 +154,18 @@ async fn the_server_serves_its_description() {
     // its handler (404 or 400), never by the router for the method (405)
     for (path, item) in served["paths"].as_object().unwrap() {
         for method in item.as_object().unwrap().keys() {
-            let uri = path.replace("{id}", "nothing");
+            // each `{name}` of the path, as a name that names nothing
+            let uri: String = path
+                .split('/')
+                .map(|part| {
+                    if part.starts_with('{') {
+                        "nothing"
+                    } else {
+                        part
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
             let request = Request::builder()
                 .method(method.to_uppercase().as_str())
                 .uri(&uri)

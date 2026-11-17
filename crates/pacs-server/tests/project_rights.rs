@@ -240,6 +240,8 @@ fn rest_routes(ids: &Ids) -> Vec<String> {
             // not resources of this archive: remote AEs and the moves from them, which the
             // `remote` permission governs
             "modalities" | "jobs" => continue,
+            // DICOMweb names by UID: `other_routes` has its addresses
+            "dicom-web" => continue,
             other => panic!("a level this test does not know: {other}"),
         };
         routes.push(path.replace("{id}", id));
