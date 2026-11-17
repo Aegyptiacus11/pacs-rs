@@ -6,9 +6,9 @@ Every request of the REST API, written from the description each handler carries
 
 The same description is served by a running server at `/openapi.json` (OpenAPI 3.1), for a client generator or an API browser.
 
-An identifier that names nothing is answered 404 with an empty body. Every other refusal is an [Error](#error). With the [login](login.md) on, a request without a valid token, or with one that lacks the permission, is answered 401.
+An identifier that names nothing is answered 404 with an empty body. Every other refusal is an [Error](#error); the login's own routes refuse with [Refused](#refused). With the [login](login.md) on, a request without a valid token, or with one that lacks the permission, is answered 401.
 
-Not on this page yet: the remote archives (`/modalities`, `/jobs`) and the login, users, roles and tools, which are on [REST API](rest-api.md) and [Login](login.md); and [DICOMweb](dicomweb.md).
+Not on this page: [DICOMweb](dicomweb.md), which the standard describes.
 
 ## Patients
 
@@ -543,6 +543,491 @@ Permission, when the login is on: `read`.
 | 200 | [Found](#found) | The identifiers found, or the resources. |
 | 400 | [Error](#error) | The body is not a search, names an attribute its level cannot search on, or gives a value that is not a match for its attribute. |
 
+## Remote archives
+
+Other DICOM systems, reached over the DICOM network protocol: testing the link, searching their studies, bringing studies in.
+
+### `GET /modalities`
+
+Lists the remote AEs.
+
+The AEs of `PACS_DIMSE_REMOTES`: those pacs-rs can test, search and pull studies from.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `expand` | query, optional | boolean | Answer with each AE's title, host and port, by id, instead of the ids. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [RemoteAes](#remoteaes) | The ids, or the AEs by id. |
+
+### `POST /modalities/{id}/echo`
+
+Tests the link to a remote AE.
+
+One C-ECHO from pacs-rs's AE title.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Echo](#echo) | The remote AE answered Success. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 502 | [Error](#error) | It could not be reached, refused the association, or answered otherwise; `Details` says which. |
+
+### `POST /modalities/{id}/move`
+
+Brings studies in from a remote AE.
+
+A C-MOVE: the remote AE is asked to send the studies to pacs-rs, which must be listening
+for DIMSE and be known to that AE as a destination. They arrive through pacs-rs's own
+C-STORE, as any instance sent to it; sent to a project, they are de-identified on the
+way in. A `Warning` header says when the remote AE sent nothing, as it does for a study
+it does not have.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+| the body | | [Move](#move) | The studies, and where they go. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Moved](#moved) | The move is over. |
+| 202 | [Started](#started) | With `Asynchronous`: the move started, as a job. |
+| 400 | [Error](#error) | The body names no valid Study Instance UID, or a project that is not one. |
+| 403 | [Error](#error) | The account is limited to some projects and `Project` is not one of them. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 409 | [Error](#error) | pacs-rs is not listening for DIMSE, so nothing could arrive. |
+| 502 | [Error](#error) | The remote AE could not be reached or failed; `Details` says when it does not know pacs-rs as a destination. |
+
+### `GET /modalities/{id}/studies`
+
+Searches a remote AE's studies.
+
+A C-FIND at study level (Study Root), answered as a QIDO-RS search answers. The values
+match as PS3.4 C.2.2.2 says: `*` and `?` in text and names, a date or a range of dates.
+pacs-rs checks each match against the query as well, since an archive may not match on
+every key. A `Warning` header says when more studies match than `limit` (the search is
+then cancelled), when the archive did not match on every key, or when it ended early.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+| `PatientID` | query, optional | string | Patient ID. |
+| `PatientName` | query, optional | string | Patient's Name. |
+| `AccessionNumber` | query, optional | string | Accession Number. |
+| `StudyDate` | query, optional | string | A date, or a range: `20260101-20260131`, `-20260131`, `20260101-`. |
+| `ModalitiesInStudy` | query, optional | string | One modality. |
+| `limit` | query, optional | integer | At most this many studies: 100 unless given, 1000 at most. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | The studies, in DICOM JSON. |
+| 400 | [Error](#error) | A parameter that is not a search key here, or a value that breaks the matching rules. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 502 | [Error](#error) | The remote AE could not be reached or answered with a failure. |
+
+## Jobs
+
+Moves from a remote archive that run in the background.
+
+### `GET /jobs`
+
+Lists the jobs.
+
+The moves running in the background and the latest that are over, oldest first.
+
+Permission, when the login is on: `remote`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | The jobs' ids. |
+
+### `GET /jobs/{id}`
+
+A job: its state, progress and counts.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The job's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Job](#job) | The job. |
+| 404 | nothing | No job has this id; the body is empty. |
+
+### `POST /jobs/{id}/cancel`
+
+Asks a running move to stop.
+
+A C-CANCEL goes out with the remote AE's next response, and the job ends `Cancelled`
+once that AE answers so (PS3.4 C.4.2.2.1): what it had sent by then stays.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The job's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 202 | [Job](#job) | Asked to stop; the job as it is now. |
+| 404 | nothing | No job has this id; the body is empty. |
+| 409 | [Error](#error) | The job is over already. |
+
+## Signing in
+
+With `PACS_AUTH=true`: sessions for people, and what a signed-in account may ask about itself.
+
+### `POST /auth/download-token`
+
+Makes a link a browser can follow.
+
+A token good for one minute and one `GET` of one path, to append to it as `?token=`: for a download the browser starts itself, where no header can be set. Refused for a path the account may not read.
+
+Permission, when the login is on: any signed-in user.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [DownloadRequest](#downloadrequest) | The path the link is for. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [DownloadToken](#downloadtoken) | The token. |
+| 403 | [Refused](#refused) | The account may not read this path, or the path is one no link is made for (the accounts). |
+| 422 | [Refused](#refused) | Not a path of this server. |
+
+### `POST /auth/login`
+
+Signs in.
+
+The access token comes in the answer, and the refresh token in an `HttpOnly` cookie
+sent to `/auth/*` alone. A wrong password and an unknown login get the same answer.
+
+Permission, when the login is on: none: it needs no token.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [Credentials](#credentials) | The login and the password. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Session](#session) | Signed in. |
+| 401 | [Refused](#refused) | The login or the password is wrong, or the account is deactivated. |
+
+### `POST /auth/logout`
+
+Signs out of this session.
+
+By the refresh cookie; the access token already given lasts until it runs out.
+
+Permission, when the login is on: none: it needs no token.
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | The session ended, if there was one. |
+
+### `POST /auth/logout-all`
+
+Signs out everywhere.
+
+Ends every session of the user the access token is.
+
+Permission, when the login is on: any signed-in user.
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | Every session of the user ended. |
+
+### `GET /auth/me`
+
+Who the token is.
+
+For a user or a tool, with the projects it is limited to.
+
+Permission, when the login is on: any signed-in user.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Me](#me) | The account. |
+
+### `POST /auth/password`
+
+Changes the user's own password.
+
+Every session of the user ends, this one included. Not for a tool, which has no password.
+
+Permission, when the login is on: any signed-in user.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [PasswordChange](#passwordchange) | The password now, and the new one: 12 to 1024 bytes. |
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | Changed. |
+| 403 | [Refused](#refused) | The current password is wrong. |
+| 422 | [Refused](#refused) | The new password is too short or too long. |
+
+### `POST /auth/refresh`
+
+Carries a session on.
+
+Spends the refresh cookie and sets its successor. A cookie already spent ends the
+session, since two parties then hold it.
+
+Permission, when the login is on: none: it needs no token.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Session](#session) | A new access token, and the next cookie. |
+| 401 | [Refused](#refused) | No cookie, or one that is spent, expired or of a session that ended. |
+
+## Users
+
+With `PACS_AUTH=true`, for a role with `users`: who may sign in, with which role, on which projects.
+
+### `GET /projects`
+
+Lists the server's projects.
+
+The names an account can be limited to: those of `PACS_PROJECTS`.
+
+Permission, when the login is on: `users`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | The projects' names. |
+
+### `GET /users`
+
+Lists the users.
+
+Permission, when the login is on: `users`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of [User](#user) | Every user, by login. |
+
+### `POST /users`
+
+Adds a user.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [NewUser](#newuser) | The login, the first password, the role, and the projects to limit them to. |
+
+| Status | Answer | |
+|---|---|---|
+| 201 | [User](#user) | The user. |
+| 409 | [Refused](#refused) | The login is taken. |
+| 422 | [Refused](#refused) | A login with spaces, a password too short, a role or a project this server does not have. |
+
+### `PUT /users/{id}`
+
+Changes a user.
+
+A new password or a deactivation ends the user's sessions at once. A new role reaches their access token at its next refresh, within 15 minutes. New projects hold from their next request.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The user's id. |
+| the body | | [UserUpdate](#userupdate) | What to change; what is left out stays. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [User](#user) | The user after the change. |
+| 404 | [Refused](#refused) | No such user. |
+| 409 | [Refused](#refused) | The last active administrator cannot be deactivated or given another role. |
+| 422 | [Refused](#refused) | A password too short, a role or a project this server does not have. |
+
+### `DELETE /users/{id}`
+
+Removes a user.
+
+Their sessions end at once and the login is free again.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The user's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | Removed. |
+| 404 | [Refused](#refused) | No such user. |
+| 409 | [Refused](#refused) | The last active administrator cannot be removed. |
+
+## Roles
+
+With `PACS_AUTH=true`: what each role allows. Read by anyone signed in, changed by a role with `users`.
+
+### `GET /roles`
+
+Lists the roles.
+
+For any signed-in user, who may see what each role allows.
+
+Permission, when the login is on: any signed-in user.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of [Role](#role) | Every role. |
+
+### `POST /roles`
+
+Adds a role.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [NewRole](#newrole) | Its name and its permissions. |
+
+| Status | Answer | |
+|---|---|---|
+| 201 | [Role](#role) | The role. |
+| 409 | [Refused](#refused) | A role has the id this name makes. |
+| 422 | [Refused](#refused) | A name too long or without a letter or digit, or a permission that is not one. |
+
+### `PUT /roles/{id}`
+
+Changes a role.
+
+Its name, its permissions, or both. New permissions reach each user's access token at its next refresh, and a tool at its next request.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The role's id. |
+| the body | | [RoleUpdate](#roleupdate) | What to change; what is left out stays. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Role](#role) | The role after the change. |
+| 404 | [Refused](#refused) | No such role. |
+| 409 | [Refused](#refused) | The `admin` role cannot be changed. |
+| 422 | [Refused](#refused) | A name or a permission that is not valid. |
+
+### `DELETE /roles/{id}`
+
+Removes a role.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The role's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | Removed. |
+| 404 | [Refused](#refused) | No such role. |
+| 409 | [Refused](#refused) | The `admin` role cannot be removed, nor a role a user or a tool still has. |
+
+## Tools
+
+With `PACS_AUTH=true`: programs that connect without a person, with an id, a secret and a token of five minutes.
+
+### `POST /auth/token`
+
+Gives a tool an access token.
+
+The client credentials grant, as IHE's Internet User Authorization profile uses it (Get Access Token, ITI-71): the tool's id and secret go in `Authorization: Basic`, the rest in a form. The token is good for five minutes; the tool asks again when it has run out.
+
+Permission, when the login is on: none: it needs no token.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | `application/x-www-form-urlencoded` | The grant, and optionally less than the role gives. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Token](#token) | The token. |
+| 400 | [TokenRefused](#tokenrefused) | The request is not a client credentials grant, or asks for a scope the role does not give or for another server. |
+| 401 | [TokenRefused](#tokenrefused) | The id and secret are missing or not those of a tool. |
+
+### `GET /clients`
+
+Lists the tools.
+
+Permission, when the login is on: `users`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of [Tool](#tool) | Every tool, oldest first; never a secret. |
+
+### `POST /clients`
+
+Adds a tool.
+
+The answer is the only place its secret ever appears: the index keeps a hash of it.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [NewClient](#newclient) | Its name, its role, and the projects to limit it to. |
+
+| Status | Answer | |
+|---|---|---|
+| 201 | [Tool](#tool) | The tool, with its `secret`. |
+| 422 | [Refused](#refused) | A name too long, a role or a project this server does not have. |
+
+### `PUT /clients/{id}`
+
+Changes a tool.
+
+Its name, role or projects. They hold from its next request, tokens it already has included.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The tool's id. |
+| the body | | [ClientUpdate](#clientupdate) | What to change; what is left out stays. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Tool](#tool) | The tool after the change. |
+| 404 | [Refused](#refused) | No such tool. |
+| 422 | [Refused](#refused) | A name too long, a role or a project this server does not have. |
+
+### `DELETE /clients/{id}`
+
+Removes a tool.
+
+Its secret gets no more tokens, and those it has stop at its next request.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The tool's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | Removed. |
+| 404 | [Refused](#refused) | No such tool. |
+
 ## Objects
 
 What the requests above send and answer.
@@ -557,6 +1042,16 @@ The closest level still there after a deletion.
 | `Path` | string | Its address, such as `/series/{ID}`. |
 | `Type` | string | `Patient`, `Study` or `Series`. |
 
+### ClientUpdate
+
+What to change of a tool. What is left out stays as it is.
+
+| Field | Type | |
+|---|---|---|
+| `name` | string or null, optional |  |
+| `projects` | list of string or null, optional | Absent: no change. `null`: every study. A list: only those projects. |
+| `role` | string or null, optional |  |
+
 ### CreateArchive
 
 What to put in a ZIP.
@@ -567,6 +1062,15 @@ What to put in a ZIP.
 | `Synchronous` | boolean, optional | `true` unless given; `false` is refused, as there are no archive jobs yet. |
 | `Transcode` | string or null, optional | Refused when given: the files come as stored. |
 
+### Credentials
+
+A login and its password.
+
+| Field | Type | |
+|---|---|---|
+| `email` | string | The login. The field keeps the name the sessions library gives it. |
+| `password` | string |  |
+
 ### Deleted
 
 The answer to a deletion.
@@ -574,6 +1078,39 @@ The answer to a deletion.
 | Field | Type | |
 |---|---|---|
 | `RemainingAncestor` | [Ancestor](#ancestor) or null | `null` when the deletion left the patient with nothing, so that it went too. |
+
+### DicomJson
+
+One study as a remote AE describes it: its attributes in DICOM JSON, by tag.
+
+object.
+
+### DownloadRequest
+
+A link to make for a browser to follow.
+
+| Field | Type | |
+|---|---|---|
+| `path` | string | A path of this server, with its query if any: `/studies/{id}/archive`. |
+
+### DownloadToken
+
+A token good for one `GET` of one path, to put in its URL as `?token=`.
+
+| Field | Type | |
+|---|---|---|
+| `expires_in` | integer | Seconds it is good for. |
+| `token` | string |  |
+
+### Echo
+
+A C-ECHO that the remote AE answered.
+
+| Field | Type | |
+|---|---|---|
+| `AET` | string | The AE title that answered. |
+| `ElapsedMs` | integer | From the first byte sent to the association's release. |
+| `Status` | string | `Success`. |
 
 ### Error
 
@@ -618,6 +1155,100 @@ An instance: one stored DICOM file.
 | `ParentSeries` | string | The identifier of the instance's series. |
 | `Type` | string | `Instance`. |
 
+### Job
+
+A move in the background, or one that is over. Jobs are kept in memory, the latest hundred finished ones with them: a restart forgets them.
+
+| Field | Type | |
+|---|---|---|
+| `Completed` | integer or null |  |
+| `ElapsedMs` | integer |  |
+| `Error` | string or null | Why it failed; `null` unless `State` is `Failure`. |
+| `Failed` | integer or null |  |
+| `FailedSOPInstanceUIDs` | list of string |  |
+| `ID` | string |  |
+| `Progress` | integer or null | Percent of the instances done; `null` while the remote AE has given no count. |
+| `Remaining` | integer or null | The counts of the latest response; `null` for one the remote AE has not given. |
+| `Remote` | string | The id of the remote AE asked. |
+| `State` | string | `Running`, `Success`, `Warning`, `Cancelled` or `Failure`. |
+| `StudyInstanceUIDs` | list of string |  |
+| `Type` | string | `C-MOVE`. |
+| `Warning` | integer or null |  |
+
+### Me
+
+Who a token is.
+
+| Field | Type | |
+|---|---|---|
+| `id` | string |  |
+| `login` | string | The user's login, or a tool's name. |
+| `permissions` | list of string | What the role allows: of `read`, `write`, `remote`, `delete`, `users`. |
+| `projects` | list of string or null | The projects the account is limited to; `null` when it sees every study. |
+| `role` | string | The id of their role. |
+
+### Move
+
+Which studies to bring in, and how.
+
+| Field | Type | |
+|---|---|---|
+| `Asynchronous` | boolean or null, optional | Answer at once with a job, instead of when the move is over. |
+| `Project` | string or null, optional | The name of a project: the studies are sent to its AE title, and de-identified on the way in. Without it they come to pacs-rs's own AE title, as they are. |
+| `StudyInstanceUID` | [Uids](#uids) |  |
+
+### Moved
+
+How a move ended.
+
+| Field | Type | |
+|---|---|---|
+| `Completed` | integer or null | Instances sent, as the remote AE counted them; `null` when it gave no count. |
+| `ElapsedMs` | integer |  |
+| `Failed` | integer or null |  |
+| `FailedSOPInstanceUIDs` | list of string | The instances the remote AE said it could not send. |
+| `Status` | string | `Success`, or `Warning` when some instances failed. |
+| `Warning` | integer or null |  |
+
+### NewClient
+
+A tool to add.
+
+| Field | Type | |
+|---|---|---|
+| `name` | string |  |
+| `projects` | list of string or null, optional | The projects to limit the client to; absent or `null`: every study. |
+| `role` | string |  |
+
+### NewRole
+
+A role to add.
+
+| Field | Type | |
+|---|---|---|
+| `name` | string |  |
+| `permissions` | list of string, optional |  |
+
+### NewUser
+
+A user to add.
+
+| Field | Type | |
+|---|---|---|
+| `login` | string |  |
+| `password` | string |  |
+| `projects` | list of string or null, optional | The projects to limit the user to; absent or `null`: every study. |
+| `role` | string |  |
+
+### PasswordChange
+
+A user's own change of password.
+
+| Field | Type | |
+|---|---|---|
+| `current_password` | string |  |
+| `new_password` | string |  |
+
 ### Patient
 
 A patient: the studies that share a Patient ID.
@@ -639,6 +1270,50 @@ Identifiers, or with `expand` the patients themselves.
 
 list of string or list of [Patient](#patient).
 
+### Refused
+
+A request refused by the login: why.
+
+| Field | Type | |
+|---|---|---|
+| `detail` | string |  |
+
+### RemoteAe
+
+A remote AE as configured in `PACS_DIMSE_REMOTES`.
+
+| Field | Type | |
+|---|---|---|
+| `AET` | string | Its AE title. |
+| `Host` | string |  |
+| `Port` | integer |  |
+
+### RemoteAes
+
+The remote AEs: their ids, or with `expand` each id's AE.
+
+list of string or object of [RemoteAe](#remoteae).
+
+### Role
+
+A role: a name for a set of permissions.
+
+| Field | Type | |
+|---|---|---|
+| `id` | string | Made from the name: its letters and digits in lower case. |
+| `locked` | boolean | `true` for the one role that cannot be changed or removed, `admin`. |
+| `name` | string |  |
+| `permissions` | list of string | Of `read`, `write`, `remote`, `delete`, `users`. |
+
+### RoleUpdate
+
+What to change of a role. What is left out stays as it is.
+
+| Field | Type | |
+|---|---|---|
+| `name` | string or null, optional |  |
+| `permissions` | list of string or null, optional |  |
+
 ### Series
 
 A series.
@@ -655,6 +1330,24 @@ A series.
 | `ParentStudy` | string | The identifier of the series' study. |
 | `Status` | string | Always `Unknown`, for the reason of `ExpectedNumberOfInstances`. |
 | `Type` | string | `Series`. |
+
+### Session
+
+A session begun or carried on: the access token to send as `Authorization: Bearer`. The refresh token comes beside it, in an `HttpOnly` cookie.
+
+| Field | Type | |
+|---|---|---|
+| `access_token` | string | A JWT, good for 15 minutes. |
+| `token_type` | string | `bearer`. |
+
+### Started
+
+A move started in the background.
+
+| Field | Type | |
+|---|---|---|
+| `ID` | string | The job's id. |
+| `Path` | string | Where to ask how it goes: `/jobs/{ID}`. |
 
 ### Statistics
 
@@ -708,4 +1401,80 @@ A study.
 Identifiers, or with `expand` the studies themselves.
 
 list of string or list of [Study](#study).
+
+### Token
+
+An access token for a tool (OAuth 2.1, client credentials).
+
+| Field | Type | |
+|---|---|---|
+| `access_token` | string | A JWT, to send as `Authorization: Bearer`. |
+| `expires_in` | integer | Seconds it is good for. |
+| `scope` | string | The permissions it carries, separated by spaces. |
+| `token_type` | string | `Bearer`. |
+
+### TokenRefused
+
+A token request refused, as OAuth 2.1 words it.
+
+| Field | Type | |
+|---|---|---|
+| `error` | string | `invalid_client`, `invalid_request`, `unsupported_grant_type`, `invalid_scope` or `invalid_target`. |
+| `error_description` | string |  |
+
+### TokenRequest
+
+The form of a token request.
+
+| Field | Type | |
+|---|---|---|
+| `grant_type` | string | `client_credentials`. |
+| `requested_token_type` | string or null, optional | `urn:ietf:params:oauth:token-type:jwt`, the only kind. |
+| `resource` | string or null, optional | This server's name (`PACS_AUTH_ISSUER`); another one is refused. |
+| `scope` | string or null, optional | Permissions separated by spaces, to get fewer than the role gives. |
+
+### Tool
+
+A tool: a program that connects without a person.
+
+| Field | Type | |
+|---|---|---|
+| `created_by` | string | The login of the user who made it. |
+| `created_ms` | integer |  |
+| `id` | string | What it presents, with its secret, to get a token. |
+| `last_token_ms` | integer or null | When it last got a token; `null` when it never has. |
+| `name` | string |  |
+| `projects` | list of string or null | The projects the tool is limited to; `null` when it sees every study. |
+| `role` | string | The id of its role. |
+| `secret` | string or null, optional | Its secret: in the answer that makes the tool, and never again. |
+
+### Uids
+
+One Study Instance UID, or several.
+
+string or list of string.
+
+### User
+
+A user.
+
+| Field | Type | |
+|---|---|---|
+| `active` | boolean | `false` for an account that may no longer sign in. |
+| `created_ms` | integer | When the account was made, in milliseconds since 1970. |
+| `id` | string |  |
+| `login` | string | What they sign in with, in lower case. |
+| `projects` | list of string or null | The projects the user is limited to; `null` when they see every study. |
+| `role` | string | The id of their role. |
+
+### UserUpdate
+
+What to change of a user. What is left out stays as it is.
+
+| Field | Type | |
+|---|---|---|
+| `active` | boolean or null, optional |  |
+| `password` | string or null, optional |  |
+| `projects` | list of string or null, optional | Absent: no change. `null`: every study. A list: only those projects. |
+| `role` | string or null, optional |  |
 

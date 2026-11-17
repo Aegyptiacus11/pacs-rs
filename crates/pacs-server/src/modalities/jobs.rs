@@ -3,6 +3,7 @@
 //! sends C-CANCEL-MOVE-RQ. Jobs live in memory: a restart forgets them, and only the latest
 //! finished ones are kept.
 
+use super::schema::Error;
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -213,12 +214,31 @@ pub(super) fn spawn_move(
         .into_response()
 }
 
-/// The ids of the jobs kept, oldest first.
+/// Lists the jobs.
+///
+/// The moves running in the background and the latest that are over, oldest first.
+#[utoipa::path(
+    get,
+    path = "/jobs",
+    tag = "Jobs",
+    responses((status = 200, description = "The jobs' ids.", body = Vec<String>))
+)]
 pub(super) async fn list(State(remotes): State<Arc<Remotes>>) -> Json<Value> {
     let ids: Vec<String> = remotes.jobs.lock().1.keys().map(u64::to_string).collect();
     Json(json!(ids))
 }
 
+/// A job: its state, progress and counts.
+#[utoipa::path(
+    get,
+    path = "/jobs/{id}",
+    tag = "Jobs",
+    params(("id" = String, Path, description = "The job's id.")),
+    responses(
+        (status = 200, description = "The job.", body = super::schema::Job),
+        (status = 404, description = "No job has this id; the body is empty.")
+    )
+)]
 pub(super) async fn get(State(remotes): State<Arc<Remotes>>, Path(id): Path<String>) -> Response {
     let Ok(id) = id.parse::<u64>() else {
         return RestError::NotFound.into_response();
@@ -229,9 +249,21 @@ pub(super) async fn get(State(remotes): State<Arc<Remotes>>, Path(id): Path<Stri
     }
 }
 
-/// Ask a running move to stop: C-CANCEL-MOVE-RQ goes out with the next Pending response, and
-/// the job ends Cancelled once the remote AE answers Cancel (C.4.2.2.1). 409 for a job
-/// already over.
+/// Asks a running move to stop.
+///
+/// A C-CANCEL goes out with the remote AE's next response, and the job ends `Cancelled`
+/// once that AE answers so (PS3.4 C.4.2.2.1): what it had sent by then stays.
+#[utoipa::path(
+    post,
+    path = "/jobs/{id}/cancel",
+    tag = "Jobs",
+    params(("id" = String, Path, description = "The job's id.")),
+    responses(
+        (status = 202, description = "Asked to stop; the job as it is now.", body = super::schema::Job),
+        (status = 404, description = "No job has this id; the body is empty."),
+        (status = 409, description = "The job is over already.", body = Error)
+    )
+)]
 pub(super) async fn cancel(
     State(remotes): State<Arc<Remotes>>,
     Path(id): Path<String>,

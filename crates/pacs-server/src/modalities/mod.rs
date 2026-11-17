@@ -5,6 +5,7 @@
 
 mod jobs;
 mod retrieve;
+pub mod schema;
 mod studies;
 
 use std::collections::HashMap;
@@ -13,11 +14,15 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::{Json, Router};
 use pacs_dimse::{AeTitle, Config, RemoteAe};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
+use utoipa::openapi::OpenApi;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
+
+use schema::{Echo, Error, RemoteAes};
 
 /// What the routes share: the DIMSE configuration, whether pacs-rs listens for DIMSE
 /// (without which nothing moved to it can arrive), and the moves running in the background.
@@ -29,21 +34,34 @@ pub(crate) struct Remotes {
     jobs: jobs::Jobs,
 }
 
+/// The routes, each one by its `#[utoipa::path]`, so that none is served that the API's
+/// description does not have.
+fn described() -> OpenApiRouter<Arc<Remotes>> {
+    OpenApiRouter::new()
+        .routes(routes!(list))
+        .routes(routes!(echo))
+        .routes(routes!(studies::studies))
+        .routes(routes!(retrieve::move_studies))
+        .routes(routes!(jobs::list))
+        .routes(routes!(jobs::get))
+        .routes(routes!(jobs::cancel))
+}
+
+/// The description alone, for writing the reference.
+pub(crate) fn api() -> OpenApi {
+    described().into_openapi()
+}
+
 pub(crate) fn router(config: Config, receiving: bool, projects: Vec<(String, AeTitle)>) -> Router {
-    Router::new()
-        .route("/modalities", get(list))
-        .route("/modalities/{id}/echo", post(echo))
-        .route("/modalities/{id}/studies", get(studies::studies))
-        .route("/modalities/{id}/move", post(retrieve::move_studies))
-        .route("/jobs", get(jobs::list))
-        .route("/jobs/{id}", get(jobs::get))
-        .route("/jobs/{id}/cancel", post(jobs::cancel))
+    described()
         .with_state(Arc::new(Remotes {
             config,
             receiving,
             projects,
             jobs: jobs::Jobs::default(),
         }))
+        .split_for_parts()
+        .0
 }
 
 fn describe(remote: &RemoteAe) -> Value {
@@ -54,7 +72,16 @@ fn describe(remote: &RemoteAe) -> Value {
     })
 }
 
-/// The ids, or with `expand` each id's AE title, host and port.
+/// Lists the remote AEs.
+///
+/// The AEs of `PACS_DIMSE_REMOTES`: those pacs-rs can test, search and pull studies from.
+#[utoipa::path(
+    get,
+    path = "/modalities",
+    tag = "Remote archives",
+    params(("expand" = Option<bool>, Query, description = "Answer with each AE's title, host and port, by id, instead of the ids.")),
+    responses((status = 200, description = "The ids, or the AEs by id.", body = RemoteAes))
+)]
 async fn list(
     State(remotes): State<Arc<Remotes>>,
     Query(query): Query<HashMap<String, String>>,
@@ -79,8 +106,20 @@ async fn list(
     }
 }
 
-/// One C-ECHO from pacs-rs's AE title: 200 with the round trip when the remote AE answers
-/// Success, 502 with the reason when it does not, 404 for an unknown id.
+/// Tests the link to a remote AE.
+///
+/// One C-ECHO from pacs-rs's AE title.
+#[utoipa::path(
+    post,
+    path = "/modalities/{id}/echo",
+    tag = "Remote archives",
+    params(("id" = String, Path, description = "The remote AE's id, as `PACS_DIMSE_REMOTES` names it.")),
+    responses(
+        (status = 200, description = "The remote AE answered Success.", body = Echo),
+        (status = 404, description = "No remote AE has this id; the body is empty."),
+        (status = 502, description = "It could not be reached, refused the association, or answered otherwise; `Details` says which.", body = Error)
+    )
+)]
 async fn echo(State(remotes): State<Arc<Remotes>>, Path(id): Path<String>) -> Response {
     let Some(remote) = remotes.config.remote(&id) else {
         return RestError::NotFound.into_response();

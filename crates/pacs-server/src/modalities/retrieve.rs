@@ -1,6 +1,7 @@
 //! `POST /modalities/{id}/move`: a remote AE asked, by C-MOVE, to send studies to pacs-rs,
 //! where they arrive through its C-STORE SCP like any other.
 
+use super::schema::{Error, Move, Moved, Started};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,19 +17,29 @@ use serde_json::{Value, json};
 
 use super::Remotes;
 
-/// The body names the studies: `{"StudyInstanceUID": "1.2.3"}` or a list of them. The
-/// destination is pacs-rs's own AE title, or with `"Project": "<name>"` that project's, so
-/// the studies are de-identified on the way in: this route pulls studies in, it does not
-/// send a hospital's studies anywhere else. An unknown project is 400.
+/// Brings studies in from a remote AE.
 ///
-/// With `"Asynchronous": true` the move runs as a job: 202 with its `ID` and `Path`, whose
-/// counts `GET /jobs/{id}` shows as they come. Otherwise the answer comes when the move is
-/// over: 200 with the final status (`Success`, `Warning` when some instances failed, named in
-/// `FailedSOPInstanceUIDs`) and the counts, and a `Warning` header when nothing was sent; 502
-/// when the remote AE cannot be reached or fails, and says why (a destination it does not
-/// know means pacs-rs is not registered there). Either way, 409 when pacs-rs is not
-/// listening for DIMSE, so nothing could arrive; 400 for a body without valid UIDs; 404 for
-/// an unknown id.
+/// A C-MOVE: the remote AE is asked to send the studies to pacs-rs, which must be listening
+/// for DIMSE and be known to that AE as a destination. They arrive through pacs-rs's own
+/// C-STORE, as any instance sent to it; sent to a project, they are de-identified on the
+/// way in. A `Warning` header says when the remote AE sent nothing, as it does for a study
+/// it does not have.
+#[utoipa::path(
+    post,
+    path = "/modalities/{id}/move",
+    tag = "Remote archives",
+    params(("id" = String, Path, description = "The remote AE's id, as `PACS_DIMSE_REMOTES` names it.")),
+    request_body(content = Move, description = "The studies, and where they go."),
+    responses(
+        (status = 200, description = "The move is over.", body = Moved),
+        (status = 202, description = "With `Asynchronous`: the move started, as a job.", body = Started),
+        (status = 400, description = "The body names no valid Study Instance UID, or a project that is not one.", body = Error),
+        (status = 403, description = "The account is limited to some projects and `Project` is not one of them.", body = Error),
+        (status = 404, description = "No remote AE has this id; the body is empty."),
+        (status = 409, description = "pacs-rs is not listening for DIMSE, so nothing could arrive.", body = Error),
+        (status = 502, description = "The remote AE could not be reached or failed; `Details` says when it does not know pacs-rs as a destination.", body = Error)
+    )
+)]
 pub(super) async fn move_studies(
     State(remotes): State<Arc<Remotes>>,
     limited: Option<Extension<Limited>>,

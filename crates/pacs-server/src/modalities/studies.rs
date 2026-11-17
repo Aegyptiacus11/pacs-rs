@@ -10,17 +10,39 @@ use axum::response::{IntoResponse, Response};
 use pacs_rest::RestError;
 use serde_json::Value;
 
+use super::schema::{DicomJson, Error};
+
 /// Matches returned when no `limit` is given, and the most one may ask for.
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1000;
 
-/// The remote AE's studies, found by C-FIND at study level (Study Root), as a DICOM JSON
-/// array like a QIDO-RS search: `PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`
-/// (a date or a range) and `ModalitiesInStudy`, with `*` and `?` where PS3.4 C.2.2.2.4 allows
-/// them, and `limit`. With more matches than `limit` the search is cancelled (C-CANCEL) and
-/// a `Warning` header says so; so it does when the archive did not match on every key or
-/// ended early. 400 for a query that breaks the matching rules, 502 when the remote AE
-/// cannot be reached or answers with a failure, 404 for an unknown id.
+/// Searches a remote AE's studies.
+///
+/// A C-FIND at study level (Study Root), answered as a QIDO-RS search answers. The values
+/// match as PS3.4 C.2.2.2 says: `*` and `?` in text and names, a date or a range of dates.
+/// pacs-rs checks each match against the query as well, since an archive may not match on
+/// every key. A `Warning` header says when more studies match than `limit` (the search is
+/// then cancelled), when the archive did not match on every key, or when it ended early.
+#[utoipa::path(
+    get,
+    path = "/modalities/{id}/studies",
+    tag = "Remote archives",
+    params(
+        ("id" = String, Path, description = "The remote AE's id, as `PACS_DIMSE_REMOTES` names it."),
+        ("PatientID" = Option<String>, Query, description = "Patient ID."),
+        ("PatientName" = Option<String>, Query, description = "Patient's Name."),
+        ("AccessionNumber" = Option<String>, Query, description = "Accession Number."),
+        ("StudyDate" = Option<String>, Query, description = "A date, or a range: `20260101-20260131`, `-20260131`, `20260101-`."),
+        ("ModalitiesInStudy" = Option<String>, Query, description = "One modality."),
+        ("limit" = Option<u64>, Query, description = "At most this many studies: 100 unless given, 1000 at most.")
+    ),
+    responses(
+        (status = 200, description = "The studies, in DICOM JSON.", body = Vec<DicomJson>, content_type = "application/dicom+json"),
+        (status = 400, description = "A parameter that is not a search key here, or a value that breaks the matching rules.", body = Error),
+        (status = 404, description = "No remote AE has this id; the body is empty."),
+        (status = 502, description = "The remote AE could not be reached or answered with a failure.", body = Error)
+    )
+)]
 pub(super) async fn studies(
     State(remotes): State<Arc<super::Remotes>>,
     Path(id): Path<String>,

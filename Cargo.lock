@@ -2267,6 +2267,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utoipa",
+ "utoipa-axum",
  "zip",
 ]
 

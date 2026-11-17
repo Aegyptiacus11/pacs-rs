@@ -10,10 +10,10 @@ use serde_json::{Map, Value};
 use utoipa::openapi::tag::TagBuilder;
 use utoipa::openapi::{Info, License, OpenApi};
 
-use crate::auth::{Right, right_for};
+use crate::auth::{Right, is_open, right_for};
 
 /// The sections of the reference, in order, each with what it is about.
-const TAGS: [(&str, &str); 5] = [
+const TAGS: [(&str, &str); 11] = [
     (
         "Patients",
         "A patient is the studies that share a Patient ID.",
@@ -28,13 +28,49 @@ const TAGS: [(&str, &str); 5] = [
         "Search and archives",
         "Finding resources by their DICOM attributes, and several resources in one ZIP.",
     ),
+    (
+        "Remote archives",
+        "Other DICOM systems, reached over the DICOM network protocol: testing the link, searching their studies, bringing studies in.",
+    ),
+    (
+        "Jobs",
+        "Moves from a remote archive that run in the background.",
+    ),
+    (
+        "Signing in",
+        "With `PACS_AUTH=true`: sessions for people, and what a signed-in account may ask about itself.",
+    ),
+    (
+        "Users",
+        "With `PACS_AUTH=true`, for a role with `users`: who may sign in, with which role, on which projects.",
+    ),
+    (
+        "Roles",
+        "With `PACS_AUTH=true`: what each role allows. Read by anyone signed in, changed by a role with `users`.",
+    ),
+    (
+        "Tools",
+        "With `PACS_AUTH=true`: programs that connect without a person, with an id, a secret and a token of five minutes.",
+    ),
 ];
+
+/// The answers of the login's routes, as types.
+pub mod accounts {
+    pub use crate::auth_schema::*;
+}
+
+/// The answers of the remote AE routes, as types.
+pub mod remote {
+    pub use crate::modalities::schema::*;
+}
 
 const METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 
 /// The description of the API this server serves.
 pub fn description() -> OpenApi {
     let mut api = pacs_rest::api();
+    api.merge(crate::modalities::api());
+    api.merge(crate::auth::api());
     let mut info = Info::new("pacs-rs", env!("CARGO_PKG_VERSION"));
     info.description = Some(
         "The REST API of pacs-rs: patients, studies, series and instances by identifier. \
@@ -140,6 +176,9 @@ fn body(content: Option<&Value>, at: &str) -> Result<String, String> {
 fn permission(method: &str, path: &str) -> Result<String, String> {
     let method = Method::from_bytes(method.to_uppercase().as_bytes())
         .map_err(|e| format!("{method} {path}: {e}"))?;
+    if is_open(&method, path) {
+        return Ok("none: it needs no token".to_owned());
+    }
     Ok(match right_for(&method, path) {
         Right::SignedIn => "any signed-in user".to_owned(),
         right => match right.permission() {
@@ -293,11 +332,10 @@ pub fn reference_of(api: &Value) -> Result<String, String> {
          The same description is served by a running server at `/openapi.json` (OpenAPI \
          3.1), for a client generator or an API browser.\n\n\
          An identifier that names nothing is answered 404 with an empty body. Every other \
-         refusal is an [Error](#error). With the [login](login.md) on, a request without a \
+         refusal is an [Error](#error); the login's own routes refuse with \
+         [Refused](#refused). With the [login](login.md) on, a request without a \
          valid token, or with one that lacks the permission, is answered 401.\n\n\
-         Not on this page yet: the remote archives (`/modalities`, `/jobs`) and the login, \
-         users, roles and tools, which are on [REST API](rest-api.md) and \
-         [Login](login.md); and [DICOMweb](dicomweb.md).\n\n",
+         Not on this page: [DICOMweb](dicomweb.md), which the standard describes.\n\n",
     );
 
     let mut shown = 0;

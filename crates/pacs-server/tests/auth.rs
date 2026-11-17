@@ -12,6 +12,9 @@ use base64::Engine;
 use clap::Parser;
 use http_body_util::BodyExt;
 use pacs_core::synthetic::SyntheticSeries;
+use pacs_server::api::accounts::{
+    DownloadToken, Me, Refused, Role, Session, Token, TokenRefused, Tool, User,
+};
 use pacs_server::auth::open_login;
 use pacs_server::{Settings, app, app_with_login, open_archive};
 use serde_json::{Value, json};
@@ -19,6 +22,13 @@ use tower::ServiceExt;
 
 const SECRET: &str = "a-signing-secret-of-at-least-32-bytes";
 const ADMIN_PASSWORD: &str = "admin-password-1";
+
+/// An answer of the login's routes, as the type the API's description names for it; the
+/// types refuse a field they do not name.
+fn described<T: serde::de::DeserializeOwned>(answer: &Value) -> T {
+    serde_json::from_value(answer.clone())
+        .unwrap_or_else(|e| panic!("not what the description says: {e}\n{answer}"))
+}
 
 fn settings_with(index: &str, dir: &Path, extra: &[&str]) -> Settings {
     let storage = format!("file:{}", dir.join("files").display());
@@ -156,6 +166,7 @@ async fn sign_in(app: &Router, login: &str, password: &str) -> Reply {
 async fn token_of(app: &Router, login: &str, password: &str) -> String {
     let reply = sign_in(app, login, password).await;
     assert_eq!(reply.status, StatusCode::OK, "{login}: {}", reply.body);
+    described::<Session>(&reply.body);
     reply.token()
 }
 
@@ -187,6 +198,7 @@ async fn one_of_each(app: &Router, admin: &str) -> HashMap<&'static str, String>
         )
         .await;
         assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+        described::<User>(&made.body);
         tokens.insert(role, token_of(app, role, &password).await);
     }
     tokens
@@ -1387,6 +1399,7 @@ async fn make_client(app: &Router, admin: &str, name: &str, role: &str) -> (Stri
     )
     .await;
     assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    assert!(described::<Tool>(&made.body).secret.is_some());
     let field = |name: &str| made.body[name].as_str().unwrap().to_owned();
     (field("id"), field("secret"))
 }
@@ -1394,6 +1407,7 @@ async fn make_client(app: &Router, admin: &str, name: &str, role: &str) -> (Stri
 async fn client_token(app: &Router, id: &str, secret: &str, form: &str) -> String {
     let reply = ask_token(app, Some((id, secret)), form).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    described::<Token>(&reply.body);
     reply.token()
 }
 
@@ -1916,4 +1930,78 @@ async fn a_client_token_of_another_server_or_secret_is_refused() {
         get(&app, "/studies", Some(&forged)).await.status,
         StatusCode::UNAUTHORIZED
     );
+}
+
+/// Every route the description gives the login is one the server routes, with the answer
+/// the description names: the sign-in routes of the sessions library included.
+#[tokio::test]
+async fn the_described_login_routes_are_the_served_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings_in(dir.path(), &[])).await;
+    let admin = token_of(&app, "admin", ADMIN_PASSWORD).await;
+    let api = serde_json::to_value(pacs_server::api::description()).unwrap();
+    let mut seen = 0;
+    for (path, item) in api["paths"].as_object().unwrap() {
+        let of_the_login = ["/auth", "/users", "/roles", "/clients", "/projects"]
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !of_the_login {
+            continue;
+        }
+        for method in item.as_object().unwrap().keys() {
+            seen += 1;
+            let method: Method = method.to_uppercase().parse().unwrap();
+            let uri = path.replace("{id}", "nothing");
+            let reply = send(&app, method.clone(), &uri, Some(&admin), None, None).await;
+            // refused by its handler, with a reason, never by the router
+            assert_ne!(
+                reply.status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method} {uri}"
+            );
+            if reply.status == StatusCode::NOT_FOUND {
+                described::<Refused>(&reply.body);
+            }
+        }
+    }
+    assert_eq!(seen, 21, "the login's requests in the description");
+
+    // the answers, each as its described type
+    let me: Me = described(&get(&app, "/auth/me", Some(&admin)).await.body);
+    assert_eq!((me.login.as_str(), me.projects), ("admin", None));
+    let users: Vec<User> = described(&get(&app, "/users", Some(&admin)).await.body);
+    assert_eq!(users.len(), 1);
+    let roles: Vec<Role> = described(&get(&app, "/roles", Some(&admin)).await.body);
+    assert!(roles.iter().any(|role| role.id == "admin" && role.locked));
+    let made = post(
+        &app,
+        "/roles",
+        Some(&admin),
+        json!({"name": "Night shift", "permissions": ["read"]}),
+    )
+    .await;
+    assert_eq!(described::<Role>(&made.body).id, "night-shift");
+    let (id, secret) = make_client(&app, &admin, "Pipeline", "reader").await;
+    let tools: Vec<Tool> = described(&get(&app, "/clients", Some(&admin)).await.body);
+    assert!(tools.len() == 1 && tools[0].secret.is_none());
+    client_token(&app, &id, &secret, "grant_type=client_credentials").await;
+    let refused = ask_token(
+        &app,
+        Some((&id, "not-the-secret")),
+        "grant_type=client_credentials",
+    )
+    .await;
+    assert_eq!(
+        described::<TokenRefused>(&refused.body).error,
+        "invalid_client"
+    );
+    let link = download_token(&app, &admin, "/studies").await;
+    assert!(described::<DownloadToken>(&link.body).expires_in > 0);
+    let projects: Vec<String> = described(&get(&app, "/projects", Some(&admin)).await.body);
+    assert!(projects.is_empty());
+    // refusals
+    let wrong = sign_in(&app, "admin", "not-the-password").await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    described::<Refused>(&wrong.body);
+    described::<Refused>(&get(&app, "/auth/me", None).await.body);
 }
