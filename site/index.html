@@ -39,7 +39,7 @@
         <li>An audit trail of who stored, read, searched and deleted what</li>
       </ul>
       <figure>
-        <img src="img/studies.jpg" width="800" height="450" alt="The study list of pacs-rs: two studies with their patient, date, modality and counts, and a summary of the archive beside them.">
+        <img src="img/studies.jpg" width="800" height="450" alt="The study list of pacs-rs: two studies of one patient with their date, modality and counts, and a summary of the archive beside them.">
       </figure>
     </div>
   </div>
@@ -55,7 +55,7 @@
         <li>Priors of the same patient beside the current study</li>
       </ul>
       <figure>
-        <img src="img/viewer.jpg" width="800" height="450" alt="The viewer of pacs-rs showing a slice of a synthetic head phantom, with its tools along the top and the series at the left.">
+        <img src="img/viewer.jpg" width="800" height="450" alt="The viewer of pacs-rs showing a slice through the liver of an abdominal CT, with its tools along the top and the series at the left.">
       </figure>
     </div>
   </div>
@@ -83,7 +83,7 @@
 <section class="try">
   <div class="narrow">
     <h2>Try it in five minutes</h2>
-    <p>Docker, one file, and a sample study with no patient behind it.</p>
+    <p>Docker, one file, and three slices of a public CT to send it.</p>
 <pre><code>curl -fsSLO https://raw.githubusercontent.com/Aegyptiacus11/pacs-rs/main/compose.yaml
 docker compose up -d --wait</code></pre>
     <p>Then open <code>http://127.0.0.1:8080/ui/</code>, or follow the <a href="docs/quickstart.html">quickstart</a>, which sends a first study and asks for it back over HTTP.</p>
@@ -141,6 +141,7 @@ docker compose up -d --wait</code></pre>
 <footer>
   <div class="wide">
     <span>pacs-rs is open source, under MIT or Apache-2.0. Written in Rust.</span>
+    <span>The scan in the pictures is from the public dataset LiTS, <a href="docs/sample-study.html">credited here</a>.</span>
     <nav aria-label="Footer">
       <a href="docs/">Documentation</a>
       <a href="https://github.com/Aegyptiacus11/pacs-rs">Source</a>
