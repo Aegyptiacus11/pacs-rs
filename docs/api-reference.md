@@ -520,10 +520,17 @@ Permission, when the login is on: `read`.
 
 Searches by DICOM attributes at one level.
 
-Exact matching only, on `PatientID` for patients; `StudyInstanceUID`, `PatientID`,
-`AccessionNumber` and `StudyDate` for studies; `SeriesInstanceUID` for series;
-`SOPInstanceUID` for instances. Wildcards, ranges and other attributes are refused, not
-ignored.
+A value matches as its attribute allows (PS3.4 C.2.2.2): itself; with `*` and `?` as
+wild cards, for text and names; a range `from-to`, `from-` or `-to` for dates and
+times; a list of UIDs separated by `\\`. Names match without regard to case, the rest
+with. An empty value, or `*`, asks nothing.
+
+- `Patient`: `PatientID`, `PatientName`, `PatientBirthDate`, `PatientSex`.
+- `Study`: those, and `StudyInstanceUID`, `StudyDate`, `StudyTime`, `AccessionNumber`,
+  `StudyID`, `StudyDescription`, `ReferringPhysicianName`, `ModalitiesInStudy`.
+- `Series`: `SeriesInstanceUID`, needed. `Instance`: `SOPInstanceUID`, needed.
+
+Another attribute, or a value that is not a match for its attribute, is refused.
 
 Permission, when the login is on: `read`.
 
@@ -534,7 +541,7 @@ Permission, when the login is on: `read`.
 | Status | Answer | |
 |---|---|---|
 | 200 | [Found](#found) | The identifiers found, or the resources. |
-| 400 | [Error](#error) | The body is not a search, or asks for a match that is not supported yet. |
+| 400 | [Error](#error) | The body is not a search, names an attribute its level cannot search on, or gives a value that is not a match for its attribute. |
 
 ## Objects
 

@@ -22,7 +22,7 @@ the same description at `/openapi.json` (OpenAPI 3.1).
 | `GET /instances/{id}/file` | the DICOM file as stored |
 | `DELETE /patients/{id}`, `/studies/{id}`, `/series/{id}`, `/instances/{id}` | the resource, everything under it and every ancestor left empty; `RemainingAncestor` names the closest one still there, or is `null` |
 | `GET /tools/create-archive?resources=a,b`, `POST /tools/create-archive` (`{"Resources": [...]}`) | patients, studies, series and instances in one ZIP, laid out as above, each file once; a series or instance keeps its number in the series |
-| `POST /tools/find` | `Level` Patient, Study, Series or Instance, exact matching on the UIDs, PatientID, AccessionNumber, StudyDate |
+| `POST /tools/find` | `Level` Patient, Study, Series or Instance, and a `Query` of attributes matched as DICOM matches them: single values, `*` and `?`, ranges of dates and times, lists of UIDs ([the guide](rest-guide.md#search), [the reference](api-reference.md#post-toolsfind)) |
 | `GET /modalities[?expand]` | the remote AEs of `PACS_DIMSE_REMOTES`: their ids, or each one's `AET`, `Host` and `Port` |
 | `POST /modalities/{id}/echo` | a C-ECHO to that AE: 200 with `Status` and `ElapsedMs` when it answers Success, 502 with the reason when not |
 | `GET /modalities/{id}/studies?PatientID=&PatientName=&AccessionNumber=&StudyDate=&ModalitiesInStudy=&limit=` | that AE's studies, by C-FIND (see [DIMSE](dimse.md)), as a DICOM JSON array |
@@ -42,4 +42,4 @@ An instance sent again is kept as first stored (`AlreadyStored`) unless `PACS_OV
 is set. Lists of a study's series and a series' instances come in Series and Instance Number
 order.
 
-Not yet: labels, metadata, modifications, wildcard and range searches in `/tools/find`.
+Not yet: labels, metadata, modifications; searching series or instances by anything but their UID.
