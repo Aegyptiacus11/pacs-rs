@@ -80,9 +80,28 @@ async fn main() -> anyhow::Result<()> {
         "pacs-server {} ready",
         env!("CARGO_PKG_VERSION"),
     );
+    // the audit file sent on to a repository, until the server has said it stops
+    let (said_stop, stop_said) = tokio::sync::oneshot::channel::<()>();
+    let forwarding = match (
+        pacs_server::audit_forward::open(&settings)?,
+        audit.written(),
+    ) {
+        (Some(forward), Some(written)) => {
+            tracing::info!(repository = %forward.repository(), "the audit trail is sent to a repository");
+            Some(tokio::spawn(forward.run(written, async {
+                let _ = stop_said.await;
+            })))
+        }
+        _ => None,
+    };
     audit.application(true, &ae_titles);
     let limits = pacs_server::limits::Limits::from_settings(&settings);
     let served = pacs_server::limits::serve(listener, app, limits, until_stopped()).await;
     audit.application(false, &ae_titles);
+    // the last lines go before the process does, when the repository takes them in time
+    let _ = said_stop.send(());
+    if let Some(forwarding) = forwarding {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), forwarding).await;
+    }
     served
 }

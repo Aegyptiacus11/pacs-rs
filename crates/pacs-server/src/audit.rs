@@ -95,6 +95,8 @@ struct Trail {
     issuer: String,
     /// What was read or searched lately, and when: see [`REPEAT_SECONDS`].
     recent: Mutex<HashMap<String, Instant>>,
+    /// Told of each line written, for who sends the file on (`audit_forward`).
+    written: Arc<tokio::sync::Notify>,
 }
 
 /// The audit trail of a running server; does nothing when there is none.
@@ -145,6 +147,7 @@ pub fn open_audit(settings: &Settings) -> anyhow::Result<Audit> {
         },
         issuer: settings.auth_issuer.trim().to_owned(),
         recent: Mutex::new(HashMap::new()),
+        written: Arc::new(tokio::sync::Notify::new()),
     }))))
 }
 
@@ -184,6 +187,12 @@ impl Audit {
         if let Err(error) = written {
             tracing::error!(event = message.event_id.text, %error, "an audit message was not written");
         }
+        trail.written.notify_one();
+    }
+
+    /// Notified after each line is written; none without a trail.
+    pub fn written(&self) -> Option<Arc<tokio::sync::Notify>> {
+        self.0.as_ref().map(|trail| trail.written.clone())
     }
 
     /// The server started (`true`) or is stopping; `ae_titles` are its DICOM AE titles
@@ -1127,6 +1136,7 @@ mod tests {
             process: "pacs-server@host".into(),
             issuer: "pacs-rs".into(),
             recent: Mutex::new(HashMap::new()),
+            written: Arc::new(tokio::sync::Notify::new()),
         }
     }
 

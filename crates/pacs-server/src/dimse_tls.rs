@@ -27,7 +27,12 @@ pub(crate) struct DimseTls {
     pub caller: Option<ClientTls>,
 }
 
-fn certificates(file: &Path, setting: &str) -> anyhow::Result<Vec<CertificateDer<'static>>> {
+/// The certificates of a PEM file, which must hold one at least; `setting` names the file
+/// in an error.
+pub(crate) fn certificates(
+    file: &Path,
+    setting: &str,
+) -> anyhow::Result<Vec<CertificateDer<'static>>> {
     let certificates = CertificateDer::pem_file_iter(file)
         .and_then(|found| found.collect::<Result<Vec<_>, _>>())
         .with_context(|| format!("reading {setting} {}", file.display()))?;
@@ -37,14 +42,27 @@ fn certificates(file: &Path, setting: &str) -> anyhow::Result<Vec<CertificateDer
     Ok(certificates)
 }
 
-fn authorities(file: &Path) -> anyhow::Result<RootCertStore> {
+/// The certificate authorities of a PEM file.
+pub(crate) fn authorities(file: &Path, setting: &str) -> anyhow::Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
-    for certificate in certificates(file, "PACS_DIMSE_TLS_CA_FILE")? {
-        roots.add(certificate).with_context(|| {
-            format!("an authority of PACS_DIMSE_TLS_CA_FILE {}", file.display())
-        })?;
+    for certificate in certificates(file, setting)? {
+        roots
+            .add(certificate)
+            .with_context(|| format!("an authority of {setting} {}", file.display()))?;
     }
     Ok(roots)
+}
+
+/// A certificate with its chain, and its private key, from two PEM files.
+pub(crate) fn identity(
+    certificate: &Path,
+    key: &Path,
+    settings: (&str, &str),
+) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let chain = certificates(certificate, settings.0)?;
+    let key = PrivateKeyDer::from_pem_file(key)
+        .with_context(|| format!("reading {} {}", settings.1, key.display()))?;
+    Ok((chain, key))
 }
 
 /// The TLS the settings ask for. `calls_over_tls`: a remote AE is configured with `/tls`.
@@ -52,18 +70,17 @@ fn authorities(file: &Path) -> anyhow::Result<RootCertStore> {
 /// less protection than its settings say.
 pub(crate) fn open(settings: &Settings, calls_over_tls: bool) -> anyhow::Result<DimseTls> {
     let own = match (&settings.dimse_tls_cert_file, &settings.dimse_tls_key_file) {
-        (Some(certificate), Some(key)) => {
-            let chain = certificates(certificate, "PACS_DIMSE_TLS_CERT_FILE")?;
-            let key = PrivateKeyDer::from_pem_file(key)
-                .with_context(|| format!("reading PACS_DIMSE_TLS_KEY_FILE {}", key.display()))?;
-            Some((chain, key))
-        }
+        (Some(certificate), Some(key)) => Some(identity(
+            certificate,
+            key,
+            ("PACS_DIMSE_TLS_CERT_FILE", "PACS_DIMSE_TLS_KEY_FILE"),
+        )?),
         (None, None) => None,
         _ => bail!("PACS_DIMSE_TLS_CERT_FILE and PACS_DIMSE_TLS_KEY_FILE go together"),
     };
     let asks_callers = own.is_some() && settings.dimse_tls_client_auth == ClientAuth::Required;
     let roots = match &settings.dimse_tls_ca_file {
-        Some(file) => Some(authorities(file)?),
+        Some(file) => Some(authorities(file, "PACS_DIMSE_TLS_CA_FILE")?),
         None => None,
     };
     if roots.is_none() && asks_callers {
