@@ -58,5 +58,58 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
-into a project shows there de-identified. Not yet: Patient Root, C-GET, TLS, C-STORE SCU. The order is
+into a project shows there de-identified. Not yet: Patient Root, C-GET, C-STORE SCU. The order is
 in [the hospital interfaces plan](interop.md).
+
+## DIMSE over TLS
+
+Without it, everything on the DIMSE port travels in clear: patient names, images, AE titles.
+pacs-rs follows the BCP 195 RFC 8996, 9325 TLS Secure Transport Connection Profile
+(PS3.15 B.12).
+
+| What B.12 asks | pacs-rs |
+|---|---|
+| TLS 1.2 supported, TLS 1.3 preferred, nothing older | TLS 1.2 and 1.3 only; 1.3 when the peer offers it |
+| no cipher suite without encryption or integrity | none exists in its TLS library |
+| strict TLS rather than an upgrade from plain | with a certificate the DIMSE port speaks TLS only; a plain caller is not answered |
+| a server supports mutual authentication, and may be configured not to use it | callers must show a certificate signed by a known authority, unless `PACS_DIMSE_TLS_CLIENT_AUTH=off` |
+| a TLS port for DIMSE apart from the one for DICOMweb | DIMSE has its own port (`PACS_DIMSE_LISTEN`); the standard recommends 2762 for DIMSE over TLS |
+
+**To receive over TLS**, give pacs-rs a certificate and say who may call:
+
+```bash
+PACS_DIMSE_LISTEN=0.0.0.0:2762
+PACS_DIMSE_TLS_CERT_FILE=/secrets/pacs.crt     # pacs-rs's certificate and its chain, PEM
+PACS_DIMSE_TLS_KEY_FILE=/secrets/pacs.key      # its private key, PEM
+PACS_DIMSE_TLS_CA_FILE=/secrets/site-ca.crt    # the authorities that sign the callers' certificates
+```
+
+**To call a remote AE over TLS**, mark it with `/tls` after its port, and name the authorities
+that sign its certificate:
+
+```bash
+PACS_DIMSE_REMOTES=hospital=PACS@pacs.hospital.example:2762/tls
+PACS_DIMSE_TLS_CA_FILE=/secrets/site-ca.crt
+```
+
+- The remote AE's certificate must name the host it is configured under here
+  (`pacs.hospital.example`), and chain to one of the authorities. A remote AE marked `/tls`
+  is never called in plain.
+- pacs-rs shows its own certificate to a remote AE that asks for one, when it has one.
+- A remote AE without `/tls` is called in plain, as before: the two kinds can be mixed.
+- **A C-MOVE has two connections.** pacs-rs calls the archive, and the archive calls pacs-rs
+  back to send the images. With a certificate on pacs-rs, that second connection is TLS
+  too, so the archive must be able to send over TLS, to pacs-rs's TLS port.
+- **A certificate says which machine, not which AE title.** Any caller with a certificate
+  from one of the authorities is taken, under whatever AE title it claims that pacs-rs
+  accepts. Give `PACS_DIMSE_TLS_CA_FILE` an authority that signs only the systems allowed
+  to connect.
+- A start whose TLS settings do not add up stops with the reason: a certificate without
+  its key, a listener that asks for certificates with no authority to check them by, a
+  `/tls` remote AE with no authority, a file that cannot be read.
+
+Tested between two pacs-rs, with certificates made in the test: every combination above is
+accepted or refused as said. Checked by hand against pynetdicom over Python's OpenSSL, on
+TLS 1.2 and on TLS 1.3: C-ECHO and C-STORE with a client certificate succeed, and a caller
+without one, or in plain, is refused.
+

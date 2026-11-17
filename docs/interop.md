@@ -52,8 +52,8 @@ destination the hospital names.
    not yet.*
 5. **De-identification on ingest** (research mode), below. *Built: `pacs-deid` and projects
    (`PACS_PROJECTS`); what is not yet is said below.*
-6. **TLS** on associations, following PS3.15 H.1. Remote AEs (title, host, port) and pacs-rs's own are
-   configured already (`PACS_DIMSE_*`).
+6. **TLS** on associations, following the BCP 195 TLS profile of PS3.15 B.12. *Built: see
+   [DIMSE over TLS](dimse.md#dimse-over-tls).*
 7. **Write-back** (clinical mode only): segmentations as DICOM Segmentation and measurements as Structured
    Reports, sent by C-STORE SCU to the hospital's destination. Never in research mode: the de-identified
    UIDs no longer match the hospital's.

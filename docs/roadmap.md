@@ -20,7 +20,8 @@ can be revoked, [limits on requests](running.md#limits-on-requests) (timeouts, a
 what is served at once, for the server and for each address), [rights per
 project](login.md#rights-per-project) (a user or a tool limited to some projects is answered as
 if the rest were not there), [TLS to a Postgres index](running.md#tls-to-postgres) with the server's
-certificate checked, and the sign-in page and the settings (users, roles, tools, account) of the
+certificate checked, [DIMSE over TLS](dimse.md#dimse-over-tls) by the profile of PS3.15 B.12, with
+mutual authentication, and the sign-in page and the settings (users, roles, tools, account) of the
 [web interface](web-interface.md). Without it, anyone who reaches the
 server can read and delete everything. What remains:
 
@@ -28,7 +29,6 @@ server can read and delete everything. What remains:
 |---|---|
 | Signing in through a provider | a user signs in with OpenID Connect, and pacs-rs gives the same session as after a password |
 | Tokens from a provider | a tool's access token issued by the hospital's authorization server is accepted, checked with its published keys or by introspection (IUA ITI-102, ITI-103) |
-| TLS on DIMSE | associations can require TLS, following PS3.15 H.1 (step 6 of the [plan](interop.md#build-order)) |
 | Audit trail to a repository | the audit messages are sent to an audit record repository over TLS (RFC 5425), kept and retried when it cannot be reached. They are [written to a file already](audit.md), for HTTP and DIMSE, as the DICOM audit message of PS3.15 (IHE ATNA) |
 
 ## 2. Safe to keep data
