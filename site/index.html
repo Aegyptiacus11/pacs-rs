@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pacs-rs: a research and a clinical PACS in one</title>
+<meta name="description" content="pacs-rs is an open-source PACS written in Rust: an archive with a login, an audit trail and rights per project, and a viewer in the browser. DICOMweb, DIMSE and a REST API.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="mark" href="./" aria-label="pacs-rs, home">
+    <svg viewBox="0 0 20 20" width="22" height="22" aria-hidden="true"><rect x="1" y="1" width="18" height="18" rx="5" fill="#2b2a28"/><path d="M7 14V6h3.6a2.6 2.6 0 0 1 0 5.2H7" fill="none" stroke="#faf9f7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>pacs-rs</span>
+  </a>
+  <nav aria-label="Site">
+    <a href="docs/quickstart.html">Quickstart</a>
+    <a href="docs/">Documentation</a>
+    <a href="docs/roadmap.html">Roadmap</a>
+    <a href="https://github.com/Aegyptiacus11/pacs-rs">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="split" aria-label="What pacs-rs does">
+  <div class="half keep">
+    <div class="inner">
+      <p class="eyebrow">The archive</p>
+      <h1>Keep every study.</h1>
+      <p class="lead">Files on disk or in S3, an index in SQLite or Postgres. Studies arrive from scanners over DICOM, from scripts over HTTP, or by dropping files on the page.</p>
+      <ul class="facts">
+        <li>A login with roles, and tools with tokens of their own</li>
+        <li>Rights per project: a reader sees their project and nothing else</li>
+        <li>De-identification on the way in, by the DICOM profile</li>
+        <li>An audit trail of who stored, read, searched and deleted what</li>
+      </ul>
+      <figure>
+        <img src="img/studies.jpg" width="800" height="450" alt="The study list of pacs-rs: two studies with their patient, date, modality and counts, and a summary of the archive beside them.">
+      </figure>
+    </div>
+  </div>
+  <div class="half read">
+    <div class="inner">
+      <p class="eyebrow">The viewer</p>
+      <h1>Read any of them.</h1>
+      <p class="lead">A viewer in the browser, on the same server. Nothing to install on the reading side, and the same studies are there for any DICOMweb viewer.</p>
+      <ul class="facts">
+        <li>Window, scroll, zoom, cine, and the planes of a volume</li>
+        <li>Lengths, angles and regions, kept with the study</li>
+        <li>Lossless storage: every pixel comes back as it was sent</li>
+        <li>Priors of the same patient beside the current study</li>
+      </ul>
+      <figure>
+        <img src="img/viewer.jpg" width="800" height="450" alt="The viewer of pacs-rs showing a slice of a synthetic head phantom, with its tools along the top and the series at the left.">
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="one">
+  <div class="narrow">
+    <h2>One server, for research and for the clinic</h2>
+    <p>Most hospitals run two archives: the clinical one, and a second one where researchers get de-identified copies. pacs-rs is written to be both, in one program, with the line between them drawn by projects and rights rather than by a second installation.</p>
+    <div class="paths">
+      <a class="path" href="docs/two-ways.html#a-research-archive">
+        <span class="state works">Works today</span>
+        <strong>A research archive</strong>
+        <span>Pull studies from the hospital's PACS, de-identify them on the way in, give each project its readers.</span>
+      </a>
+      <a class="path" href="docs/two-ways.html#a-clinical-archive">
+        <span class="state partly">Partly built</span>
+        <strong>A clinical archive</strong>
+        <span>Receive from modalities, read, sign in, audit. What a hospital's own archive still needs is named in the roadmap.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="try">
+  <div class="narrow">
+    <h2>Try it in five minutes</h2>
+    <p>Docker, one file, and a sample study with no patient behind it.</p>
+<pre><code>curl -fsSLO https://raw.githubusercontent.com/Aegyptiacus11/pacs-rs/main/compose.yaml
+docker compose up -d --wait</code></pre>
+    <p>Then open <code>http://127.0.0.1:8080/ui/</code>, or follow the <a href="docs/quickstart.html">quickstart</a>, which sends a first study and asks for it back over HTTP.</p>
+  </div>
+</section>
+
+<section class="speaks">
+  <div class="wide">
+    <h2>What it speaks</h2>
+    <div class="three">
+      <div>
+        <h3>DICOMweb</h3>
+        <p>Search, retrieve and store over HTTP (QIDO-RS, WADO-RS, STOW-RS), with matching as the standard defines it and transcoding on request.</p>
+        <a href="docs/dicomweb.html">DICOMweb</a>
+      </div>
+      <div>
+        <h3>DICOM network</h3>
+        <p>Receives from scanners and workstations, and searches and pulls from another archive. Over TLS when given a certificate.</p>
+        <a href="docs/dimse.html">DIMSE</a>
+      </div>
+      <div>
+        <h3>A REST API</h3>
+        <p>For scripts and pipelines, described in the code itself: the reference is written from it, and a server hands out the same description.</p>
+        <a href="docs/rest-guide.html">The API, task by task</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="how">
+  <div class="wide">
+    <h2>How it is made</h2>
+    <div class="three">
+      <div>
+        <h3>Rules come from the standards</h3>
+        <p>Each behaviour names the section of DICOM or the IHE profile it follows, and is tested against other implementations.</p>
+        <a href="docs/dicom-files.html">DICOM, on a real study</a>
+      </div>
+      <div>
+        <h3>The documentation is run</h3>
+        <p>The commands on its pages are sent to a real server each time the pages change. An example that stops being true cannot be published.</p>
+        <a href="docs/building.html#the-documentations-examples">How</a>
+      </div>
+      <div>
+        <h3>It says what is missing</h3>
+        <p>Early development. The roadmap lists what is not built, in the order it is meant to be, each with the test that will say it is done.</p>
+        <a href="docs/roadmap.html">Roadmap</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wide">
+    <span>pacs-rs is open source, under MIT or Apache-2.0. Written in Rust.</span>
+    <nav aria-label="Footer">
+      <a href="docs/">Documentation</a>
+      <a href="https://github.com/Aegyptiacus11/pacs-rs">Source</a>
+      <a href="https://github.com/Aegyptiacus11/pacs-rs/releases">Releases</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>
