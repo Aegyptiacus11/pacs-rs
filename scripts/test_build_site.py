@@ -20,6 +20,7 @@ def repository(directory, home='<a href="docs/quickstart.html#send">start</a>'):
     book.mkdir(parents=True)
     (book / "index.html").write_text("<h1>The book</h1>")
     (book / "quickstart.html").write_text('<h2 id="send">Send it</h2>')
+    (book / "settings.html").write_text("a page written after the move")
     (book / "404.html").write_text("not found")
     (book / "toc.html").write_text("contents")
     (book / "book.js").write_text("")
@@ -44,6 +45,9 @@ class BuildSite(unittest.TestCase):
             self.assertIn("location.replace('docs/quickstart.html' + location.hash)", moved)
             # the homepage keeps the root: the book's first page is not redirected over it
             self.assertFalse((site / "toc.html").exists())
+            # a page written since the move never had another address
+            self.assertFalse((site / "settings.html").exists())
+            self.assertTrue((site / "docs" / "settings.html").is_file())
             self.assertEqual(build_site.check_links(site / "index.html", site), [])
             # built again over what is there
             self.assertEqual(build_site.assemble(root, book, site), ["quickstart.html"])

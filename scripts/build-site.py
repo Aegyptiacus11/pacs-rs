@@ -3,8 +3,8 @@
 
     /                 the homepage: site/ as it is
     /docs/            the book: mdBook's build of docs/
-    /<page>.html      a redirect to /docs/<page>.html, for every page of the book: the
-                      addresses the book had when it was the whole site
+    /<page>.html      a redirect to /docs/<page>.html, for each page the book had when it
+                      was the whole site (MOVED): the addresses people may still hold
     /sample/          the sample study, at the address the quickstart downloads it from
 
 Then checks the homepage: every relative link must name a file of the site, and every
@@ -24,8 +24,14 @@ from pathlib import Path
 
 LINK = re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)["']""")
 ID = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""")
-# files of the book that are not pages of their own, or whose root address the homepage has
-NOT_REDIRECTED = {"index.html", "404.html", "toc.html"}
+# The pages the book had at the root of the site, before it moved under docs/ (November
+# 2026). A page written since never had another address, and gets no redirect.
+MOVED = [
+    "api-reference", "audit", "benchmarks", "building", "de-identification", "dicom-files",
+    "dicom-network", "dicomweb", "dimse", "interop", "introduction", "login", "print",
+    "quickstart", "releases", "rest-api", "rest-guide", "roadmap", "running", "two-ways",
+    "web-interface",
+]
 
 
 def redirect(target):
@@ -80,13 +86,14 @@ def assemble(root, book, site):
     shutil.copytree(home, site)
     shutil.copytree(book, site / "docs")
     redirected = []
-    for page in sorted(book.glob("*.html")):
-        if page.name in NOT_REDIRECTED:
-            continue
-        if (site / page.name).exists():
-            raise SystemExit(f"{page.name}: a page of the book and a file of site/ share this name")
-        (site / page.name).write_text(redirect(f"docs/{page.name}"))
-        redirected.append(page.name)
+    for name in MOVED:
+        page = f"{name}.html"
+        if (site / page).exists():
+            raise SystemExit(f"{page}: a page that moved and a file of site/ share this name")
+        # a page the book no longer has keeps no redirect: it would lead nowhere
+        if (book / page).is_file():
+            (site / page).write_text(redirect(f"docs/{page}"))
+            redirected.append(page)
     # GitHub Pages serves /404.html for what is not there; the book's has its own frame
     shutil.copyfile(book / "404.html", site / "404.html")
     sample = root / "docs" / "sample"
