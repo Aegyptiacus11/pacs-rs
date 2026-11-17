@@ -81,9 +81,6 @@ deleted or exported is written every time.
 - **Quarantined instances.** An instance a project's profile sets aside is logged, not
   audited.
 - **C-ECHO**, and the jobs of `/jobs`, leave no line.
-- **Sending to a repository.** The lines are what IHE's Record Audit Event sends, but pacs-rs
-  only writes them to the file. A syslog forwarder can ship the file as it is; sending over
-  TLS from pacs-rs itself is not built.
 - **Who signed out by cookie.** `POST /auth/logout` ends a session by its refresh cookie,
   which does not tell this layer whose it was: the event says `unknown`. `/auth/logout-all`,
   which comes with an access token, names the user.
@@ -125,3 +122,44 @@ mark.
 The messages are built by the `pacs-audit` crate, which has no network or storage and can be
 used on its own. Its tests validate every kind of message against the schema of PS3.15
 A.5.1.1 ([Building and testing](building.md#the-audit-schema)).
+
+## Sending to a repository
+
+The file can be sent on to an audit record repository as it is written, by syslog over TLS
+(RFC 5425), a transport of IHE's Record Audit Event [ITI-20].
+
+```bash
+PACS_AUDIT_FILE=/audit/audit.log
+PACS_AUDIT_REPOSITORY=arr.hospital.example            # or host:port; 6514 unless given
+PACS_AUDIT_REPOSITORY_CA_FILE=/secrets/site-ca.crt    # the authorities that sign its certificate
+PACS_AUDIT_REPOSITORY_CERT_FILE=/secrets/pacs.crt     # what pacs-rs shows it, if it asks
+PACS_AUDIT_REPOSITORY_KEY_FILE=/secrets/pacs.key
+```
+
+- **The file is the queue.** What is sent is the audit file, line by line, each as one
+  message framed by its length (RFC 5425, 4.3). A position kept beside it (`audit.log.sent`)
+  says how far the repository has been given it.
+- **A repository that cannot be reached loses nothing.** The lines wait in the file, across
+  restarts, for as long as it takes, and go in order once it answers; it is tried again
+  after 1 second, then 2, up to a minute. The application log says when it stops answering
+  and when it is back. A line is sent once; only a connection that breaks in the middle of
+  a write can make the lines of that write arrive a second time.
+- **Who the repository is, is checked**: its certificate must chain to an authority of
+  `PACS_AUDIT_REPOSITORY_CA_FILE` and name the host in `PACS_AUDIT_REPOSITORY` (RFC 5425,
+  5.2). A repository that does not check out gets nothing. TLS 1.2 and 1.3.
+- **When the server stops**, it sends what is left, with the line that says it stops, and
+  closes the connection properly (4.4), within ten seconds. What did not go is in the file
+  and goes at the next start.
+- **When the file is rotated** (replaced by an empty or shorter one), the new one is sent
+  from its start. Rotate it only once the position has reached its end, or the lines not
+  yet sent go with the old file.
+- A start whose settings do not add up stops with the reason: a repository without an
+  audit file or without authorities, a certificate without its key, a file that cannot be
+  read.
+
+What this transport cannot promise, here or in any sender: TLS acknowledges bytes, not
+messages, so a repository that stops between taking a message off the wire and keeping it
+loses that message. Not done: authorizing the repository by its certificate's fingerprint
+(RFC 5425, 5.1), and the cipher suite that RFC made mandatory in 2009
+(TLS_RSA_WITH_AES_128_CBC_SHA), which BCP 195 has since ruled out; and syslog over UDP.
+
