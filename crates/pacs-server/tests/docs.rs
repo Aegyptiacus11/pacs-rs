@@ -25,9 +25,9 @@ use axum::body::Body;
 use axum::http::Request;
 use clap::Parser;
 use http_body_util::BodyExt;
-use pacs_core::synthetic::SyntheticSeries;
 use pacs_server::{Settings, app, open_archive};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 /// The pages whose examples are run.
@@ -39,13 +39,24 @@ fn docs() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs")
 }
 
-/// The study in docs/sample: three 64 x 64 slices of the synthetic series 1.
-fn sample() -> SyntheticSeries {
-    let mut series = SyntheticSeries::new(1, 3);
-    series.rows = 64;
-    series.columns = 64;
-    series
-}
+/// The study in docs/sample: three slices of LiTS volume 0 (docs/sample-study.md), each
+/// file with its SHA-256.
+const SAMPLE: &[(&str, &str)] = &[
+    (
+        "00001.dcm",
+        "e921d6a590d3e6108d91e298fde5556946b93e14b55824240cb0b607104d9a3f",
+    ),
+    (
+        "00002.dcm",
+        "bc1d93aff976c029e214c1d3ea41a2b345e0d6d54bdf5ce0d40974cc68194705",
+    ),
+    (
+        "00003.dcm",
+        "34acf9eb124147ed7fa6ae9624c2b1e943a4a1f17fd1b2bba1977f015593899f",
+    ),
+];
+const SAMPLE_PATIENT: &str = "LITS-0";
+const SAMPLE_STUDY: &str = "2.25.3100000";
 
 #[derive(Debug, PartialEq)]
 enum Sent {
@@ -390,17 +401,27 @@ fn no_page_with_examples_is_left_out() {
 }
 
 #[test]
-fn the_sample_study_is_the_synthetic_series() {
-    let series = sample();
-    for (slice, bytes) in series.all_bytes().iter().enumerate() {
-        let name = format!("{:05}.dcm", slice + 1);
-        let file = std::fs::read(docs().join("sample").join(&name))
+fn the_sample_study_is_the_one_the_pages_describe() {
+    for (name, digest) in SAMPLE {
+        let file = std::fs::read(docs().join("sample").join(name))
             .unwrap_or_else(|e| panic!("docs/sample/{name}: {e}"));
-        assert!(
-            &file == bytes,
-            "docs/sample/{name} is not what `write_synthetic docs/sample 1 3 64` writes"
+        let found: String = Sha256::digest(&file)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            &found, digest,
+            "docs/sample/{name} is not the file docs/sample-study.md describes"
         );
     }
+    let files = std::fs::read_dir(docs().join("sample"))
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            name.to_string_lossy().ends_with(".dcm")
+        })
+        .count();
+    assert_eq!(files, SAMPLE.len(), "docs/sample has other DICOM files");
 }
 
 #[test]
@@ -574,7 +595,7 @@ async fn an_example_that_does_not_hold_fails() {
         "{error}"
     );
     assert!(
-        error.contains(&pacs_core::public_ids::study("SYN1", &sample().study_uid())),
+        error.contains(&pacs_core::public_ids::study(SAMPLE_PATIENT, SAMPLE_STUDY)),
         "{error}"
     );
 

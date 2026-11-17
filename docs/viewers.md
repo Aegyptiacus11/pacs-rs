@@ -6,7 +6,9 @@ viewer that speaks [DICOMweb](dicomweb.md). This page connects one, the
 written, with the image `ohif/app:latest` of 3 November 2026 and the server of the
 [quickstart](quickstart.md); what was not tried is said at the end.
 
-![The OHIF Viewer showing a slice of a synthetic head phantom read from pacs-rs, with the series at the left.](images/viewer-ohif.jpg)
+![The OHIF Viewer showing a slice through the liver of an abdominal CT read from pacs-rs, with the patient's two studies at the left.](images/viewer-ohif.jpg)
+
+*The scan is volume 0 of LiTS, a public research dataset ([the sample study](sample-study.md)).*
 
 ## What a viewer needs from pacs-rs
 
@@ -86,7 +88,7 @@ Why these values:
 - **`staticWado: false`**: pacs-rs answers requests; it is not a folder of files written
   ahead.
 
-What the viewer asked of the server while a study of 48 images was opened and scrolled: the
+What the viewer asked of the server while a study of 75 images was opened and scrolled: the
 study by its UID, its series, the studies of the same patient, the metadata of the series in
 one request, and each frame once (`.../instances/<uid>/frames/1`). Frames come back as they
 are stored, compressed without loss, and the viewer decodes them.

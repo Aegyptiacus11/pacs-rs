@@ -32,11 +32,10 @@ image's health check is the binary itself: `pacs-server --healthcheck` asks `/he
 address of `PACS_LISTEN` and exits 0 or 1. For DIMSE, set `PACS_DIMSE_LISTEN=0.0.0.0:11112` and
 publish that port.
 
-A synthetic series to try it with:
+A study to try it with, the [sample](sample-study.md) of the quickstart:
 
 ```bash
-cargo run -p pacs-core --features synthetic --example write_synthetic -- synthetic 1 3
-curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
+curl -X POST --data-binary @docs/sample/00001.dcm http://127.0.0.1:8080/instances
 ```
 
 ## TLS to Postgres
