@@ -48,8 +48,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: The tests of the link checker and of the site build
-        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: The tests of the link checker, of the site build and of the sample's converter
+        run: |
+          set -euo pipefail
+          # the converter reads NIfTI and writes DICOM: its tests need both libraries
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet nibabel==5.3.2 pydicom==3.0.1
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s scripts -p 'test_*.py'
       - name: Links
         run: python3 scripts/check-doc-links.py
       - name: mdBook

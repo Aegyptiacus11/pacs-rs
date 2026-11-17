@@ -118,7 +118,7 @@ cargo test -p pacs-server --test docs
   the book also publishes for the reader to download. They are three slices
   of a public CT ([The sample study](sample-study.md) says which, and how they were
   made); the test holds each file's SHA-256 and says so when one changes. The script that
-  wrote them has its own tests, run by hand since they need the dataset's libraries:
+  wrote them has its own tests, which need nibabel and pydicom; CI installs both, and here:
   `uv run --with nibabel==5.3.2 --with numpy --with pydicom==3.0.1 python -m unittest scripts/test_sample_from_lits.py`.
 - Only the `curl` options the pages use are known (`-s`, `-X`, `-H`, `-d`, `--data-binary`,
   `-o`), and only `http://127.0.0.1:8080`: anything else fails, so that a command is never run
