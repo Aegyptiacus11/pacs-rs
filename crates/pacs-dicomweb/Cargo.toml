@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
 axum.workspace = true
 bytes.workspace = true
 futures.workspace = true

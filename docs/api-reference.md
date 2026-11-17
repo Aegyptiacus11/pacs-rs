@@ -8,7 +8,7 @@ The same description is served by a running server at `/openapi.json` (OpenAPI 3
 
 An identifier that names nothing is answered 404 with an empty body. Every other refusal is an [Error](#error); the login's own routes refuse with [Refused](#refused). With the [login](login.md) on, a request without a valid token, or with one that lacks the permission, is answered 401.
 
-Not on this page: [DICOMweb](dicomweb.md), which the standard describes.
+DICOMweb's own refusals are a [Problem](#problem).
 
 ## Patients
 
@@ -543,6 +543,249 @@ Permission, when the login is on: `read`.
 | 200 | [Found](#found) | The identifiers found, or the resources. |
 | 400 | [Error](#error) | The body is not a search, names an attribute its level cannot search on, or gives a value that is not a match for its attribute. |
 
+## DICOMweb
+
+The standard's own HTTP interface (PS3.18), under `/dicom-web` unless `PACS_DICOMWEB_PATH` says otherwise: what viewers speak. What of it is served, and how it matches and transcodes, is on [DICOMweb](dicomweb.md).
+
+### `GET /dicom-web/studies`
+
+Searches for studies (QIDO-RS).
+
+Each study with its attributes, its counts of series and instances, the modalities of its series and the address to retrieve it from.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `{attribute}` | query, optional | string | A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches. |
+| `limit` | query, optional | integer | At most this many. |
+| `offset` | query, optional | integer | Skip this many first. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | The studies, newest first. |
+| 400 | [Problem](#problem) | A key this level does not have, one given twice, or a value that is not a match for its key. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `POST /dicom-web/studies`
+
+Stores instances (STOW-RS).
+
+Several files in one request. An instance already stored is kept as it was and counted as stored.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | `multipart/related` | One part an instance, each `application/dicom`: `multipart/related; type="application/dicom"`. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | Every instance was stored. The answer names each one (PS3.18 Table 10.5.3-1). |
+| 202 | `application/dicom+json` | Some were stored and some were not; the answer names both, each failure with its reason. |
+| 400 | [Problem](#problem) | The body is not `multipart/related` with parts. |
+| 403 | [Problem](#problem) | The account is limited to some projects: it stores nothing over HTTP. |
+| 409 | `application/dicom+json` | None was stored; the answer names each failure with its reason. |
+| 415 | [Problem](#problem) | The parts are not `application/dicom`. |
+
+### `GET /dicom-web/studies/{study}`
+
+Retrieves a study (WADO-RS).
+
+Each instance as a part, `application/dicom`, in the transfer syntax it is stored in or the one `Accept` asks for ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `multipart/related` | The study's instances. |
+| 404 | [Problem](#problem) | Nothing stored is named by this address. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `POST /dicom-web/studies/{study}`
+
+Stores instances into one study (STOW-RS).
+
+As above, and an instance of another study is refused, the others being stored.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| the body | | `multipart/related` | One part an instance, each `application/dicom`: `multipart/related; type="application/dicom"`. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | Every instance was stored. The answer names each one (PS3.18 Table 10.5.3-1). |
+| 202 | `application/dicom+json` | Some were stored and some were not; the answer names both, each failure with its reason. |
+| 400 | [Problem](#problem) | The body is not `multipart/related` with parts. |
+| 403 | [Problem](#problem) | The account is limited to some projects: it stores nothing over HTTP. |
+| 409 | `application/dicom+json` | None was stored; the answer names each failure with its reason. |
+| 415 | [Problem](#problem) | The parts are not `application/dicom`. |
+
+### `GET /dicom-web/studies/{study}/metadata`
+
+A study's metadata (WADO-RS).
+
+Every element but the pixel data, in DICOM JSON (PS3.18 Annex F).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | One data set an instance. |
+| 404 | [Problem](#problem) | Nothing stored is named by this address. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series`
+
+Lists and searches a study's series (QIDO-RS).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `{attribute}` | query, optional | string | A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches. |
+| `limit` | query, optional | integer | At most this many. |
+| `offset` | query, optional | integer | Skip this many first. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | The series, by Series Number; none for a study that is not there. |
+| 400 | [Problem](#problem) | A key this level does not have, one given twice, or a value that is not a match for its key. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series/{series}`
+
+Retrieves a series (WADO-RS).
+
+Each instance as a part, `application/dicom`, in the transfer syntax it is stored in or the one `Accept` asks for ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `multipart/related` | The series' instances. |
+| 404 | [Problem](#problem) | Nothing stored is named by this address. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series/{series}/instances`
+
+Lists and searches a series' instances (QIDO-RS).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `{attribute}` | query, optional | string | A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches. |
+| `limit` | query, optional | integer | At most this many. |
+| `offset` | query, optional | integer | Skip this many first. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | The instances, by Instance Number; none for a series that is not there. |
+| 400 | [Problem](#problem) | A key this level does not have, one given twice, or a value that is not a match for its key. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}`
+
+Retrieves an instance (WADO-RS).
+
+Each instance as a part, `application/dicom`, in the transfer syntax it is stored in or the one `Accept` asks for ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `instance` | path | string | SOP Instance UID. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `multipart/related` | The instance. |
+| 404 | [Problem](#problem) | Nothing stored is named by this address. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/frames/{frames}`
+
+Retrieves frames of an instance (WADO-RS).
+
+Each frame as a part: uncompressed (`application/octet-stream`), or compressed as stored or as `Accept` asks.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `instance` | path | string | SOP Instance UID. |
+| `frames` | path | string | Frame numbers from 1, separated by commas. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `multipart/related` | The frames, in the order asked. |
+| 400 | [Problem](#problem) | Not frame numbers. |
+| 404 | [Problem](#problem) | No such instance, no pixel data, or a frame past the last. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+| 501 | [Problem](#problem) | The pixel data is in a form this server cannot give frames of. |
+
+### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/metadata`
+
+An instance's metadata (WADO-RS).
+
+Every element but the pixel data, in DICOM JSON (PS3.18 Annex F).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `instance` | path | string | SOP Instance UID. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | The instance's data set. |
+| 404 | [Problem](#problem) | Nothing stored is named by this address. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series/{series}/metadata`
+
+A series' metadata (WADO-RS).
+
+Every element but the pixel data, in DICOM JSON (PS3.18 Annex F).
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | One data set an instance, by Instance Number. |
+| 404 | [Problem](#problem) | Nothing stored is named by this address. |
+| 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
 ## Remote archives
 
 Other DICOM systems, reached over the DICOM network protocol: testing the link, searching their studies, bringing studies in.
@@ -1042,6 +1285,12 @@ The closest level still there after a deletion.
 | `Path` | string | Its address, such as `/series/{ID}`. |
 | `Type` | string | `Patient`, `Study` or `Series`. |
 
+### Attributes
+
+A data set in DICOM JSON (PS3.18 Annex F): its attributes by tag, each with its `vr` and its `Value`.
+
+object.
+
 ### ClientUpdate
 
 What to change of a tool. What is left out stays as it is.
@@ -1269,6 +1518,14 @@ A patient: the studies that share a Patient ID.
 Identifiers, or with `expand` the patients themselves.
 
 list of string or list of [Patient](#patient).
+
+### Problem
+
+A DICOMweb request refused: why.
+
+| Field | Type | |
+|---|---|---|
+| `error` | string |  |
 
 ### Refused
 

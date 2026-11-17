@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::media::MediaType;
 use crate::qido::{DICOM_JSON, instance_url, study_url};
+use crate::schema::{Attributes, Binary, Problem};
 use crate::scope::Seen;
 use crate::{ApiError, AppState, multipart};
 
@@ -216,6 +217,23 @@ fn unsupported(message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, message)
 }
 
+/// Stores instances (STOW-RS).
+///
+/// Several files in one request. An instance already stored is kept as it was and counted as stored.
+#[utoipa::path(
+    post,
+    path = "/studies",
+    tag = "DICOMweb",
+    request_body(content = Binary, content_type = "multipart/related", description = "One part an instance, each `application/dicom`: `multipart/related; type=\"application/dicom\"`."),
+    responses(
+        (status = 200, description = "Every instance was stored. The answer names each one (PS3.18 Table 10.5.3-1).", body = Attributes, content_type = "application/dicom+json"),
+        (status = 202, description = "Some were stored and some were not; the answer names both, each failure with its reason.", body = Attributes, content_type = "application/dicom+json"),
+        (status = 400, description = "The body is not `multipart/related` with parts.", body = Problem),
+        (status = 403, description = "The account is limited to some projects: it stores nothing over HTTP.", body = Problem),
+        (status = 409, description = "None was stored; the answer names each failure with its reason.", body = Attributes, content_type = "application/dicom+json"),
+        (status = 415, description = "The parts are not `application/dicom`.", body = Problem)
+    )
+)]
 pub(crate) async fn store(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -224,6 +242,24 @@ pub(crate) async fn store(
     store_parts(state, headers, body, None).await
 }
 
+/// Stores instances into one study (STOW-RS).
+///
+/// As above, and an instance of another study is refused, the others being stored.
+#[utoipa::path(
+    post,
+    path = "/studies/{study}",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID.")),
+    request_body(content = Binary, content_type = "multipart/related", description = "One part an instance, each `application/dicom`: `multipart/related; type=\"application/dicom\"`."),
+    responses(
+        (status = 200, description = "Every instance was stored. The answer names each one (PS3.18 Table 10.5.3-1).", body = Attributes, content_type = "application/dicom+json"),
+        (status = 202, description = "Some were stored and some were not; the answer names both, each failure with its reason.", body = Attributes, content_type = "application/dicom+json"),
+        (status = 400, description = "The body is not `multipart/related` with parts.", body = Problem),
+        (status = 403, description = "The account is limited to some projects: it stores nothing over HTTP.", body = Problem),
+        (status = 409, description = "None was stored; the answer names each failure with its reason.", body = Attributes, content_type = "application/dicom+json"),
+        (status = 415, description = "The parts are not `application/dicom`.", body = Problem)
+    )
+)]
 pub(crate) async fn store_in_study(
     Seen(state): Seen,
     headers: HeaderMap,

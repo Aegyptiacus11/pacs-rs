@@ -8,14 +8,17 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::HeaderMap;
 use axum::http::header::HOST;
-use axum::routing::get;
 use pacs_archive::Archive;
+use utoipa::openapi::OpenApi;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 mod cache;
 mod error;
 pub mod media;
 pub mod multipart;
 mod qido;
+pub mod schema;
 mod scope;
 mod stow;
 mod wado;
@@ -76,38 +79,33 @@ impl AppState {
     }
 }
 
+/// The routes, each one by its `#[utoipa::path]`, so that none is served that the API's
+/// description does not have. Their paths are under the DICOMweb root.
+fn described() -> OpenApiRouter<scope::Whole> {
+    OpenApiRouter::new()
+        .routes(routes!(qido::studies, stow::store))
+        .routes(routes!(wado::study, stow::store_in_study))
+        .routes(routes!(wado::study_metadata))
+        .routes(routes!(qido::series))
+        .routes(routes!(wado::series))
+        .routes(routes!(wado::series_metadata))
+        .routes(routes!(qido::instances))
+        .routes(routes!(wado::instance))
+        .routes(routes!(wado::instance_metadata))
+        .routes(routes!(wado::frames))
+}
+
+/// The description alone, for writing the reference.
+pub fn api() -> OpenApi {
+    described().into_openapi()
+}
+
 pub fn router(archive: Archive, config: Config) -> Router {
     let limit = config.max_upload_bytes;
     let state = AppState { archive, config };
-    Router::new()
-        .route("/studies", get(qido::studies).post(stow::store))
-        .route(
-            "/studies/{study}",
-            get(wado::study).post(stow::store_in_study),
-        )
-        .route("/studies/{study}/metadata", get(wado::study_metadata))
-        .route("/studies/{study}/series", get(qido::series))
-        .route("/studies/{study}/series/{series}", get(wado::series))
-        .route(
-            "/studies/{study}/series/{series}/metadata",
-            get(wado::series_metadata),
-        )
-        .route(
-            "/studies/{study}/series/{series}/instances",
-            get(qido::instances),
-        )
-        .route(
-            "/studies/{study}/series/{series}/instances/{instance}",
-            get(wado::instance),
-        )
-        .route(
-            "/studies/{study}/series/{series}/instances/{instance}/metadata",
-            get(wado::instance_metadata),
-        )
-        .route(
-            "/studies/{study}/series/{series}/instances/{instance}/frames/{frames}",
-            get(wado::frames),
-        )
+    described()
         .layer(DefaultBodyLimit::max(limit))
         .with_state(scope::Whole::new(state))
+        .split_for_parts()
+        .0
 }

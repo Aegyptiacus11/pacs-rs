@@ -1,6 +1,7 @@
 # DICOMweb
 
-Served under `/dicom-web` (`PACS_DICOMWEB_PATH`, see [Settings](settings.md#addresses)).
+Served under `/dicom-web` (`PACS_DICOMWEB_PATH`, see [Settings](settings.md#addresses)). Each request,
+with its parameters and statuses, is in the [reference](api-reference.md#dicomweb).
 
 | Request | |
 |---|---|

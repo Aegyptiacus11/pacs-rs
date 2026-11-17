@@ -19,6 +19,7 @@ use pacs_index::InstanceEntry;
 use crate::cache::Validator;
 use crate::media::{Accept, Choice, Packaging, accepts_json, choose};
 use crate::qido::DICOM_JSON;
+use crate::schema::{Attributes, Binary, Problem};
 use crate::scope::Seen;
 use crate::{ApiError, multipart};
 
@@ -170,6 +171,20 @@ async fn study_entries(archive: &Archive, study: &str) -> Result<Vec<InstanceEnt
     Ok(entries)
 }
 
+/// Retrieves a study (WADO-RS).
+///
+/// Each instance as a part, `application/dicom`, in the transfer syntax it is stored in or the one `Accept` asks for ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID.")),
+    responses(
+        (status = 200, description = "The study's instances.", body = Binary, content_type = "multipart/related"),
+        (status = 404, description = "Nothing stored is named by this address.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn study(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -179,6 +194,20 @@ pub(crate) async fn study(
     retrieve(state.archive, &headers, entries, false)
 }
 
+/// Retrieves a series (WADO-RS).
+///
+/// Each instance as a part, `application/dicom`, in the transfer syntax it is stored in or the one `Accept` asks for ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series/{series}",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID.")),
+    responses(
+        (status = 200, description = "The series' instances.", body = Binary, content_type = "multipart/related"),
+        (status = 404, description = "Nothing stored is named by this address.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn series(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -192,6 +221,20 @@ pub(crate) async fn series(
     retrieve(state.archive, &headers, entries, false)
 }
 
+/// Retrieves an instance (WADO-RS).
+///
+/// Each instance as a part, `application/dicom`, in the transfer syntax it is stored in or the one `Accept` asks for ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series/{series}/instances/{instance}",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID."), ("instance" = String, Path, description = "SOP Instance UID.")),
+    responses(
+        (status = 200, description = "The instance.", body = Binary, content_type = "multipart/related"),
+        (status = 404, description = "Nothing stored is named by this address.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn instance(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -229,6 +272,20 @@ fn metadata_response(headers: &HeaderMap, metadata: Vec<String>) -> Result<Respo
     Ok(response)
 }
 
+/// A study's metadata (WADO-RS).
+///
+/// Every element but the pixel data, in DICOM JSON (PS3.18 Annex F).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/metadata",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID.")),
+    responses(
+        (status = 200, description = "One data set an instance.", body = Vec<Attributes>, content_type = "application/dicom+json"),
+        (status = 404, description = "Nothing stored is named by this address.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn study_metadata(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -246,6 +303,20 @@ pub(crate) async fn study_metadata(
     metadata_response(&headers, metadata)
 }
 
+/// A series' metadata (WADO-RS).
+///
+/// Every element but the pixel data, in DICOM JSON (PS3.18 Annex F).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series/{series}/metadata",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID.")),
+    responses(
+        (status = 200, description = "One data set an instance, by Instance Number.", body = Vec<Attributes>, content_type = "application/dicom+json"),
+        (status = 404, description = "Nothing stored is named by this address.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn series_metadata(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -259,6 +330,20 @@ pub(crate) async fn series_metadata(
     metadata_response(&headers, metadata)
 }
 
+/// An instance's metadata (WADO-RS).
+///
+/// Every element but the pixel data, in DICOM JSON (PS3.18 Annex F).
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series/{series}/instances/{instance}/metadata",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID."), ("instance" = String, Path, description = "SOP Instance UID.")),
+    responses(
+        (status = 200, description = "The instance's data set.", body = Vec<Attributes>, content_type = "application/dicom+json"),
+        (status = 404, description = "Nothing stored is named by this address.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
+    )
+)]
 pub(crate) async fn instance_metadata(
     Seen(state): Seen,
     headers: HeaderMap,
@@ -292,6 +377,22 @@ fn frame_error(e: FrameError) -> ApiError {
     }
 }
 
+/// Retrieves frames of an instance (WADO-RS).
+///
+/// Each frame as a part: uncompressed (`application/octet-stream`), or compressed as stored or as `Accept` asks.
+#[utoipa::path(
+    get,
+    path = "/studies/{study}/series/{series}/instances/{instance}/frames/{frames}",
+    tag = "DICOMweb",
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID."), ("instance" = String, Path, description = "SOP Instance UID."), ("frames" = String, Path, description = "Frame numbers from 1, separated by commas.")),
+    responses(
+        (status = 200, description = "The frames, in the order asked.", body = Binary, content_type = "multipart/related"),
+        (status = 400, description = "Not frame numbers.", body = Problem),
+        (status = 404, description = "No such instance, no pixel data, or a frame past the last.", body = Problem),
+        (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem),
+        (status = 501, description = "The pixel data is in a form this server cannot give frames of.", body = Problem)
+    )
+)]
 pub(crate) async fn frames(
     Seen(state): Seen,
     headers: HeaderMap,
