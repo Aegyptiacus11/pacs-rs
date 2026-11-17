@@ -13,7 +13,7 @@ today.**
 
 | Step | Read |
 |---|---|
-| 1. Run it and keep its data | [Running](running.md): Docker, Postgres or SQLite, disk or S3 |
+| 1. Run it and keep its data | [Running](running.md): Docker, Postgres or SQLite, disk or S3; [behind a proxy](reverse-proxy.md); [backing up](backup.md) |
 | 2. Ask for a login before any real study goes in | [Login](login.md): users, roles, what each may do |
 | 3. Connect the hospital's PACS | [DIMSE](dimse.md): testing the link, searching it, pulling studies |
 | 4. De-identify what a project pulls | [De-identification](de-identification.md): a project, its profile, quarantine |
