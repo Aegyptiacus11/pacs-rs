@@ -23,7 +23,7 @@ pub(crate) struct Find {
     /// `Patient`, `Study`, `Series` or `Instance`, in any case.
     #[serde(rename = "Level")]
     level: String,
-    /// Attributes by keyword and the value each must equal: `{"PatientID": "SYN1"}`.
+    /// Attributes by keyword and the value each must equal: `{"PatientID": "LITS-0"}`.
     /// Empty or left out, a patient or study search finds them all; a series or instance
     /// search needs its UID.
     #[serde(rename = "Query", default)]

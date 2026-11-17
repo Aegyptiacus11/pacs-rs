@@ -1381,7 +1381,7 @@ A search.
 | `Expand` | boolean, optional | Answer with the resources instead of their identifiers. |
 | `Level` | string | `Patient`, `Study`, `Series` or `Instance`, in any case. |
 | `Limit` | integer or null, optional | At most this many. |
-| `Query` | object, optional | Attributes by keyword and the value each must equal: `{"PatientID": "SYN1"}`. Empty or left out, a patient or study search finds them all; a series or instance search needs its UID. |
+| `Query` | object, optional | Attributes by keyword and the value each must equal: `{"PatientID": "LITS-0"}`. Empty or left out, a patient or study search finds them all; a series or instance search needs its UID. |
 | `Since` | integer or null, optional | Skip this many first. |
 
 ### Found

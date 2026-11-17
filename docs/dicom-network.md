@@ -129,7 +129,7 @@ Ask it a question it does not answer yet, and the refusal comes at the associati
 
 ```bash
 uvx --from pynetdicom python -m pynetdicom findscu 127.0.0.1 11112 -aec PACSRS -S \
-  -k QueryRetrieveLevel=STUDY -k PatientID=SYN1
+  -k QueryRetrieveLevel=STUDY -k PatientID=LITS-0
 ```
 
 ```text

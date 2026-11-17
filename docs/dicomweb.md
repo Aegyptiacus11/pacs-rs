@@ -22,7 +22,7 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
 
 | A value | Matches | For |
 |---|---|---|
-| `SYN1` | that value: with regard to case, except for names | every key |
+| `LITS-0` | that value: with regard to case, except for names | every key |
 | `DOE*`, `D?E^*` | wild cards: `*` any run of characters, `?` any one | text and names |
 | `20260101-20260131`, `20260101-`, `-20260131` | a range, both ends included | dates and times |
 | `1.2.3,1.2.4` | any of the UIDs | UIDs |
