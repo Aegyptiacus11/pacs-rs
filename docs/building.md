@@ -60,6 +60,20 @@ in `PACS_TEST_DCMTK_BIN`) and a Python with pynetdicom (`PACS_TEST_PYTHON`, defa
 cargo test -p pacs-dimse --test interop -- --ignored
 ```
 
+## TLS to Postgres
+
+`the_index_over_tls` (`crates/pacs-server/tests/server.rs`) needs a Postgres that speaks TLS
+with a certificate the test can check. `scripts/postgres-tls.sh` makes an authority and a
+certificate for 127.0.0.1, starts the server in Docker and prints the two variables the test
+reads:
+
+```bash
+export $(scripts/postgres-tls.sh /tmp/pacs-pg-tls)
+cargo test -p pacs-server --test server tls
+```
+
+Without them the test is skipped; CI sets them.
+
 ## Comparing with a reference server
 
 `crates/pacs-server/tests/reference.rs` stores the same synthetic files in pacs-rs and in a
