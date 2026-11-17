@@ -27,6 +27,7 @@ pacs-core.workspace = true
 pacs-deid.workspace = true
 pacs-dicomweb.workspace = true
 pacs-dimse.workspace = true
+rustls.workspace = true
 pacs-index.workspace = true
 pacs-rest.workspace = true
 pacs-store.workspace = true

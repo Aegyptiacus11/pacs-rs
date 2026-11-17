@@ -2128,6 +2128,7 @@ dependencies = [
  "pacs-rest",
  "pacs-store",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.11.1",
