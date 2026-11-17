@@ -26,6 +26,7 @@ pub mod audit;
 pub mod audit_forward;
 mod audit_routes;
 pub mod auth;
+pub mod auth_schema;
 mod dimse_tls;
 pub mod limits;
 mod modalities;

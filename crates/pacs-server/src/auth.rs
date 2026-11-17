@@ -49,13 +49,21 @@ use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, PRAGMA, WWW_AUTHENTICATE}
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
 use base64::Engine;
 use jwt_sessions::http::{CookieSettings, auth_router};
 use jwt_sessions::{
     AccessTokens, Auth, AuthUser, Claims, RefreshTokens, SqlRefreshStore, StoreError, UserStore,
     check_password, hash_password,
+};
+use utoipa::ToSchema;
+use utoipa::openapi::OpenApi;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
+
+use crate::auth_schema::{
+    Credentials, DownloadRequest, DownloadToken, Me, Refused, Role, Session, Token, TokenRefused,
+    TokenRequest, Tool, User,
 };
 use pacs_index::{Index, SeenBy, StoredClient, StoredUser, UserChange};
 use serde::Deserialize;
@@ -692,13 +700,20 @@ pub fn for_log(uri: &axum::http::Uri) -> String {
     }
 }
 
-#[derive(Deserialize)]
-struct DownloadRequest {
-    path: String,
-}
-
-/// `POST /auth/download-token`: a token for one `GET` of `path` (with its query, if any), for
-/// a link the browser follows itself. Refused for a path the user may not read.
+/// Makes a link a browser can follow.
+///
+/// A token good for one minute and one `GET` of one path, to append to it as `?token=`: for a download the browser starts itself, where no header can be set. Refused for a path the account may not read.
+#[utoipa::path(
+    post,
+    path = "/auth/download-token",
+    tag = "Signing in",
+    request_body(content = DownloadRequest, description = "The path the link is for."),
+    responses(
+        (status = 200, description = "The token.", body = DownloadToken),
+        (status = 403, description = "The account may not read this path, or the path is one no link is made for (the accounts).", body = Refused),
+        (status = 422, description = "Not a path of this server.", body = Refused)
+    )
+)]
 async fn download_token(
     State(login): State<Login>,
     Extension(user): Extension<SignedIn>,
@@ -774,8 +789,17 @@ fn from_index(what: &str, error: pacs_index::Error) -> Refusal {
     }
 }
 
-/// `GET /auth/me`: who the token is, with `projects`: the projects the account is limited
-/// to, or `null` when it sees everything.
+/// Who the token is.
+///
+/// For a user or a tool, with the projects it is limited to.
+#[utoipa::path(
+    get,
+    path = "/auth/me",
+    tag = "Signing in",
+    responses(
+        (status = 200, description = "The account.", body = Me)
+    )
+)]
 async fn me(
     Extension(user): Extension<SignedIn>,
     limited: Option<Extension<Limited>>,
@@ -788,7 +812,17 @@ async fn me(
     }))
 }
 
-/// `GET /projects`: the names of this server's projects, for who limits accounts to them.
+/// Lists the server's projects.
+///
+/// The names an account can be limited to: those of `PACS_PROJECTS`.
+#[utoipa::path(
+    get,
+    path = "/projects",
+    tag = "Users",
+    responses(
+        (status = 200, description = "The projects' names.", body = Vec<String>)
+    )
+)]
 async fn list_projects(State(login): State<Login>) -> Json<Value> {
     Json(json!(*login.projects))
 }
@@ -845,14 +879,27 @@ async fn shown_projects(login: &Login, account: &str) -> Result<Value, Refusal> 
     Ok(json!(projects))
 }
 
-#[derive(Deserialize)]
+/// A user's own change of password.
+#[derive(Deserialize, ToSchema)]
 struct PasswordChange {
     current_password: String,
     new_password: String,
 }
 
-/// `POST /auth/password`: a user changes their own password, and every session of theirs
-/// ends, this one included.
+/// Changes the user's own password.
+///
+/// Every session of the user ends, this one included. Not for a tool, which has no password.
+#[utoipa::path(
+    post,
+    path = "/auth/password",
+    tag = "Signing in",
+    request_body(content = PasswordChange, description = "The password now, and the new one: 12 to 1024 bytes."),
+    responses(
+        (status = 204, description = "Changed."),
+        (status = 403, description = "The current password is wrong.", body = Refused),
+        (status = 422, description = "The new password is too short or too long.", body = Refused)
+    )
+)]
 async fn change_password(
     State(login): State<Login>,
     Extension(user): Extension<SignedIn>,
@@ -908,6 +955,15 @@ async fn end_sessions(login: &Login, user_id: &str) -> Result<(), Refusal> {
         .map_err(|e| internal("ending a user's sessions", e))
 }
 
+/// Lists the users.
+#[utoipa::path(
+    get,
+    path = "/users",
+    tag = "Users",
+    responses(
+        (status = 200, description = "Every user, by login.", body = Vec<User>)
+    )
+)]
 async fn list_users(State(login): State<Login>) -> Result<Json<Value>, Refusal> {
     let users = login
         .index
@@ -923,7 +979,8 @@ async fn list_users(State(login): State<Login>) -> Result<Json<Value>, Refusal> 
     Ok(Json(Value::Array(list)))
 }
 
-#[derive(Deserialize)]
+/// A user to add.
+#[derive(Deserialize, ToSchema)]
 struct NewUser {
     login: String,
     password: String,
@@ -933,6 +990,18 @@ struct NewUser {
     projects: Option<Vec<String>>,
 }
 
+/// Adds a user.
+#[utoipa::path(
+    post,
+    path = "/users",
+    tag = "Users",
+    request_body(content = NewUser, description = "The login, the first password, the role, and the projects to limit them to."),
+    responses(
+        (status = 201, description = "The user.", body = User),
+        (status = 409, description = "The login is taken.", body = Refused),
+        (status = 422, description = "A login with spaces, a password too short, a role or a project this server does not have.", body = Refused)
+    )
+)]
 async fn create_user(
     State(login): State<Login>,
     new: Result<Json<NewUser>, JsonRejection>,
@@ -956,19 +1025,34 @@ async fn create_user(
     Ok((StatusCode::CREATED, Json(shown)).into_response())
 }
 
-#[derive(Deserialize)]
+/// What to change of a user. What is left out stays as it is.
+#[derive(Deserialize, ToSchema)]
 struct UserUpdate {
     password: Option<String>,
     role: Option<String>,
     active: Option<bool>,
     /// Absent: no change. `null`: every study. A list: only those projects.
     #[serde(default, deserialize_with = "given")]
+    #[schema(value_type = Option<Vec<String>>)]
     projects: Option<Option<Vec<String>>>,
 }
 
-/// `PUT /users/{id}`: a new password, role, state or projects. A new password or a
-/// deactivation ends the user's sessions; a new role reaches their access token at its next
-/// refresh, within 15 minutes; new projects hold from their next request.
+/// Changes a user.
+///
+/// A new password or a deactivation ends the user's sessions at once. A new role reaches their access token at its next refresh, within 15 minutes. New projects hold from their next request.
+#[utoipa::path(
+    put,
+    path = "/users/{id}",
+    tag = "Users",
+    params(("id" = String, Path, description = "The user's id.")),
+    request_body(content = UserUpdate, description = "What to change; what is left out stays."),
+    responses(
+        (status = 200, description = "The user after the change.", body = User),
+        (status = 404, description = "No such user.", body = Refused),
+        (status = 409, description = "The last active administrator cannot be deactivated or given another role.", body = Refused),
+        (status = 422, description = "A password too short, a role or a project this server does not have.", body = Refused)
+    )
+)]
 async fn update_user(
     State(login): State<Login>,
     Path(id): Path<String>,
@@ -1018,6 +1102,20 @@ async fn update_user(
     Ok(Json(shown).into_response())
 }
 
+/// Removes a user.
+///
+/// Their sessions end at once and the login is free again.
+#[utoipa::path(
+    delete,
+    path = "/users/{id}",
+    tag = "Users",
+    params(("id" = String, Path, description = "The user's id.")),
+    responses(
+        (status = 204, description = "Removed."),
+        (status = 404, description = "No such user.", body = Refused),
+        (status = 409, description = "The last active administrator cannot be removed.", body = Refused)
+    )
+)]
 async fn delete_user(
     State(login): State<Login>,
     Path(id): Path<String>,
@@ -1056,6 +1154,17 @@ fn shown_role(role: &pacs_index::StoredRole) -> Value {
     })
 }
 
+/// Lists the roles.
+///
+/// For any signed-in user, who may see what each role allows.
+#[utoipa::path(
+    get,
+    path = "/roles",
+    tag = "Roles",
+    responses(
+        (status = 200, description = "Every role.", body = Vec<Role>)
+    )
+)]
 async fn list_roles(State(login): State<Login>) -> Result<Json<Value>, Refusal> {
     let roles = login
         .index
@@ -1105,13 +1214,26 @@ fn permission_list(asked: &[String]) -> Result<Vec<String>, String> {
         .collect())
 }
 
-#[derive(Deserialize)]
+/// A role to add.
+#[derive(Deserialize, ToSchema)]
 struct NewRole {
     name: String,
     #[serde(default)]
     permissions: Vec<String>,
 }
 
+/// Adds a role.
+#[utoipa::path(
+    post,
+    path = "/roles",
+    tag = "Roles",
+    request_body(content = NewRole, description = "Its name and its permissions."),
+    responses(
+        (status = 201, description = "The role.", body = Role),
+        (status = 409, description = "A role has the id this name makes.", body = Refused),
+        (status = 422, description = "A name too long or without a letter or digit, or a permission that is not one.", body = Refused)
+    )
+)]
 async fn create_role(
     State(login): State<Login>,
     new: Result<Json<NewRole>, JsonRejection>,
@@ -1128,14 +1250,29 @@ async fn create_role(
     Ok((StatusCode::CREATED, Json(shown_role(&role))).into_response())
 }
 
-#[derive(Deserialize)]
+/// What to change of a role. What is left out stays as it is.
+#[derive(Deserialize, ToSchema)]
 struct RoleUpdate {
     name: Option<String>,
     permissions: Option<Vec<String>>,
 }
 
-/// `PUT /roles/{id}`: a new name, new permissions, or both. The users who have the role get
-/// the change at their next refresh, within 15 minutes.
+/// Changes a role.
+///
+/// Its name, its permissions, or both. New permissions reach each user's access token at its next refresh, and a tool at its next request.
+#[utoipa::path(
+    put,
+    path = "/roles/{id}",
+    tag = "Roles",
+    params(("id" = String, Path, description = "The role's id.")),
+    request_body(content = RoleUpdate, description = "What to change; what is left out stays."),
+    responses(
+        (status = 200, description = "The role after the change.", body = Role),
+        (status = 404, description = "No such role.", body = Refused),
+        (status = 409, description = "The `admin` role cannot be changed.", body = Refused),
+        (status = 422, description = "A name or a permission that is not valid.", body = Refused)
+    )
+)]
 async fn update_role(
     State(login): State<Login>,
     Path(id): Path<String>,
@@ -1169,6 +1306,18 @@ async fn update_role(
     Ok(Json(shown_role(&role)).into_response())
 }
 
+/// Removes a role.
+#[utoipa::path(
+    delete,
+    path = "/roles/{id}",
+    tag = "Roles",
+    params(("id" = String, Path, description = "The role's id.")),
+    responses(
+        (status = 204, description = "Removed."),
+        (status = 404, description = "No such role.", body = Refused),
+        (status = 409, description = "The `admin` role cannot be removed, nor a role a user or a tool still has.", body = Refused)
+    )
+)]
 async fn delete_role(
     State(login): State<Login>,
     Path(id): Path<String>,
@@ -1286,22 +1435,20 @@ fn granted_scope(asked: Option<&str>, role: &[String]) -> Result<Vec<Permission>
     Ok(allowed.into_iter().filter(|p| wanted.contains(p)).collect())
 }
 
-/// `POST /auth/token`: a client's id and secret for an access token, the OAuth client
-/// credentials grant as IHE IUA's Get Access Token [ITI-71] uses it (ITI TF-2: 3.71.4.1.2.1).
+/// Gives a tool an access token.
 ///
-/// The client sends `grant_type=client_credentials` as a form, with its id and secret in
-/// `Authorization: Basic`. Optional: `scope`, permissions separated by spaces, to get less
-/// than its role gives (`read`, `write`, `remote`, `delete`; never `users`); `resource`,
-/// which must then be this server's name (`PACS_AUTH_ISSUER`); `requested_token_type`,
-/// which must be the JWT one. The answer holds `access_token`, `token_type` (`Bearer`),
-/// `scope` and `expires_in`.
-///
-/// The token is a JWT signed with HS256 (IUA's JSON Web Token option, 3.71.4.2.2.1), good
-/// for five minutes, with `iss`, `sub`, `client_id`, `aud`, `jti`, `exp`, `iat` and `scope`.
-/// It goes in `Authorization: Bearer` (Incorporate Access Token [ITI-72]). Every request is
-/// checked against the client as it is now: a client removed, or a permission taken from
-/// its role, stops its tokens at once. A request it does not allow gets 401, as ITI-72 asks
-/// (3.72.4.3), with `error="insufficient_scope"` in the challenge.
+/// The client credentials grant, as IHE's Internet User Authorization profile uses it (Get Access Token, ITI-71): the tool's id and secret go in `Authorization: Basic`, the rest in a form. The token is good for five minutes; the tool asks again when it has run out.
+#[utoipa::path(
+    post,
+    path = "/auth/token",
+    tag = "Tools",
+    request_body(content = TokenRequest, content_type = "application/x-www-form-urlencoded", description = "The grant, and optionally less than the role gives."),
+    responses(
+        (status = 200, description = "The token.", body = Token),
+        (status = 400, description = "The request is not a client credentials grant, or asks for a scope the role does not give or for another server.", body = TokenRefused),
+        (status = 401, description = "The id and secret are missing or not those of a tool.", body = TokenRefused)
+    )
+)]
 async fn token(
     State(login): State<Login>,
     headers: axum::http::HeaderMap,
@@ -1416,6 +1563,15 @@ fn client_name(name: &str) -> Result<String, String> {
     Ok(name.to_owned())
 }
 
+/// Lists the tools.
+#[utoipa::path(
+    get,
+    path = "/clients",
+    tag = "Tools",
+    responses(
+        (status = 200, description = "Every tool, oldest first; never a secret.", body = Vec<Tool>)
+    )
+)]
 async fn list_clients(State(login): State<Login>) -> Result<Json<Value>, Refusal> {
     let clients = login
         .index
@@ -1431,7 +1587,8 @@ async fn list_clients(State(login): State<Login>) -> Result<Json<Value>, Refusal
     Ok(Json(Value::Array(list)))
 }
 
-#[derive(Deserialize)]
+/// A tool to add.
+#[derive(Deserialize, ToSchema)]
 struct NewClient {
     name: String,
     role: String,
@@ -1440,7 +1597,19 @@ struct NewClient {
     projects: Option<Vec<String>>,
 }
 
-/// `POST /clients`: a new client. The answer is the only place its `secret` ever appears.
+/// Adds a tool.
+///
+/// The answer is the only place its secret ever appears: the index keeps a hash of it.
+#[utoipa::path(
+    post,
+    path = "/clients",
+    tag = "Tools",
+    request_body(content = NewClient, description = "Its name, its role, and the projects to limit it to."),
+    responses(
+        (status = 201, description = "The tool, with its `secret`.", body = Tool),
+        (status = 422, description = "A name too long, a role or a project this server does not have.", body = Refused)
+    )
+)]
 async fn create_client(
     State(login): State<Login>,
     Extension(user): Extension<SignedIn>,
@@ -1464,17 +1633,32 @@ async fn create_client(
     Ok(token_reply(StatusCode::CREATED, shown))
 }
 
-#[derive(Deserialize)]
+/// What to change of a tool. What is left out stays as it is.
+#[derive(Deserialize, ToSchema)]
 struct ClientUpdate {
     name: Option<String>,
     role: Option<String>,
     /// Absent: no change. `null`: every study. A list: only those projects.
     #[serde(default, deserialize_with = "given")]
+    #[schema(value_type = Option<Vec<String>>)]
     projects: Option<Option<Vec<String>>>,
 }
 
-/// `PUT /clients/{id}`: a new name, a new role, or both. The role holds for the client's
-/// next request, tokens it already has included.
+/// Changes a tool.
+///
+/// Its name, role or projects. They hold from its next request, tokens it already has included.
+#[utoipa::path(
+    put,
+    path = "/clients/{id}",
+    tag = "Tools",
+    params(("id" = String, Path, description = "The tool's id.")),
+    request_body(content = ClientUpdate, description = "What to change; what is left out stays."),
+    responses(
+        (status = 200, description = "The tool after the change.", body = Tool),
+        (status = 404, description = "No such tool.", body = Refused),
+        (status = 422, description = "A name too long, a role or a project this server does not have.", body = Refused)
+    )
+)]
 async fn update_client(
     State(login): State<Login>,
     Path(id): Path<String>,
@@ -1510,8 +1694,19 @@ async fn update_client(
     Ok(Json(shown).into_response())
 }
 
-/// `DELETE /clients/{id}`: revoke it. Its secret gets no more tokens, and those it has stop
-/// at its next request.
+/// Removes a tool.
+///
+/// Its secret gets no more tokens, and those it has stop at its next request.
+#[utoipa::path(
+    delete,
+    path = "/clients/{id}",
+    tag = "Tools",
+    params(("id" = String, Path, description = "The tool's id.")),
+    responses(
+        (status = 204, description = "Removed."),
+        (status = 404, description = "No such tool.", body = Refused)
+    )
+)]
 async fn delete_client(
     State(login): State<Login>,
     Extension(user): Extension<SignedIn>,
@@ -1530,6 +1725,98 @@ async fn delete_client(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// The login's own routes, each one by its `#[utoipa::path]`, so that none is served that
+/// the API's description does not have.
+fn described() -> OpenApiRouter<Login> {
+    OpenApiRouter::new()
+        .routes(routes!(me))
+        .routes(routes!(change_password))
+        .routes(routes!(download_token))
+        .routes(routes!(list_users, create_user))
+        .routes(routes!(update_user, delete_user))
+        .routes(routes!(list_roles, create_role))
+        .routes(routes!(update_role, delete_role))
+        .routes(routes!(token))
+        .routes(routes!(list_projects))
+        .routes(routes!(list_clients, create_client))
+        .routes(routes!(update_client, delete_client))
+}
+
+/// The four routes of the sessions library, described here since they are served from
+/// there: `tests/auth.rs` holds each to what the running server answers.
+mod session_routes {
+    use super::{Credentials, Refused, Session};
+
+    /// Signs in.
+    ///
+    /// The access token comes in the answer, and the refresh token in an `HttpOnly` cookie
+    /// sent to `/auth/*` alone. A wrong password and an unknown login get the same answer.
+    #[utoipa::path(
+        post,
+        path = "/auth/login",
+        tag = "Signing in",
+        request_body(content = Credentials, description = "The login and the password."),
+        responses(
+            (status = 200, description = "Signed in.", body = Session),
+            (status = 401, description = "The login or the password is wrong, or the account is deactivated.", body = Refused)
+        )
+    )]
+    #[allow(dead_code)]
+    pub(super) fn login() {}
+
+    /// Carries a session on.
+    ///
+    /// Spends the refresh cookie and sets its successor. A cookie already spent ends the
+    /// session, since two parties then hold it.
+    #[utoipa::path(
+        post,
+        path = "/auth/refresh",
+        tag = "Signing in",
+        responses(
+            (status = 200, description = "A new access token, and the next cookie.", body = Session),
+            (status = 401, description = "No cookie, or one that is spent, expired or of a session that ended.", body = Refused)
+        )
+    )]
+    #[allow(dead_code)]
+    pub(super) fn refresh() {}
+
+    /// Signs out of this session.
+    ///
+    /// By the refresh cookie; the access token already given lasts until it runs out.
+    #[utoipa::path(
+        post,
+        path = "/auth/logout",
+        tag = "Signing in",
+        responses((status = 204, description = "The session ended, if there was one."))
+    )]
+    #[allow(dead_code)]
+    pub(super) fn logout() {}
+
+    /// Signs out everywhere.
+    ///
+    /// Ends every session of the user the access token is.
+    #[utoipa::path(
+        post,
+        path = "/auth/logout-all",
+        tag = "Signing in",
+        responses((status = 204, description = "Every session of the user ended."))
+    )]
+    #[allow(dead_code)]
+    pub(super) fn logout_all() {}
+
+    #[derive(utoipa::OpenApi)]
+    #[openapi(paths(login, refresh, logout, logout_all))]
+    pub(super) struct Described;
+}
+
+/// The description of the login's routes, for writing the reference: its own, and those
+/// of the sessions library.
+pub(crate) fn api() -> OpenApi {
+    let mut api = described().into_openapi();
+    api.merge(<session_routes::Described as utoipa::OpenApi>::openapi());
+    api
+}
+
 impl Login {
     /// The sign-in routes (`/auth/login`, `/auth/refresh`, `/auth/logout`,
     /// `/auth/logout-all`), `GET /auth/me`, `POST /auth/password`, `/users`, `/roles`, `POST /auth/token` and
@@ -1537,19 +1824,7 @@ impl Login {
     pub fn router(&self) -> anyhow::Result<Router> {
         let sessions: Router = auth_router(self.sessions.clone(), self.cookie.clone())
             .context("the refresh cookie")?;
-        let own = Router::new()
-            .route("/auth/me", get(me))
-            .route("/auth/password", post(change_password))
-            .route("/auth/download-token", post(download_token))
-            .route("/users", get(list_users).post(create_user))
-            .route("/users/{id}", put(update_user).delete(delete_user))
-            .route("/roles", get(list_roles).post(create_role))
-            .route("/roles/{id}", put(update_role).delete(delete_role))
-            .route("/auth/token", post(token))
-            .route("/projects", get(list_projects))
-            .route("/clients", get(list_clients).post(create_client))
-            .route("/clients/{id}", put(update_client).delete(delete_client))
-            .with_state(self.clone());
+        let (own, _) = described().with_state(self.clone()).split_for_parts();
         Ok(sessions.merge(own))
     }
 
