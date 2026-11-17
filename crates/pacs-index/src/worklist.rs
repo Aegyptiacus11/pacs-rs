@@ -84,27 +84,27 @@ pub struct WorklistFacets {
     pub ages: Vec<(String, i64)>,
 }
 
-enum Arg {
+pub(crate) enum Arg {
     Text(String),
     Int(i64),
 }
 
 /// SQL text and its arguments, each placed as the next `$n`.
 #[derive(Default)]
-struct Sql {
-    text: String,
-    args: Vec<Arg>,
+pub(crate) struct Sql {
+    pub(crate) text: String,
+    pub(crate) args: Vec<Arg>,
 }
 
 impl Sql {
-    fn arg(&mut self, arg: Arg) -> String {
+    pub(crate) fn arg(&mut self, arg: Arg) -> String {
         self.args.push(arg);
         format!("${}", self.args.len())
     }
-    fn text(&mut self, s: impl Into<String>) -> String {
+    pub(crate) fn text(&mut self, s: impl Into<String>) -> String {
         self.arg(Arg::Text(s.into()))
     }
-    fn query(self) -> sqlx::query::Query<'static, sqlx::Any, sqlx::any::AnyArguments> {
+    pub(crate) fn query(self) -> sqlx::query::Query<'static, sqlx::Any, sqlx::any::AnyArguments> {
         let mut q = sqlx::query(sqlx::AssertSqlSafe(self.text));
         for arg in self.args {
             q = match arg {
@@ -133,7 +133,7 @@ fn like_escape(word: &str) -> String {
 impl Index {
     /// The condition that `studies st` is one this value's account may see; none without
     /// an account.
-    fn seen_clause(&self, sql: &mut Sql) -> Option<String> {
+    pub(crate) fn seen_clause(&self, sql: &mut Sql) -> Option<String> {
         self.seen_as("st", sql)
     }
 
