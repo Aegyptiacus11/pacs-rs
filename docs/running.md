@@ -29,6 +29,8 @@ Every flag has a `PACS_*` environment variable:
 | `PACS_BASE_URL` | from the request | public URL of the DICOMweb root, for Retrieve URLs |
 | `PACS_INDEX` | `data/index.sqlite` | a SQLite file, or `postgres://user@host/database` |
 | `PACS_INDEX_PASSWORD` | | the Postgres password; environment only, or `..._FILE` naming a file |
+| `PACS_INDEX_TLS` | `prefer` | [TLS to a Postgres index](#tls-to-postgres): `prefer`, `verify-full` or `off` |
+| `PACS_INDEX_CA_FILE` | the web's authorities | the certificate authority (PEM) that signed the Postgres server's certificate, for `verify-full` |
 | `PACS_STORAGE` | `file:data/files` | `file:<directory>` or `s3://<bucket>[/<prefix>]` |
 | `PACS_S3_ENDPOINT` | AWS | e.g. `http://localhost:8333` for SeaweedFS |
 | `PACS_S3_REGION` | `us-east-1` | |
@@ -83,6 +85,27 @@ A synthetic series to try it with:
 cargo run -p pacs-core --features synthetic --example write_synthetic -- synthetic 1 3
 curl -X POST --data-binary @synthetic/00001.dcm http://127.0.0.1:8080/instances
 ```
+
+## TLS to Postgres
+
+The index holds patient names and identifiers, and the connection to Postgres carries them.
+
+| `PACS_INDEX_TLS` | The connection | Who the server is |
+|---|---|---|
+| `prefer`, the default | encrypted when the server offers TLS, plain when it does not | not checked |
+| `verify-full` | encrypted, or the start fails | its certificate must chain to an authority pacs-rs knows and name the host in `PACS_INDEX` |
+| `off` | plain | not checked |
+
+- **Use `verify-full` whenever Postgres is on another machine.** `prefer` keeps a passive
+  listener out, but not someone who can answer in the server's place.
+- `PACS_INDEX_CA_FILE` names the authority that signed the server's certificate, as a PEM
+  file. Without it the web's public authorities are used, which is right for a managed
+  database with a public certificate and wrong for one you signed yourself.
+- The certificate must name what `PACS_INDEX` connects to: a server reached as `db.internal`
+  needs `db.internal` in its certificate, and one reached by address needs the address.
+- A start that cannot have what it was asked for stops with the reason: a certificate that
+  does not check out, a server without TLS under `verify-full`, a file that cannot be read,
+  or these settings with a SQLite index. Set the TLS here, not as `sslmode` in the URL.
 
 ## Limits on requests
 
