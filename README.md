@@ -40,7 +40,10 @@ an authenticating proxy in front before opening it to a network.
 | [Two ways to use pacs-rs](docs/two-ways.md) | what to read for a research archive, and for a clinical one |
 | [DICOM: files and studies](docs/dicom-files.md), [the network](docs/dicom-network.md) | what DICOM is, shown on the sample study, with the standard's sections |
 | [REST API, task by task](docs/rest-guide.md) | sending, listing, fetching, searching and deleting, with the answers |
-| [Running](docs/running.md) | Docker, the image, every `PACS_*` setting |
+| [Running](docs/running.md) | Docker, the image, TLS to Postgres, limits on requests |
+| [Behind a reverse proxy](docs/reverse-proxy.md) | what the proxy must do, and what pacs-rs must be told |
+| [Backing up and upgrading](docs/backup.md) | the index and the files, in which order; restoring; what an upgrade changes |
+| [Settings](docs/settings.md) | every `PACS_*` setting, by what it is about |
 | [Login](docs/login.md) | `PACS_AUTH`: signing in, roles, users |
 | [Audit trail](docs/audit.md) | `PACS_AUDIT_FILE`: who signed in, and who stored, read, searched, exported and deleted what, as DICOM audit messages |
 | [Web interface](docs/web-interface.md) | the worklist, patients, the viewer, hanging protocols, measurements |

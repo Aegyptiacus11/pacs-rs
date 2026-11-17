@@ -21,8 +21,11 @@
 # Operate
 
 - [Running](running.md)
+- [Settings](settings.md)
 - [Login](login.md)
 - [Audit trail](audit.md)
+- [Behind a reverse proxy](reverse-proxy.md)
+- [Backing up and upgrading](backup.md)
 
 # Reference
 

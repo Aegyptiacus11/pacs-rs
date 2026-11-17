@@ -55,7 +55,7 @@ $ curl --data-binary @00001.dcm http://127.0.0.1:8080/instances
 ```
 
 To replace instead of keep, start the server with `PACS_OVERWRITE_INSTANCES=true`
-([settings](running.md)).
+([settings](settings.md#what-is-stored-and-how)).
 
 What is not a DICOM file is refused, and nothing is stored:
 

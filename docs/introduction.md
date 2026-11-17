@@ -18,7 +18,7 @@ research archive or a clinical one.
 |---|---|
 | try it | [Quickstart](quickstart.md) |
 | learn what DICOM is, on a real study | [DICOM: files and studies](dicom-files.md), [DICOM: the network](dicom-network.md) |
-| start a server and set it up | [Running](running.md) |
+| start a server and set it up | [Running](running.md), [Settings](settings.md) |
 | ask for a login, and manage users and roles | [Login](login.md) |
 | browse and view studies | [Web interface](web-interface.md) |
 | write a script or a pipeline against it | [REST API, task by task](rest-guide.md), then the [reference](api-reference.md) |

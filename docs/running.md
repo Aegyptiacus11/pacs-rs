@@ -20,61 +20,8 @@ cargo run --release -p pacs-server -- --help
 cargo run --release -p pacs-server            # files in data/files, index in data/index.sqlite
 ```
 
-Every flag has a `PACS_*` environment variable:
-
-| Variable | Default | |
-|---|---|---|
-| `PACS_LISTEN` | `127.0.0.1:8080` | address to listen on |
-| `PACS_DICOMWEB_PATH` | `/dicom-web` | where the DICOMweb root is served |
-| `PACS_BASE_URL` | from the request | public URL of the DICOMweb root, for Retrieve URLs |
-| `PACS_INDEX` | `data/index.sqlite` | a SQLite file, or `postgres://user@host/database` |
-| `PACS_INDEX_PASSWORD` | | the Postgres password; environment only, or `..._FILE` naming a file |
-| `PACS_INDEX_TLS` | `prefer` | [TLS to a Postgres index](#tls-to-postgres): `prefer`, `verify-full` or `off` |
-| `PACS_INDEX_CA_FILE` | the web's authorities | the certificate authority (PEM) that signed the Postgres server's certificate, for `verify-full` |
-| `PACS_STORAGE` | `file:data/files` | `file:<directory>` or `s3://<bucket>[/<prefix>]` |
-| `PACS_S3_ENDPOINT` | AWS | e.g. `http://localhost:8333` for SeaweedFS |
-| `PACS_S3_REGION` | `us-east-1` | |
-| `PACS_S3_ACCESS_KEY_ID`, `PACS_S3_SECRET_ACCESS_KEY` | | environment only, or `..._FILE` naming a file |
-| `PACS_OVERWRITE_INSTANCES` | `false` | replace an instance sent again, instead of keeping the first copy |
-| `PACS_COMPRESSION` | `jpeg-ls` | how uncompressed pixel data is stored: `jpeg-ls` (lossless, checked) or `off` |
-| `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
-| `PACS_MAX_READ_BYTES` | 512 MiB | memory that reading files may take at once beyond the files themselves, by estimate (see [costly files](dicomweb.md#elements-in-un-wrong-lengths-and-costly-files)) |
-| `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
-| `PACS_UI` | `true` | serve the web interface at `/ui/` |
-| `PACS_AUTH` | `false` | ask for a [login](login.md) on every HTTP route but `/healthz` and the web interface's files |
-| `PACS_AUTH_SECRET` | | the secret that signs access tokens, at least 32 bytes; environment only, or `..._FILE` naming a file |
-| `PACS_ADMIN_LOGIN` | `admin` | the first administrator's login, made when there is no user yet |
-| `PACS_ADMIN_PASSWORD` | | the first administrator's password, 12 bytes or more, read only when there is no user yet; environment only, or `..._FILE` |
-| `PACS_AUTH_COOKIE_SECURE` | `true` | send the refresh cookie over HTTPS only |
-| `PACS_AUTH_COOKIE_PATH` | `/auth` | the cookie's path as the browser sees it, behind a proxy that adds a prefix |
-| `PACS_AUTH_ISSUER` | `pacs-rs` | the name this server gives itself in the access tokens of [tools](login.md#tools): their `iss` and `aud` |
-| `PACS_AUDIT_FILE` | none | keep an [audit trail](audit.md) in this file, one line per event |
-| `PACS_AUDIT_SOURCE_ID` | `pacs-rs` | the name this server reports under in its audit messages |
-| `PACS_AUDIT_REPOSITORY` | none | [send the audit trail](audit.md#sending-to-a-repository) to this repository over TLS: `host` or `host:port` (6514) |
-| `PACS_AUDIT_REPOSITORY_CA_FILE` | | the authorities (PEM) that sign the repository's certificate; needed with it |
-| `PACS_AUDIT_REPOSITORY_CERT_FILE`, `PACS_AUDIT_REPOSITORY_KEY_FILE` | none | the certificate and key (PEM) pacs-rs shows the repository |
-| `PACS_HEADER_TIMEOUT` | `30` | seconds a client has to send a request's head; an idle connection is closed after it. `0`: no [limit](#limits-on-requests) |
-| `PACS_BODY_TIMEOUT` | `60` | seconds a request's body may pause |
-| `PACS_REQUEST_TIMEOUT` | `300` | seconds within which a request without a body must be answered |
-| `PACS_WRITE_TIMEOUT` | `60` | seconds a write to a client may stall |
-| `PACS_MAX_CONNECTIONS` | `1024` | connections open at once. `0`: no bound |
-| `PACS_MAX_REQUESTS` | `256` | requests served at once |
-| `PACS_MAX_REQUESTS_PER_CLIENT` | `64` | requests served at once for one address |
-| `PACS_DIMSE_LISTEN` | off | address for DIMSE, e.g. `0.0.0.0:11112` |
-| `PACS_DIMSE_AE_TITLE` | `PACSRS` | pacs-rs's AE title, called and calling |
-| `PACS_DIMSE_EXTRA_AE_TITLES` | none | further called AE titles accepted, comma-separated |
-| `PACS_DIMSE_REMOTES` | none | remote AEs, comma-separated, each `id=AE_TITLE@host:port`, with `/tls` after the port for one reached [over TLS](dimse.md#dimse-over-tls) |
-| `PACS_DIMSE_TLS_CERT_FILE`, `PACS_DIMSE_TLS_KEY_FILE` | none | pacs-rs's certificate (with its chain) and private key, PEM: with them the DIMSE port speaks TLS only |
-| `PACS_DIMSE_TLS_CA_FILE` | none | the authorities (PEM) that sign the certificates of DIMSE callers and of the remote AEs called over TLS |
-| `PACS_DIMSE_TLS_CLIENT_AUTH` | `required` | whether a DIMSE caller must show a certificate; `off` takes any caller that speaks TLS |
-| `PACS_DIMSE_KNOWN_CALLERS_ONLY` | `false` | accept associations only from the remotes' AE titles |
-| `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
-| `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |
-| `PACS_DIMSE_MOVE_TIMEOUT` | `600` | seconds to wait between two C-MOVE responses, while a large study is sent |
-| `PACS_PROJECTS` | none | a JSON file of projects, each an AE title and a de-identification profile (see [De-identification](de-identification.md)) |
-| `PACS_PROJECT_SECRET_<AE title>` | | a project's secret; environment only, or `..._FILE` naming a file |
-| `PACS_QUARANTINE` | none | `file:<directory>` or `s3://<bucket>[/<prefix>]` for quarantined instances; without it they are refused |
-| `RUST_LOG` | `info` | log filter |
+Every setting is a `PACS_*` environment variable, and a flag: they are all on
+[Settings](settings.md), by what they are about.
 
 The image is `ghcr.io/aegyptiacus11/pacs-rs` (linux/amd64 and linux/arm64; `:latest` or a
 version such as `:0.9.0`), or build it with `docker build -t pacs-rs .`: a static binary on an
