@@ -5,7 +5,7 @@
 //! (Docker and Portainer secrets), never from flags, which other users can read in `ps`.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use axum::Router;
@@ -53,6 +53,17 @@ pub struct Settings {
     /// with the password in PACS_INDEX_PASSWORD (or PACS_INDEX_PASSWORD_FILE).
     #[arg(long, env = "PACS_INDEX", default_value = "data/index.sqlite")]
     pub index: String,
+
+    /// TLS to a Postgres index: `prefer` (encrypted when the server offers it, its
+    /// certificate not checked), `verify-full` (encrypted, and the certificate must be
+    /// good for the host in PACS_INDEX), or `off`.
+    #[arg(long, env = "PACS_INDEX_TLS", value_enum, default_value = "prefer")]
+    pub index_tls: IndexTls,
+
+    /// The certificate authority (PEM) that signed the Postgres server's certificate, for
+    /// `verify-full`. Without it, the web's root certificates.
+    #[arg(long, env = "PACS_INDEX_CA_FILE")]
+    pub index_ca_file: Option<PathBuf>,
 
     /// Where files go: `file:<directory>` or `s3://<bucket>[/<prefix>]`.
     #[arg(long, env = "PACS_STORAGE", default_value = "file:data/files")]
@@ -213,6 +224,18 @@ pub struct Settings {
     pub dimse_move_timeout: u64,
 }
 
+/// How the connection to a Postgres index is protected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum IndexTls {
+    /// Never encrypted.
+    Off,
+    /// Encrypted when the server offers it; who the server is, is not checked.
+    Prefer,
+    /// Encrypted, and the server's certificate must chain to a known authority and name
+    /// the host connected to. Refused otherwise.
+    VerifyFull,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum StoredCompression {
     JpegLs,
@@ -311,11 +334,18 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
                 Some(password) => with_password(&url, &password)?,
                 None => url,
             };
+            let url = with_tls(&url, settings.index_tls, settings.index_ca_file.as_deref())?;
             Index::connect(&url)
                 .await
                 .with_context(|| format!("opening the Postgres index {}", without_password(&url)))?
         }
         IndexLocation::Sqlite(path) => {
+            if settings.index_tls == IndexTls::VerifyFull || settings.index_ca_file.is_some() {
+                bail!(
+                    "PACS_INDEX_TLS=verify-full and PACS_INDEX_CA_FILE are for a Postgres index; \
+                     PACS_INDEX names a SQLite file"
+                );
+            }
             if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                 std::fs::create_dir_all(parent).with_context(|| {
                     format!("creating the index directory {}", parent.display())
@@ -414,6 +444,54 @@ impl IndexLocation {
             IndexLocation::Sqlite(PathBuf::from(text.strip_prefix("sqlite:").unwrap_or(text)))
         }
     }
+}
+
+/// A Postgres URL with the TLS of `PACS_INDEX_TLS` put in, as the `sslmode` and
+/// `sslrootcert` parameters. An error when the URL sets them itself (one place is enough),
+/// when a certificate authority is given without `verify-full`, which is all that reads
+/// it, or when its file cannot be read.
+pub fn with_tls(url: &str, tls: IndexTls, ca_file: Option<&Path>) -> anyhow::Result<String> {
+    let query = url.split_once('?').map_or("", |(_, query)| query);
+    for parameter in ["sslmode", "sslrootcert", "ssl-mode", "ssl-root-cert"] {
+        if query
+            .split('&')
+            .any(|pair| pair.split('=').next() == Some(parameter))
+        {
+            bail!(
+                "the Postgres URL sets {parameter}; set the index's TLS with PACS_INDEX_TLS only"
+            );
+        }
+    }
+    let mut parameters = vec![format!(
+        "sslmode={}",
+        match tls {
+            IndexTls::Off => "disable",
+            IndexTls::Prefer => "prefer",
+            IndexTls::VerifyFull => "verify-full",
+        }
+    )];
+    if let Some(file) = ca_file {
+        if tls != IndexTls::VerifyFull {
+            bail!("PACS_INDEX_CA_FILE is read only with PACS_INDEX_TLS=verify-full");
+        }
+        std::fs::read(file)
+            .with_context(|| format!("reading PACS_INDEX_CA_FILE {}", file.display()))?;
+        let path = file
+            .to_str()
+            .with_context(|| format!("PACS_INDEX_CA_FILE is not UTF-8: {}", file.display()))?;
+        let encoded: String = path
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        parameters.push(format!("sslrootcert={encoded}"));
+    }
+    let separator = if url.contains('?') { '&' } else { '?' };
+    Ok(format!("{url}{separator}{}", parameters.join("&")))
 }
 
 /// `postgres://user@host/db` with `password` put in, percent-encoded. A URL that already
