@@ -13,7 +13,7 @@ use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use super::{ConnectError, Connected, connect};
 use crate::ae::{AeTitle, RemoteAe};
 use crate::command::{Command, NO_DATA_SET, PRIORITY_MEDIUM, field, tag};
-use crate::message::{self, DataSet, Incoming, MessageError};
+use crate::message::{DataSet, Incoming, MessageError};
 use crate::query::{QueryError, STUDY_ROOT_FIND, StudyQuery};
 use crate::status::{Status, StatusClass};
 use crate::{EXPLICIT_VR_LE, IMPLICIT_VR_LE};
@@ -121,9 +121,11 @@ where
         optional_keys_unsupported: false,
     };
     let result = async {
-        message::send(&mut association, context, &request, Some(&identifier)).await?;
+        association
+            .send(context, &request, Some(&identifier))
+            .await?;
         loop {
-            let response = match message::receive(&mut association, MAX_IDENTIFIER_BYTES).await? {
+            let response = match association.receive(MAX_IDENTIFIER_BYTES).await? {
                 Incoming::Message(response) => response,
                 Incoming::Released | Incoming::Aborted => return Err(FindError::Ended),
             };
@@ -157,7 +159,8 @@ where
                     outcome.matches += 1;
                     if on_match(found).is_break() {
                         outcome.cancelled = true;
-                        message::send(&mut association, context, &c_cancel_rq(message_id), None)
+                        association
+                            .send(context, &c_cancel_rq(message_id), None)
                             .await?;
                     }
                 }
@@ -178,16 +181,16 @@ where
     .await;
     match result {
         Ok(()) => {
-            let _ = association.release().await;
+            association.release().await;
             Ok(outcome)
         }
         // a final Failure ends the operation, not the association
         Err(e @ FindError::Failed { .. }) => {
-            let _ = association.release().await;
+            association.release().await;
             Err(e)
         }
         Err(e) => {
-            let _ = association.abort().await;
+            association.abort().await;
             Err(e)
         }
     }

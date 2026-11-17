@@ -16,7 +16,7 @@ use super::find::c_cancel_rq;
 use super::{ConnectError, Connected, connect};
 use crate::ae::{AeTitle, RemoteAe};
 use crate::command::{Command, PRIORITY_MEDIUM, field, tag};
-use crate::message::{self, DataSet, Incoming, MessageError};
+use crate::message::{DataSet, Incoming, MessageError};
 use crate::status::{Status, StatusClass};
 use crate::{EXPLICIT_VR_LE, IMPLICIT_VR_LE};
 
@@ -161,9 +161,11 @@ where
     let mut last = Progress::default();
     let mut cancelled = false;
     let result = async {
-        message::send(&mut association, context, &request, Some(&identifier)).await?;
+        association
+            .send(context, &request, Some(&identifier))
+            .await?;
         loop {
-            let response = match message::receive(&mut association, 1 << 24).await? {
+            let response = match association.receive(1 << 24).await? {
                 Incoming::Message(response) => response,
                 Incoming::Released | Incoming::Aborted => return Err(MoveError::Ended),
             };
@@ -179,7 +181,8 @@ where
                 last = progress;
                 if !cancelled && on_progress(progress).is_break() {
                     cancelled = true;
-                    message::send(&mut association, context, &c_cancel_rq(message_id), None)
+                    association
+                        .send(context, &c_cancel_rq(message_id), None)
                         .await?;
                 }
                 continue;
@@ -213,10 +216,10 @@ where
     .await;
     match &result {
         Ok(_) | Err(MoveError::Failed { .. }) => {
-            let _ = association.release().await;
+            association.release().await;
         }
         Err(_) => {
-            let _ = association.abort().await;
+            association.abort().await;
         }
     }
     result

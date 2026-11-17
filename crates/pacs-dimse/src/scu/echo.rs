@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use super::{ConnectError, Connected, connect};
 use crate::ae::{AeTitle, RemoteAe};
 use crate::command::{self, field, tag};
-use crate::message::{self, Incoming, MessageError};
+use crate::message::{Incoming, MessageError};
 use crate::status::Status;
 use crate::{IMPLICIT_VR_LE, VERIFICATION};
 
@@ -56,14 +56,10 @@ pub async fn echo(
     .await?;
     let message_id = 1;
     let exchange = async {
-        message::send(
-            &mut association,
-            context,
-            &command::c_echo_rq(message_id),
-            None,
-        )
-        .await?;
-        match message::receive(&mut association, 0).await? {
+        association
+            .send(context, &command::c_echo_rq(message_id), None)
+            .await?;
+        match association.receive(0).await? {
             Incoming::Message(response) => Ok(response),
             Incoming::Released | Incoming::Aborted => Err(EchoError::Ended),
         }
@@ -71,11 +67,11 @@ pub async fn echo(
     let response = match tokio::time::timeout(timeout, exchange).await {
         Ok(Ok(response)) => response,
         Ok(Err(e)) => {
-            let _ = association.abort().await;
+            association.abort().await;
             return Err(e);
         }
         Err(_) => {
-            let _ = association.abort().await;
+            association.abort().await;
             return Err(EchoError::Timeout(timeout));
         }
     };
@@ -83,12 +79,12 @@ pub async fn echo(
     if rsp.command_field().ok() != Some(field::C_ECHO_RSP)
         || rsp.us(tag::MESSAGE_ID_BEING_RESPONDED_TO).ok() != Some(message_id)
     {
-        let _ = association.abort().await;
+        association.abort().await;
         return Err(EchoError::WrongResponse(message_id));
     }
     let status = rsp.status().map_err(MessageError::from)?;
     // the association is released whatever the status: the exchange itself went well
-    let _ = association.release().await;
+    association.release().await;
     if status != Status::SUCCESS {
         return Err(EchoError::Status(status));
     }

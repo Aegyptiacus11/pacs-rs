@@ -22,7 +22,7 @@ pub mod scu;
 pub mod sop_classes;
 pub mod status;
 
-pub use ae::{AeError, AeTitle, RemoteAe};
+pub use ae::{AeError, AeTitle, ClientTls, RemoteAe};
 pub use project::{Project, ProjectError, Received};
 pub use query::{DateRange, QueryError, StudyQuery};
 pub use scp::{Destination, Observer, Peer, Scp};
@@ -71,6 +71,9 @@ pub struct Config {
     pub move_timeout: Duration,
     /// The largest data set kept; a larger C-STORE is read through and refused.
     pub max_data_set_bytes: usize,
+    /// With it, the listener speaks TLS and nothing else (PS3.15 B.12): a connection that
+    /// does not open with a TLS handshake this configuration accepts is closed.
+    pub tls: Option<std::sync::Arc<rustls::ServerConfig>>,
 }
 
 impl Config {
@@ -84,6 +87,7 @@ impl Config {
             timeout: Duration::from_secs(30),
             move_timeout: Duration::from_secs(600),
             max_data_set_bytes: 1 << 30,
+            tls: None,
         }
     }
 

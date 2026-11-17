@@ -124,6 +124,9 @@ impl Scp {
         for (uid, _) in crate::sop_classes::STORAGE {
             options = options.with_abstract_syntax(*uid);
         }
+        if let Some(tls) = &self.config.tls {
+            options = options.tls_config(tls.clone());
+        }
         options
     }
 
@@ -155,7 +158,11 @@ impl Scp {
                         observer
                             .refused(peer, "the limit of associations served at once is reached");
                     }
-                    reject_busy(socket, scp.config.timeout).await;
+                    // Over TLS there is no handshake to spare for a rejection: the
+                    // connection is closed, which a caller retries just the same.
+                    if scp.config.tls.is_none() {
+                        reject_busy(socket, scp.config.timeout).await;
+                    }
                     return;
                 };
                 scp.association(&options, socket, peer).await;
@@ -173,16 +180,35 @@ impl Scp {
         socket: TcpStream,
         peer: std::net::SocketAddr,
     ) {
-        let association = match options.establish_async(socket).await {
-            Ok(association) => association,
-            Err(e) => {
-                tracing::info!(%peer, error = %e, "association not established");
-                if let Some(observer) = &self.observer {
-                    observer.refused(peer, &e.to_string());
-                }
-                return;
+        let refused = |e: dicom_ul::association::Error| {
+            tracing::info!(%peer, error = %e, "association not established");
+            if let Some(observer) = &self.observer {
+                observer.refused(peer, &e.to_string());
             }
         };
+        // With TLS configured the port speaks TLS only (PS3.15 B.12: strict TLS, no
+        // upgrade from plain): a caller that does not open with a handshake the
+        // configuration accepts is refused here, before any DICOM.
+        if self.config.tls.is_some() {
+            match options.establish_tls_async(socket).await {
+                Ok(association) => self.established(association, peer).await,
+                Err(e) => refused(e),
+            }
+        } else {
+            match options.establish_async(socket).await {
+                Ok(association) => self.established(association, peer).await,
+                Err(e) => refused(e),
+            }
+        }
+    }
+
+    async fn established<S>(
+        &self,
+        association: dicom_ul::association::server::AsyncServerAssociation<S>,
+        peer: std::net::SocketAddr,
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
         let calling = association.peer_ae_title().trim().to_owned();
         let called = association.called_ae_title().trim().to_owned();
         let destination = self.destination(&called).clone();

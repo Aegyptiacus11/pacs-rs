@@ -2052,6 +2052,7 @@ dependencies = [
  "pacs-deid",
  "pacs-index",
  "pacs-store",
+ "rustls",
  "serde_json",
  "tempfile",
  "thiserror",

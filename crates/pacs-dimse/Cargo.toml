@@ -19,6 +19,7 @@ dicom-ul.workspace = true
 pacs-archive.workspace = true
 pacs-deid.workspace = true
 pacs-store.workspace = true
+rustls.workspace = true
 thiserror.workspace = true
 pacs-core.workspace = true
 serde_json.workspace = true
