@@ -34,7 +34,7 @@ What works today:
 | Need | Read |
 |---|---|
 | Receive images from modalities and workstations | [DIMSE](dimse.md): C-STORE into the archive, AE titles, who may connect |
-| Read them | [Web interface](web-interface.md), [DICOMweb](dicomweb.md) for other viewers |
+| Read them | [Web interface](web-interface.md), [DICOMweb](dicomweb.md) for [other viewers](viewers.md) |
 | A login, with roles | [Login](login.md) |
 | A record of who signed in, and who stored, read, searched, exported and deleted what | [Audit trail](audit.md) |
 | Bounds on what one client can take | [Limits on requests](running.md#limits-on-requests) |
