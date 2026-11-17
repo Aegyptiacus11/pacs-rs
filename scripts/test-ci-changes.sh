@@ -16,6 +16,8 @@ expect() {
 
 expect false false "documentation only" docs/roadmap.md README.md book.toml LICENSE-MIT \
   scripts/check-doc-links.py scripts/test_check_doc_links.py .github/workflows/docs.yml
+expect false false "the homepage and the site build" site/index.html site/img/viewer.jpg \
+  scripts/build-site.py scripts/test_build_site.py
 expect false false "the release workflow" .github/workflows/release.yml
 expect false true "the web interface only" ui/src/App.tsx ui/package-lock.json ui/README.md
 expect true false "a crate" crates/pacs-core/src/lib.rs

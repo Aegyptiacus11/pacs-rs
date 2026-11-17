@@ -1,5 +1,5 @@
-# The documentation site, https://aegyptiacus11.github.io/pacs-rs/: the mdBook in docs/
-# (book.toml). A pull request checks the links, builds the book and runs the pages' examples
+# The site, https://aegyptiacus11.github.io/pacs-rs/: the homepage in site/, and under /docs/
+# the mdBook of docs/ (book.toml), put together by scripts/build-site.py. A pull request checks the links, builds the book and runs the pages' examples
 # against a server (crates/pacs-server/tests/docs.rs); a push to main also publishes the book
 # to GitHub Pages, once both have passed. GitHub's own runners only, like ci.yml.
 name: docs
@@ -9,18 +9,24 @@ on:
     branches: [main]
     paths:
       - docs/**
+      - site/**
       - book.toml
       - README.md
       - scripts/check-doc-links.py
       - scripts/test_check_doc_links.py
+      - scripts/build-site.py
+      - scripts/test_build_site.py
       - .github/workflows/docs.yml
   pull_request:
     paths:
       - docs/**
+      - site/**
       - book.toml
       - README.md
       - scripts/check-doc-links.py
       - scripts/test_check_doc_links.py
+      - scripts/build-site.py
+      - scripts/test_build_site.py
       - .github/workflows/docs.yml
   workflow_dispatch:
 
@@ -42,7 +48,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: The link checker's own tests
+      - name: The tests of the link checker and of the site build
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Links
         run: python3 scripts/check-doc-links.py
@@ -56,19 +62,20 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/mdbook"
           rm "$archive"
           echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
-      - name: Build the book
+      - name: Build the site
         run: |
           set -euo pipefail
-          mdbook build
-          test -s target/book/index.html
-          test -s target/book/roadmap.html
-          test -s target/book/quickstart.html
-          # the sample study the quickstart downloads
-          test -s target/book/sample/00001.dcm
+          python3 scripts/build-site.py
+          test -s target/site/index.html
+          test -s target/site/docs/index.html
+          test -s target/site/docs/quickstart.html
+          # the old address of a page of the book, and the sample study the quickstart downloads
+          grep -q 'url=docs/roadmap.html' target/site/roadmap.html
+          test -s target/site/sample/00001.dcm
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
-          path: target/book
+          path: target/site
 
   # ci.yml runs this test with the others when the code changes, but not when only docs/ does
   examples:
