@@ -8,7 +8,7 @@ The same description is served by a running server at `/openapi.json` (OpenAPI 3
 
 An identifier that names nothing is answered 404 with an empty body. Every other refusal is an [Error](#error). With the [login](login.md) on, a request without a valid token, or with one that lacks the permission, is answered 401.
 
-Not on this page yet: the remote archives (`/modalities`, `/jobs`) and the login, users, roles and tools, which are on [REST API](rest-api.md) and [Login](login.md); and [DICOMweb](dicomweb.md).
+Not on this page yet: the login, users, roles and tools, which are on [Login](login.md); and [DICOMweb](dicomweb.md).
 
 ## Patients
 
@@ -543,6 +543,150 @@ Permission, when the login is on: `read`.
 | 200 | [Found](#found) | The identifiers found, or the resources. |
 | 400 | [Error](#error) | The body is not a search, names an attribute its level cannot search on, or gives a value that is not a match for its attribute. |
 
+## Remote archives
+
+Other DICOM systems, reached over the DICOM network protocol: testing the link, searching their studies, bringing studies in.
+
+### `GET /modalities`
+
+Lists the remote AEs.
+
+The AEs of `PACS_DIMSE_REMOTES`: those pacs-rs can test, search and pull studies from.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `expand` | query, optional | boolean | Answer with each AE's title, host and port, by id, instead of the ids. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [RemoteAes](#remoteaes) | The ids, or the AEs by id. |
+
+### `POST /modalities/{id}/echo`
+
+Tests the link to a remote AE.
+
+One C-ECHO from pacs-rs's AE title.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Echo](#echo) | The remote AE answered Success. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 502 | [Error](#error) | It could not be reached, refused the association, or answered otherwise; `Details` says which. |
+
+### `POST /modalities/{id}/move`
+
+Brings studies in from a remote AE.
+
+A C-MOVE: the remote AE is asked to send the studies to pacs-rs, which must be listening
+for DIMSE and be known to that AE as a destination. They arrive through pacs-rs's own
+C-STORE, as any instance sent to it; sent to a project, they are de-identified on the
+way in. A `Warning` header says when the remote AE sent nothing, as it does for a study
+it does not have.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+| the body | | [Move](#move) | The studies, and where they go. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Moved](#moved) | The move is over. |
+| 202 | [Started](#started) | With `Asynchronous`: the move started, as a job. |
+| 400 | [Error](#error) | The body names no valid Study Instance UID, or a project that is not one. |
+| 403 | [Error](#error) | The account is limited to some projects and `Project` is not one of them. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 409 | [Error](#error) | pacs-rs is not listening for DIMSE, so nothing could arrive. |
+| 502 | [Error](#error) | The remote AE could not be reached or failed; `Details` says when it does not know pacs-rs as a destination. |
+
+### `GET /modalities/{id}/studies`
+
+Searches a remote AE's studies.
+
+A C-FIND at study level (Study Root), answered as a QIDO-RS search answers. The values
+match as PS3.4 C.2.2.2 says: `*` and `?` in text and names, a date or a range of dates.
+pacs-rs checks each match against the query as well, since an archive may not match on
+every key. A `Warning` header says when more studies match than `limit` (the search is
+then cancelled), when the archive did not match on every key, or when it ended early.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+| `PatientID` | query, optional | string | Patient ID. |
+| `PatientName` | query, optional | string | Patient's Name. |
+| `AccessionNumber` | query, optional | string | Accession Number. |
+| `StudyDate` | query, optional | string | A date, or a range: `20260101-20260131`, `-20260131`, `20260101-`. |
+| `ModalitiesInStudy` | query, optional | string | One modality. |
+| `limit` | query, optional | integer | At most this many studies: 100 unless given, 1000 at most. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/dicom+json` | The studies, in DICOM JSON. |
+| 400 | [Error](#error) | A parameter that is not a search key here, or a value that breaks the matching rules. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 502 | [Error](#error) | The remote AE could not be reached or answered with a failure. |
+
+## Jobs
+
+Moves from a remote archive that run in the background.
+
+### `GET /jobs`
+
+Lists the jobs.
+
+The moves running in the background and the latest that are over, oldest first.
+
+Permission, when the login is on: `remote`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | The jobs' ids. |
+
+### `GET /jobs/{id}`
+
+A job: its state, progress and counts.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The job's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Job](#job) | The job. |
+| 404 | nothing | No job has this id; the body is empty. |
+
+### `POST /jobs/{id}/cancel`
+
+Asks a running move to stop.
+
+A C-CANCEL goes out with the remote AE's next response, and the job ends `Cancelled`
+once that AE answers so (PS3.4 C.4.2.2.1): what it had sent by then stays.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The job's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 202 | [Job](#job) | Asked to stop; the job as it is now. |
+| 404 | nothing | No job has this id; the body is empty. |
+| 409 | [Error](#error) | The job is over already. |
+
 ## Objects
 
 What the requests above send and answer.
@@ -574,6 +718,22 @@ The answer to a deletion.
 | Field | Type | |
 |---|---|---|
 | `RemainingAncestor` | [Ancestor](#ancestor) or null | `null` when the deletion left the patient with nothing, so that it went too. |
+
+### DicomJson
+
+One study as a remote AE describes it: its attributes in DICOM JSON, by tag.
+
+object.
+
+### Echo
+
+A C-ECHO that the remote AE answered.
+
+| Field | Type | |
+|---|---|---|
+| `AET` | string | The AE title that answered. |
+| `ElapsedMs` | integer | From the first byte sent to the association's release. |
+| `Status` | string | `Success`. |
 
 ### Error
 
@@ -618,6 +778,49 @@ An instance: one stored DICOM file.
 | `ParentSeries` | string | The identifier of the instance's series. |
 | `Type` | string | `Instance`. |
 
+### Job
+
+A move in the background, or one that is over. Jobs are kept in memory, the latest hundred finished ones with them: a restart forgets them.
+
+| Field | Type | |
+|---|---|---|
+| `Completed` | integer or null |  |
+| `ElapsedMs` | integer |  |
+| `Error` | string or null | Why it failed; `null` unless `State` is `Failure`. |
+| `Failed` | integer or null |  |
+| `FailedSOPInstanceUIDs` | list of string |  |
+| `ID` | string |  |
+| `Progress` | integer or null | Percent of the instances done; `null` while the remote AE has given no count. |
+| `Remaining` | integer or null | The counts of the latest response; `null` for one the remote AE has not given. |
+| `Remote` | string | The id of the remote AE asked. |
+| `State` | string | `Running`, `Success`, `Warning`, `Cancelled` or `Failure`. |
+| `StudyInstanceUIDs` | list of string |  |
+| `Type` | string | `C-MOVE`. |
+| `Warning` | integer or null |  |
+
+### Move
+
+Which studies to bring in, and how.
+
+| Field | Type | |
+|---|---|---|
+| `Asynchronous` | boolean or null, optional | Answer at once with a job, instead of when the move is over. |
+| `Project` | string or null, optional | The name of a project: the studies are sent to its AE title, and de-identified on the way in. Without it they come to pacs-rs's own AE title, as they are. |
+| `StudyInstanceUID` | [Uids](#uids) |  |
+
+### Moved
+
+How a move ended.
+
+| Field | Type | |
+|---|---|---|
+| `Completed` | integer or null | Instances sent, as the remote AE counted them; `null` when it gave no count. |
+| `ElapsedMs` | integer |  |
+| `Failed` | integer or null |  |
+| `FailedSOPInstanceUIDs` | list of string | The instances the remote AE said it could not send. |
+| `Status` | string | `Success`, or `Warning` when some instances failed. |
+| `Warning` | integer or null |  |
+
 ### Patient
 
 A patient: the studies that share a Patient ID.
@@ -639,6 +842,22 @@ Identifiers, or with `expand` the patients themselves.
 
 list of string or list of [Patient](#patient).
 
+### RemoteAe
+
+A remote AE as configured in `PACS_DIMSE_REMOTES`.
+
+| Field | Type | |
+|---|---|---|
+| `AET` | string | Its AE title. |
+| `Host` | string |  |
+| `Port` | integer |  |
+
+### RemoteAes
+
+The remote AEs: their ids, or with `expand` each id's AE.
+
+list of string or object of [RemoteAe](#remoteae).
+
 ### Series
 
 A series.
@@ -655,6 +874,15 @@ A series.
 | `ParentStudy` | string | The identifier of the series' study. |
 | `Status` | string | Always `Unknown`, for the reason of `ExpectedNumberOfInstances`. |
 | `Type` | string | `Series`. |
+
+### Started
+
+A move started in the background.
+
+| Field | Type | |
+|---|---|---|
+| `ID` | string | The job's id. |
+| `Path` | string | Where to ask how it goes: `/jobs/{ID}`. |
 
 ### Statistics
 
@@ -708,4 +936,10 @@ A study.
 Identifiers, or with `expand` the studies themselves.
 
 list of string or list of [Study](#study).
+
+### Uids
+
+One Study Instance UID, or several.
+
+string or list of string.
 

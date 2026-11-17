@@ -2,6 +2,7 @@
 //! C-FIND search), and an instance received by C-STORE showing in the REST API and the web
 //! interface's list.
 
+use pacs_server::api::remote::{DicomJson, Echo, Error, Job, Moved, RemoteAes, Started};
 use std::net::SocketAddr;
 use std::path::Path;
 
@@ -19,6 +20,13 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const CT: &str = "1.2.840.10008.5.1.4.1.1.2";
+
+/// An answer of the remote AE routes, as the type the API's description names for it; the
+/// types refuse a field they do not name.
+fn described<T: serde::de::DeserializeOwned>(answer: &Value) -> T {
+    serde_json::from_value(answer.clone())
+        .unwrap_or_else(|e| panic!("not what the description says: {e}\n{answer}"))
+}
 
 fn settings_in(dir: &Path, extra: &[&str]) -> Settings {
     let mut args = vec![
@@ -127,6 +135,8 @@ async fn modalities_lists_the_remote_aes() {
         (StatusCode::OK, json!(["hospital", "ws"]))
     );
     let (status, expanded) = get(&app, "/modalities?expand").await;
+    described::<RemoteAes>(&expanded);
+    described::<RemoteAes>(&get(&app, "/modalities").await.1);
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         expanded["hospital"],
@@ -165,10 +175,12 @@ async fn echo_tests_the_link_to_a_remote_ae() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["Status"], "Success");
     assert_eq!(body["AET"], "PEER");
+    described::<Echo>(&body);
 
     let (status, body) = send(&app, echo("gone")).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["Message"], "C-ECHO to gone failed");
+    described::<Error>(&body);
 
     assert_eq!(send(&app, echo("nobody")).await.0, StatusCode::NOT_FOUND);
 }
@@ -341,6 +353,7 @@ async fn studies_searches_a_remote_ae_by_c_find() {
     assert!(response.headers().get("warning").is_none());
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let studies: Value = serde_json::from_slice(&body).unwrap();
+    described::<Vec<DicomJson>>(&studies);
     assert_eq!(studies.as_array().unwrap().len(), 2);
     assert_eq!(studies[1]["0020000D"]["Value"][0], "2.25.2");
     assert_eq!(scp.await.unwrap(), "P1");
@@ -498,6 +511,7 @@ async fn move_pulls_a_study_to_pacs_rs() {
         (body["Completed"].as_u64(), body["Failed"].as_u64()),
         (Some(3), Some(0))
     );
+    described::<Moved>(&body);
     assert_eq!(scp.await.unwrap(), "RESEARCH");
 }
 
@@ -659,6 +673,7 @@ async fn slow_move_scp(total: u16, gap_ms: u64) -> (u16, tokio::task::JoinHandle
 async fn job_over(app: &Router, path: &str) -> Value {
     for _ in 0..100 {
         let (_, job) = get(app, path).await;
+        described::<Job>(&job);
         if job["State"] != "Running" {
             return job;
         }
@@ -692,6 +707,7 @@ async fn an_asynchronous_move_is_a_job_with_progress() {
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    described::<Started>(&started);
     let path = started["Path"].as_str().unwrap().to_owned();
     assert_eq!(path, format!("/jobs/{}", started["ID"].as_str().unwrap()));
     assert_eq!(get(&app, "/jobs").await.1, json!([started["ID"]]));

@@ -13,7 +13,7 @@ use utoipa::openapi::{Info, License, OpenApi};
 use crate::auth::{Right, right_for};
 
 /// The sections of the reference, in order, each with what it is about.
-const TAGS: [(&str, &str); 5] = [
+const TAGS: [(&str, &str); 7] = [
     (
         "Patients",
         "A patient is the studies that share a Patient ID.",
@@ -28,13 +28,27 @@ const TAGS: [(&str, &str); 5] = [
         "Search and archives",
         "Finding resources by their DICOM attributes, and several resources in one ZIP.",
     ),
+    (
+        "Remote archives",
+        "Other DICOM systems, reached over the DICOM network protocol: testing the link, searching their studies, bringing studies in.",
+    ),
+    (
+        "Jobs",
+        "Moves from a remote archive that run in the background.",
+    ),
 ];
+
+/// The answers of the remote AE routes, as types.
+pub mod remote {
+    pub use crate::modalities::schema::*;
+}
 
 const METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
 
 /// The description of the API this server serves.
 pub fn description() -> OpenApi {
     let mut api = pacs_rest::api();
+    api.merge(crate::modalities::api());
     let mut info = Info::new("pacs-rs", env!("CARGO_PKG_VERSION"));
     info.description = Some(
         "The REST API of pacs-rs: patients, studies, series and instances by identifier. \
@@ -295,8 +309,7 @@ pub fn reference_of(api: &Value) -> Result<String, String> {
          An identifier that names nothing is answered 404 with an empty body. Every other \
          refusal is an [Error](#error). With the [login](login.md) on, a request without a \
          valid token, or with one that lacks the permission, is answered 401.\n\n\
-         Not on this page yet: the remote archives (`/modalities`, `/jobs`) and the login, \
-         users, roles and tools, which are on [REST API](rest-api.md) and \
+         Not on this page yet: the login, users, roles and tools, which are on \
          [Login](login.md); and [DICOMweb](dicomweb.md).\n\n",
     );
 
