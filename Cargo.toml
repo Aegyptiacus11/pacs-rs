@@ -62,6 +62,8 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-io-timeout = "1.2.1"
+# certificates made in tests, for the TLS of DIMSE
+rcgen = { version = "0.14.10", default-features = false, features = ["pem", "ring"] }
 # TLS on DIMSE (PS3.15 B.12): the library dicom-ul speaks TLS with, and ring as its
 # cryptography, named explicitly since the build holds two
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

@@ -43,6 +43,7 @@ utoipa.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 futures.workspace = true
 bytes.workspace = true
 dicom-core.workspace = true
