@@ -237,6 +237,9 @@ fn rest_routes(ids: &Ids) -> Vec<String> {
             "studies" => &ids.study,
             "series" => &ids.series,
             "instances" => &ids.instance,
+            // not resources of this archive: remote AEs and the moves from them, which the
+            // `remote` permission governs
+            "modalities" | "jobs" => continue,
             other => panic!("a level this test does not know: {other}"),
         };
         routes.push(path.replace("{id}", id));
