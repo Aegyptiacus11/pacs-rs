@@ -7,14 +7,19 @@ the change touches what it checks: `scripts/ci-changes.sh` reads the changed pat
 to the documentation alone builds nothing, one to `ui/` builds the web interface only, and
 anything else, a path the script does not know included, runs the Rust jobs.
 
-This documentation is the mdBook in `docs/` (`book.toml`). `.github/workflows/docs.yml` checks its
-links (`scripts/check-doc-links.py`), builds it and runs [its
-examples](building.md#the-documentations-examples) on every pull request that touches it, and
-publishes it to GitHub Pages on a push to `main`. To read it while writing:
+This documentation is the mdBook in `docs/` (`book.toml`), served under `/docs/` of the site;
+the homepage in front of it is `site/`, plain HTML and CSS. `scripts/build-site.py` builds the
+book and puts the two together in `target/site`, with a redirect at each address a page of the
+book had when the book was the whole site, and checks the homepage's links.
+`.github/workflows/docs.yml` checks the documentation's links (`scripts/check-doc-links.py`),
+builds the site and runs [the pages' examples](building.md#the-documentations-examples) on every
+pull request that touches them, and publishes the site to GitHub Pages on a push to `main`. To
+read the book while writing, and to see the whole site:
 
 ```bash
 cargo install mdbook --version 0.5.4 --locked
 mdbook serve --open
+python3 scripts/build-site.py && python3 -m http.server -d target/site
 ```
 
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:

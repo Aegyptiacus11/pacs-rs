@@ -8,7 +8,8 @@ disk or in S3 and a SQLite or Postgres index, a web interface with a viewer, and
 C-ECHO, C-STORE into the archive, and C-FIND and C-MOVE to search another archive's studies and
 pull them in, de-identified on the way in when a project asks for it.
 
-**Documentation: <https://aegyptiacus11.github.io/pacs-rs/>** (its pages are in [docs/](docs)).
+**Site: <https://aegyptiacus11.github.io/pacs-rs/>**, and the documentation at
+<https://aegyptiacus11.github.io/pacs-rs/docs/> (its pages are in [docs/](docs)).
 
 ## Try it
 
