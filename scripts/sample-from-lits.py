@@ -1,6 +1,6 @@
 """Writes slices of a NIfTI CT volume as a DICOM CT series (one file per slice).
 
-This is how docs/sample was made from volume 0 of LiTS (docs/sample/README.md has the
+This is how docs/sample was made from volume 0 of LiTS (docs/sample-study.md has the
 command). Needs nibabel, numpy and pydicom.
 
     python scripts/sample-from-lits.py volume.nii out_dir --first K --count N [--step S]
