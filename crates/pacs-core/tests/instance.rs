@@ -85,6 +85,25 @@ fn metadata_leaves_out_the_trailing_padding() {
     assert!(instance.metadata_json().unwrap().get("FFFCFFFC").is_none());
 }
 
+/// FL and FD are the numbers the file's bytes hold, to the last bit: (0027,1050) is the four
+/// bytes CC CC 7C C2 and (0023,1070) the eight bytes D6 37 8E 88 96 B3 C9 41 in the scanner's
+/// file. The reference server's answer is one unit in the last place off for both.
+#[test]
+fn metadata_floats_are_the_bytes_of_the_file() {
+    let instance = Instance::from_bytes(&RealSeries::new(10, 1).slice_bytes(0)).unwrap();
+    let metadata = instance.metadata_json().unwrap();
+    assert_eq!(
+        metadata["00271050"]["Value"][0].as_f64(),
+        Some(f64::from(f32::from_le_bytes([0xCC, 0xCC, 0x7C, 0xC2])))
+    );
+    assert_eq!(
+        metadata["00231070"]["Value"][0].as_f64(),
+        Some(f64::from_le_bytes([
+            0xD6, 0x37, 0x8E, 0x88, 0x96, 0xB3, 0xC9, 0x41
+        ]))
+    );
+}
+
 #[test]
 fn level_attributes_are_split_by_level() {
     use pacs_core::levels;
