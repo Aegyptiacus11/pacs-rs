@@ -39,6 +39,19 @@ impl Destination {
         }
     }
 
+    /// The index as whoever calls this destination's AE title reads it: all of it for the
+    /// archive itself, and for a project the project's studies, no other (rights per
+    /// project, as an account limited to that project has them over HTTP).
+    pub fn index(&self) -> pacs_index::Index {
+        match self {
+            Destination::Archive(archive) => archive.index().clone(),
+            Destination::Project(project) => project
+                .archive
+                .index()
+                .limited_to(&pacs_index::Index::project_account(&project.profile.name)),
+        }
+    }
+
     async fn store(&self, file: Bytes) -> Result<(), Refusal> {
         match self {
             Destination::Archive(archive) => archive

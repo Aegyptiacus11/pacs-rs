@@ -68,6 +68,23 @@ impl Status {
     /// Error: Cannot understand (Cxxx): the project could not de-identify it.
     pub const CANNOT_UNDERSTAND_DEIDENTIFICATION: Status = Status(0xC004);
 
+    // C-FIND codes of PS3.4 Table C.4-1 and PS3.7 9.1.2.1.6. The Cxxx range is pacs-rs's
+    // to fill; Error Comment (0000,0902) says more, and Offending Element (0000,0901)
+    // where.
+    /// Refused: Out of resources (A700): the Identifier is larger than pacs-rs accepts.
+    pub const FIND_OUT_OF_RESOURCES: Status = Status(0xA700);
+    /// Error: Data Set does not match SOP Class (A900): the Identifier is not one of the
+    /// Information Model: no Query/Retrieve Level or one the model lacks, or no single
+    /// value in the Unique Key of a level above.
+    pub const IDENTIFIER_DOES_NOT_MATCH_SOP_CLASS: Status = Status(0xA900);
+    /// Failed: Unable to process (Cxxx): the Identifier cannot be read, or a key's value
+    /// is not a match for its attribute.
+    pub const UNABLE_TO_PROCESS: Status = Status(0xC000);
+    /// Failed: Unable to process (Cxxx): the index could not be searched.
+    pub const UNABLE_TO_PROCESS_INDEX: Status = Status(0xC001);
+    /// Refused: Not authorized: the caller may not invoke the operation.
+    pub const NOT_AUTHORIZED: Status = Status(0x0124);
+
     /// The class this code is in, by the convention of PS3.7 Annex C.
     pub fn class(self) -> StatusClass {
         match self.0 {

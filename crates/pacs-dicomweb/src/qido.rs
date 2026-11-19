@@ -10,7 +10,7 @@ use axum::extract::{Path, Query};
 use axum::http::HeaderMap;
 use axum::http::header::ACCEPT;
 use axum::response::{IntoResponse, Response};
-use pacs_index::{Key, Kind, Match, StudySearch, first_value};
+use pacs_index::{Key, Kind, Match, StudySearch};
 use serde_json::{Value, json};
 
 use crate::media::{Accept, accepts_json};
@@ -164,10 +164,9 @@ impl Search {
 
     /// Whether a series' or an instance's attributes answer every key.
     fn answered_by(&self, attributes: &Value) -> bool {
-        self.keys.iter().all(|key| {
-            key.asked
-                .matches(key.kind, first_value(attributes, key.tag).as_deref())
-        })
+        self.keys
+            .iter()
+            .all(|key| key.asked.answered_by(key.kind, attributes, key.tag))
     }
 
     fn page<T>(&self, items: Vec<T>) -> Vec<T> {

@@ -11,7 +11,7 @@ use serde_json::Value;
 use sqlx::Row;
 
 use crate::matching::{Kind, Match};
-use crate::worklist::Sql;
+use crate::worklist::{Arg, Sql};
 use crate::{Dialect, Error, Index, Study, StudyFilter};
 
 /// One matching key of a search: the attribute by its tag (`0020000D`), how its values are
@@ -38,16 +38,13 @@ pub struct StudySearch {
 pub const STUDY_DATE: &str = "00080020";
 pub const STUDY_TIME: &str = "00080030";
 pub const MODALITIES_IN_STUDY: &str = "00080061";
+pub const NUMBER_OF_STUDY_RELATED_SERIES: &str = "00201206";
+pub const NUMBER_OF_STUDY_RELATED_INSTANCES: &str = "00201208";
 
 /// The first value of an attribute in DICOM JSON, as text: a string, a number, or the
 /// alphabetic group of a person name.
 pub fn first_value(attributes: &Value, tag: &str) -> Option<String> {
-    match attributes.get(tag)?.get("Value")?.get(0)? {
-        Value::String(text) => Some(text.clone()),
-        Value::Number(number) => Some(number.to_string()),
-        Value::Object(name) => name.get("Alphabetic")?.as_str().map(str::to_owned),
-        _ => None,
-    }
+    crate::matching::values(attributes, tag).into_iter().next()
 }
 
 /// `text` as a LIKE pattern that matches itself: `%`, `_` and the escape, escaped.
@@ -129,6 +126,8 @@ fn narrowing(key: &Key, sql: &mut Sql) -> Option<String> {
             format!("({})", ends.join(" AND "))
         }
         (Match::Between(..), _) => return None,
+        // no column holds a sequence
+        (Match::Item(_), _) => return None,
     })
 }
 
@@ -175,6 +174,15 @@ fn answers(study: &Study, search: &StudySearch) -> bool {
         if combined.is_some() && (key.tag == STUDY_DATE || key.tag == STUDY_TIME) {
             return true;
         }
+        // what is counted, not stored
+        let counted = match key.tag {
+            NUMBER_OF_STUDY_RELATED_SERIES => Some(study.series_count),
+            NUMBER_OF_STUDY_RELATED_INSTANCES => Some(study.instance_count),
+            _ => None,
+        };
+        if let Some(count) = counted {
+            return key.asked.matches(key.kind, Some(&count.to_string()));
+        }
         if key.tag == MODALITIES_IN_STUDY {
             // a study has several: one that matches is enough
             return study
@@ -182,8 +190,7 @@ fn answers(study: &Study, search: &StudySearch) -> bool {
                 .iter()
                 .any(|modality| key.asked.matches(key.kind, Some(modality)));
         }
-        let stored = first_value(&study.attributes, key.tag);
-        key.asked.matches(key.kind, stored.as_deref())
+        key.asked.answered_by(key.kind, &study.attributes, key.tag)
     })
 }
 
@@ -212,24 +219,39 @@ impl StudySearch {
     }
 }
 
+/// How many studies a [`StudyCursor`] reads from the database at a time.
+const CURSOR_PAGE: i64 = 200;
+
+/// Which rows of `studies` a search reads, and in what order.
+enum Rows<'a> {
+    /// All of them, newest first.
+    Newest,
+    /// The next ones after this Study Instance UID, in UID order, this many at most.
+    After(Option<&'a str>, i64),
+}
+
 impl Index {
-    /// The studies that answer `search`, newest first, within what this value's account
-    /// may see.
-    pub async fn search_studies(&self, search: &StudySearch) -> Result<Vec<Study>, Error> {
-        if search.keys.is_empty() {
-            let filter = StudyFilter {
-                limit: search.limit.map(|limit| limit as i64),
-                offset: Some(search.offset as i64),
-                ..StudyFilter::default()
-            };
-            return self.studies(&filter).await;
-        }
+    /// The studies a search's keys leave in the database's eyes, which may let too many
+    /// through: [`answers`] decides.
+    async fn candidates(&self, search: &StudySearch, rows: Rows<'_>) -> Result<Vec<Study>, Error> {
         let mut sql = Sql::default();
         let mut and = vec!["1 = 1".to_owned()];
         and.extend(self.seen_clause(&mut sql));
         for key in &search.keys {
             and.extend(narrowing(key, &mut sql));
         }
+        let order = match rows {
+            Rows::Newest => "ORDER BY st.study_date DESC NULLS LAST, st.study_instance_uid".into(),
+            Rows::After(after, page) => {
+                if let Some(after) = after {
+                    and.push(format!("st.study_instance_uid > {}", sql.text(after)));
+                }
+                format!(
+                    "ORDER BY st.study_instance_uid LIMIT {}",
+                    sql.arg(Arg::Int(page))
+                )
+            }
+        };
         let modalities = match self.dialect {
             Dialect::Sqlite => {
                 "(SELECT group_concat(modality, char(92)) FROM
@@ -251,33 +273,105 @@ impl Index {
                     {modalities} AS modalities
                FROM studies st
               WHERE {}
-              ORDER BY st.study_date DESC NULLS LAST, st.study_instance_uid",
+              {order}",
             and.join(" AND ")
         );
-        // no page here: the rule below may still leave studies out
         let rows = sql.query().fetch_all(&self.pool).await?;
-        let mut found = Vec::new();
-        for row in rows {
-            let modalities: Option<String> = row.try_get("modalities")?;
-            let attributes: String = row.try_get("attributes")?;
-            let study = Study {
-                study_instance_uid: row.try_get("study_instance_uid")?,
-                public_id: row.try_get("public_id")?,
-                attributes: serde_json::from_str(&attributes)?,
-                modalities: modalities
-                    .map(|m| m.split('\\').map(str::to_owned).collect())
-                    .unwrap_or_default(),
-                series_count: row.try_get("series_count")?,
-                instance_count: row.try_get("instance_count")?,
+        rows.into_iter()
+            .map(|row| {
+                let modalities: Option<String> = row.try_get("modalities")?;
+                let attributes: String = row.try_get("attributes")?;
+                Ok(Study {
+                    study_instance_uid: row.try_get("study_instance_uid")?,
+                    public_id: row.try_get("public_id")?,
+                    attributes: serde_json::from_str(&attributes)?,
+                    modalities: modalities
+                        .map(|m| m.split('\\').map(str::to_owned).collect())
+                        .unwrap_or_default(),
+                    series_count: row.try_get("series_count")?,
+                    instance_count: row.try_get("instance_count")?,
+                })
+            })
+            .collect()
+    }
+
+    /// The studies that answer `search`, newest first, within what this value's account
+    /// may see.
+    pub async fn search_studies(&self, search: &StudySearch) -> Result<Vec<Study>, Error> {
+        if search.keys.is_empty() {
+            let filter = StudyFilter {
+                limit: search.limit.map(|limit| limit as i64),
+                offset: Some(search.offset as i64),
+                ..StudyFilter::default()
             };
-            if answers(&study, search) {
-                found.push(study);
-            }
+            return self.studies(&filter).await;
         }
-        let found = found.into_iter().skip(search.offset);
+        // no page in the database: the rule may still leave studies out
+        let found = self
+            .candidates(search, Rows::Newest)
+            .await?
+            .into_iter()
+            .filter(|study| answers(study, search))
+            .skip(search.offset);
         Ok(match search.limit {
             Some(limit) => found.take(limit).collect(),
             None => found.collect(),
         })
+    }
+
+    /// A cursor over the studies that answer `search`, within what this value's account
+    /// may see: for a search whose answers are sent as they are found, however many they
+    /// are. The search's page is not applied.
+    pub fn study_cursor(&self, search: StudySearch) -> StudyCursor {
+        StudyCursor {
+            index: self.clone(),
+            search,
+            after: None,
+            read: std::collections::VecDeque::new(),
+            done: false,
+        }
+    }
+}
+
+/// The studies that answer a search, one at a time, in Study Instance UID order. It reads
+/// the database a page at a time and holds nothing open in between, so a slow reader
+/// keeps no connection and no transaction, and memory does not grow with the matches. A
+/// study stored while the cursor is read may or may not be among them.
+#[derive(Debug)]
+pub struct StudyCursor {
+    index: Index,
+    search: StudySearch,
+    /// The last Study Instance UID read from the database.
+    after: Option<String>,
+    read: std::collections::VecDeque<Study>,
+    done: bool,
+}
+
+impl StudyCursor {
+    /// The next study that answers, or `None` when there is no other.
+    pub async fn next(&mut self) -> Result<Option<Study>, Error> {
+        loop {
+            if let Some(study) = self.read.pop_front() {
+                return Ok(Some(study));
+            }
+            if self.done {
+                return Ok(None);
+            }
+            let page = self
+                .index
+                .candidates(
+                    &self.search,
+                    Rows::After(self.after.as_deref(), CURSOR_PAGE),
+                )
+                .await?;
+            self.done = (page.len() as i64) < CURSOR_PAGE;
+            if let Some(last) = page.last() {
+                self.after = Some(last.study_instance_uid.clone());
+            }
+            self.read.extend(
+                page.into_iter()
+                    .filter(|study| answers(study, &self.search)),
+            );
+        }
     }
 }

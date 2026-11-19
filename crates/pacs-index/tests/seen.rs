@@ -294,6 +294,38 @@ async fn a_limited_index_reads_only_its_projects() {
     }
 }
 
+/// A project is an account that sees its own studies, with nothing set for it.
+#[tokio::test]
+async fn a_project_sees_its_own_studies_and_no_other() {
+    for index in common::indexes().await {
+        let [liver, lung, received] = three_studies(&index).await;
+        for s in [&liver, &lung, &received] {
+            index
+                .put_annotations(&s.study_uid(), Some("[0]"))
+                .await
+                .unwrap();
+        }
+        assert_eq!(Index::project_account("liver"), "project:liver");
+        let as_liver = index.limited_to(&Index::project_account("liver"));
+        check(&as_liver, &[&liver], &[&lung, &received]).await;
+        let as_lung = index.limited_to(&Index::project_account("lung"));
+        check(&as_lung, &[&lung], &[&liver, &received]).await;
+        // a project nothing came in through, and the empty name a study in no project
+        // does not have
+        for nothing in ["kidney", ""] {
+            let none = index.limited_to(&Index::project_account(nothing));
+            check(&none, &[], &[&liver, &lung, &received]).await;
+        }
+        // a user is not a project for bearing its name
+        check(
+            &index.limited_to("user:liver"),
+            &[],
+            &[&liver, &lung, &received],
+        )
+        .await;
+    }
+}
+
 #[tokio::test]
 async fn a_patient_is_the_studies_the_account_sees() {
     for index in common::indexes().await {

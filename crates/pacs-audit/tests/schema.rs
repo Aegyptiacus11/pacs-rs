@@ -178,6 +178,24 @@ fn study_messages() -> Vec<(&'static str, Message)> {
             ),
         ),
         (
+            "query-by-a-dicom-application",
+            events::dicom_query(
+                &source(),
+                when(),
+                Outcome::Success,
+                Participant::new("VIEWER", true)
+                    .alternative("AETITLES=VIEWER")
+                    .at(Some(AccessPoint::Ip("192.0.2.9".into()))),
+                server().alternative("AETITLES=PACSRS"),
+                "1.2.840.10008.5.1.4.1.2.2.1",
+                "1.2.840.10008.1.2.1",
+                // (0008,0052) CS "STUDY "
+                &[
+                    0x08, 0x00, 0x52, 0x00, b'C', b'S', 6, 0, b'S', b'T', b'U', b'D', b'Y', b' ',
+                ],
+            ),
+        ),
+        (
             "begin-transferring",
             events::begin_transferring(
                 &source(),
@@ -496,6 +514,22 @@ fn the_events_about_studies_name_the_study_and_the_patient() {
     assert!(query.contains("EventActionCode=\"E\"") && query.contains("csd-code=\"110112\""));
     assert!(query.contains("<ParticipantObjectIdentification ParticipantObjectID=\"/dicom-web/studies\" ParticipantObjectTypeCode=\"2\" ParticipantObjectTypeCodeRole=\"3\"><ParticipantObjectIDTypeCode csd-code=\"12\" codeSystemName=\"RFC-3881\" originalText=\"URI\"/><ParticipantObjectQuery>UGF0aWVudE5hbWU9RE9FKiZsaW1pdD0yNQ==</ParticipantObjectQuery>"));
     assert!(!query.contains("Patient Number"));
+
+    // a DICOM query: the SOP Class queried, the Identifier and its transfer syntax
+    let query = one("query-by-a-dicom-application").to_xml();
+    assert!(query.contains("EventActionCode=\"E\"") && query.contains("csd-code=\"110112\""));
+    assert!(query.contains("<ParticipantObjectIdentification ParticipantObjectID=\"1.2.840.10008.5.1.4.1.2.2.1\" ParticipantObjectTypeCode=\"2\" ParticipantObjectTypeCodeRole=\"3\"><ParticipantObjectIDTypeCode csd-code=\"110181\" codeSystemName=\"DCM\" originalText=\"SOP Class UID\"/><ParticipantObjectQuery>CABSAENTBgBTVFVEWSA=</ParticipantObjectQuery><ParticipantObjectDetail type=\"TransferSyntax\" value=\"MS4yLjg0MC4xMDAwOC4xLjIuMQ==\"/>"), "{query}");
+    let (asks, answers) = (
+        query
+            .find(
+                "UserID=\"VIEWER\" AlternativeUserID=\"AETITLES=VIEWER\" UserIsRequestor=\"true\"",
+            )
+            .unwrap(),
+        query.find("AlternativeUserID=\"AETITLES=PACSRS\"").unwrap(),
+    );
+    assert!(asks < answers);
+    assert!(query[asks..answers].contains("originalText=\"Source Role ID\""));
+    assert!(query[answers..].contains("originalText=\"Destination Role ID\""));
 }
 
 #[test]

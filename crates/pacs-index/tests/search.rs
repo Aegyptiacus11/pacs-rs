@@ -363,3 +363,83 @@ async fn a_search_is_paged_after_matching_and_bounded_by_the_account() {
         );
     }
 }
+
+/// Enough studies for a cursor to read the database more than once.
+#[tokio::test]
+async fn a_cursor_gives_every_match_once_and_no_other() {
+    for index in common::indexes().await {
+        for seed in 1000..1450 {
+            let name = if seed % 3 == 0 { "Doe^Jane" } else { "Roe^Al" };
+            record(
+                &index,
+                &SyntheticSeries::new(seed, 1).with_patient(name, None),
+            )
+            .await;
+        }
+        let read = async |index: &Index, keys: Vec<Key>| {
+            let mut cursor = index.study_cursor(StudySearch {
+                keys,
+                // a page is not a cursor's business
+                limit: Some(1),
+                offset: 7,
+                ..StudySearch::default()
+            });
+            let mut uids = Vec::new();
+            while let Some(study) = cursor.next().await.unwrap() {
+                uids.push(study.study_instance_uid);
+            }
+            // the end stays the end
+            assert!(cursor.next().await.unwrap().is_none());
+            uids
+        };
+        let all = read(&index, Vec::new()).await;
+        assert_eq!(all.len(), 450);
+        assert!(
+            all.windows(2).all(|pair| pair[0] < pair[1]),
+            "in UID order, none twice"
+        );
+
+        let does = read(&index, vec![key(NAME, Kind::Name, "doe*")]).await;
+        assert_eq!(does.len(), 150);
+        let searched = index
+            .search_studies(&StudySearch {
+                keys: vec![key(NAME, Kind::Name, "doe*")],
+                ..StudySearch::default()
+            })
+            .await
+            .unwrap();
+        let mut searched: Vec<String> =
+            searched.into_iter().map(|s| s.study_instance_uid).collect();
+        searched.sort();
+        assert_eq!(does, searched, "the cursor and the search agree");
+
+        // what is counted is matched too
+        assert_eq!(
+            read(&index, vec![key("00201208", Kind::Number, "1")])
+                .await
+                .len(),
+            450
+        );
+        assert!(
+            read(&index, vec![key("00201206", Kind::Number, "2")])
+                .await
+                .is_empty()
+        );
+        assert!(
+            read(&index, vec![key(NAME, Kind::Name, "nobody")])
+                .await
+                .is_empty()
+        );
+
+        // bounded by the account, like every read
+        index
+            .set_account_projects("user:reader", Some(&["liver".to_owned()]))
+            .await
+            .unwrap();
+        assert!(
+            read(&index.limited_to("user:reader"), Vec::new())
+                .await
+                .is_empty()
+        );
+    }
+}

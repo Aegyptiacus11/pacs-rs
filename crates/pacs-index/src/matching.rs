@@ -10,8 +10,14 @@
 //!   and names, not for dates, times, numbers or UIDs.
 //! - **Range** (C.2.2.2.5): `from-to`, `from-` or `-to`, both ends included, for dates and
 //!   times.
+//! - **Sequence** (C.2.2.2.6): the keys of one item, which one item at least of the stored
+//!   sequence must answer, all of them; a sequence inside it is matched the same way.
 //!
-//! Sequence, empty value and multiple value matching (C.2.2.2.6 to 8) are not here.
+//! An attribute with several values answers when any of them does (C.2.2.3). Empty value
+//! and multiple value matching (C.2.2.2.7 and 8) are not here: each needs an extended
+//! negotiation that is not made.
+
+use serde_json::Value;
 
 /// How an attribute's values are matched: by its Value Representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +34,8 @@ pub enum Kind {
     Time,
     /// IS: one whole number.
     Number,
+    /// SQ: the keys of one item.
+    Sequence,
 }
 
 /// What a search asks of one attribute.
@@ -41,6 +49,39 @@ pub enum Match {
     AnyOf(Vec<String>),
     /// From the first to the second, both included; an end left out is open.
     Between(Option<String>, Option<String>),
+    /// An item that answers every one of these; with none, anything, a missing sequence
+    /// included.
+    Item(Vec<ItemKey>),
+}
+
+/// One key of the item a sequence is matched by: an attribute of the item by its tag
+/// (`00400009`), how its values are matched, and what is asked of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemKey {
+    pub tag: String,
+    pub kind: Kind,
+    pub asked: Match,
+}
+
+/// The values of an attribute in DICOM JSON, as text: strings, numbers, and of a person
+/// name its alphabetic group. None for a missing attribute, a sequence or bulk data.
+pub fn values(attributes: &Value, tag: &str) -> Vec<String> {
+    let Some(values) = attributes
+        .get(tag)
+        .and_then(|attribute| attribute.get("Value"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(|value| match value {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            Value::Object(name) => name.get("Alphabetic")?.as_str().map(str::to_owned),
+            _ => None,
+        })
+        .collect()
 }
 
 fn date(text: &str) -> Result<String, String> {
@@ -198,7 +239,33 @@ impl Match {
                     .map_err(|_| format!("{value:?} is not a whole number"))?;
                 Match::Is(number.to_string())
             }
+            Kind::Sequence => {
+                return Err("a sequence is matched by the keys of an item, not by a value".into());
+            }
         }))
+    }
+
+    /// Whether the attribute `tag` of an entity, given as DICOM JSON, answers this: any
+    /// of its values (C.2.2.3), or for a sequence any of its items.
+    pub fn answered_by(&self, kind: Kind, attributes: &Value, tag: &str) -> bool {
+        let Match::Item(keys) = self else {
+            return values(attributes, tag)
+                .iter()
+                .any(|stored| self.matches(kind, Some(stored)));
+        };
+        if keys.is_empty() {
+            return true;
+        }
+        attributes
+            .get(tag)
+            .and_then(|attribute| attribute.get("Value"))
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    keys.iter()
+                        .all(|key| key.asked.answered_by(key.kind, item, &key.tag))
+                })
+            })
     }
 
     /// Whether this is a range that ends before it starts: of times, which only has a
@@ -207,7 +274,8 @@ impl Match {
         matches!(self, Match::Between(Some(from), Some(to)) if from > to)
     }
 
-    /// Whether a stored value answers this. A missing value answers nothing.
+    /// Whether a stored value answers this. A missing value answers nothing, and no value
+    /// answers the keys of an item: see [`Match::answered_by`].
     pub fn matches(&self, kind: Kind, stored: Option<&str>) -> bool {
         let Some(stored) = stored else { return false };
         let stored = stored.trim();
@@ -234,6 +302,7 @@ impl Match {
             (Match::Is(value), _) => folded(value) == folded(stored),
             (Match::AnyOf(values), _) => values.iter().any(|value| value == stored),
             (Match::Like(pattern), _) => wild(&folded(pattern), &folded(stored)),
+            (Match::Item(_), _) => false,
         }
     }
 }
@@ -271,6 +340,116 @@ mod tests {
         Match::parse(kind, value).unwrap().unwrap()
     }
 
+    fn item(keys: &[(&str, Kind, &str)]) -> Match {
+        Match::Item(
+            keys.iter()
+                .map(|(tag, kind, value)| ItemKey {
+                    tag: (*tag).to_owned(),
+                    kind: *kind,
+                    asked: asked(*kind, value),
+                })
+                .collect(),
+        )
+    }
+
+    /// A series with two requests, the second with a coded reason.
+    fn series() -> Value {
+        serde_json::json!({
+            "00080060": {"vr": "CS", "Value": ["CT"]},
+            "00080008": {"vr": "CS", "Value": ["ORIGINAL", "PRIMARY", "AXIAL"]},
+            "00200011": {"vr": "IS", "Value": [3]},
+            "00081070": {"vr": "PN", "Value": [{"Alphabetic": "DOE^JANE"}]},
+            "00400275": {"vr": "SQ", "Value": [
+                {
+                    "00400009": {"vr": "SH", "Value": ["STEP1"]},
+                    "00401001": {"vr": "SH", "Value": ["REQ1"]}
+                },
+                {
+                    "00400009": {"vr": "SH", "Value": ["STEP2"]},
+                    "00401001": {"vr": "SH", "Value": ["REQ2"]},
+                    "0040100A": {"vr": "SQ", "Value": [
+                        {"00080100": {"vr": "SH", "Value": ["R-1"]}},
+                        {"00080100": {"vr": "SH", "Value": ["R-2"]}}
+                    ]}
+                }
+            ]},
+            "00400260": {"vr": "SQ"}
+        })
+    }
+
+    #[test]
+    fn a_sequence_is_answered_by_one_item_that_answers_every_key() {
+        const REQUESTS: &str = "00400275";
+        let series = series();
+        let answered =
+            |keys: &[(&str, Kind, &str)]| item(keys).answered_by(Kind::Sequence, &series, REQUESTS);
+        assert!(answered(&[("00400009", Kind::Text, "STEP2")]));
+        assert!(answered(&[("00400009", Kind::Text, "STEP?")]));
+        assert!(answered(&[
+            ("00400009", Kind::Text, "STEP2"),
+            ("00401001", Kind::Text, "REQ2")
+        ]));
+        // each key has an item that answers it, but no item answers both
+        assert!(!answered(&[
+            ("00400009", Kind::Text, "STEP1"),
+            ("00401001", Kind::Text, "REQ2")
+        ]));
+        assert!(!answered(&[("00400009", Kind::Text, "STEP3")]));
+        // a key the items do not have
+        assert!(!answered(&[("00321060", Kind::Text, "CHEST")]));
+    }
+
+    #[test]
+    fn a_sequence_inside_an_item_is_matched_the_same_way() {
+        let series = series();
+        let reason = |code: &str| {
+            Match::Item(vec![ItemKey {
+                tag: "0040100A".into(),
+                kind: Kind::Sequence,
+                asked: item(&[("00080100", Kind::Text, code)]),
+            }])
+        };
+        assert!(reason("R-2").answered_by(Kind::Sequence, &series, "00400275"));
+        assert!(!reason("R-3").answered_by(Kind::Sequence, &series, "00400275"));
+    }
+
+    #[test]
+    fn an_item_without_keys_asks_nothing_and_a_missing_sequence_answers_no_key() {
+        let series = series();
+        let any = Match::Item(Vec::new());
+        // there, empty, and not there at all
+        for tag in ["00400275", "00400260", "00081032"] {
+            assert!(any.answered_by(Kind::Sequence, &series, tag), "{tag}");
+        }
+        let code = item(&[("00080100", Kind::Text, "R-1")]);
+        for tag in ["00400260", "00081032"] {
+            assert!(!code.answered_by(Kind::Sequence, &series, tag), "{tag}");
+        }
+        // a sequence is not a value, and a value is not a sequence
+        assert!(!code.matches(Kind::Sequence, Some("R-1")));
+        assert!(!code.answered_by(Kind::Sequence, &series, "00080060"));
+        assert!(Match::parse(Kind::Sequence, "R-1").is_err());
+        assert_eq!(Match::parse(Kind::Sequence, "").unwrap(), None);
+    }
+
+    #[test]
+    fn an_attribute_with_several_values_answers_when_any_does() {
+        let series = series();
+        let answered =
+            |tag: &str, kind: Kind, value: &str| asked(kind, value).answered_by(kind, &series, tag);
+        assert!(answered("00080008", Kind::Text, "PRIMARY"));
+        assert!(answered("00080008", Kind::Text, "AX*"));
+        assert!(!answered("00080008", Kind::Text, "DERIVED"));
+        // a number, and the alphabetic group of a name
+        assert!(answered("00200011", Kind::Number, "3"));
+        assert!(answered("00081070", Kind::Name, "doe^*"));
+        // missing, or a sequence where a value is asked
+        assert!(!answered("00080050", Kind::Text, "ACC1"));
+        assert!(!answered("00400275", Kind::Text, "STEP1"));
+        assert_eq!(values(&series, "00080008").len(), 3);
+        assert!(values(&series, "00400275").is_empty());
+    }
+
     #[test]
     fn an_empty_value_or_a_lone_star_asks_nothing() {
         for kind in [
@@ -280,6 +459,7 @@ mod tests {
             Kind::Date,
             Kind::Time,
             Kind::Number,
+            Kind::Sequence,
         ] {
             assert_eq!(Match::parse(kind, "").unwrap(), None);
             assert_eq!(Match::parse(kind, "  ").unwrap(), None);

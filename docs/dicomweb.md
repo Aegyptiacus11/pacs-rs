@@ -42,15 +42,17 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
 - **A range of dates with a range of times is one range of moments** (PS3.18 8.3.4.1.1):
   `StudyDate=20260105-20260107&StudyTime=1100-1000` is from the 5th at 11:00 to the 7th at
   10:00. A range of times that ends before it starts is refused on its own.
-- **Modalities In Study** matches a study when any of its series does.
+- **Modalities In Study** matches a study when any of its series does, and an attribute
+  with several values when any of them does (PS3.4 C.2.2.3).
 - A key given twice, one this level does not have, or a value that is not a match for its
   key (a date that is not `YYYYMMDD`, a wild card in a UID) is answered 400 with the reason,
   never by matching something else.
 - `fuzzymatching=true`, `emptyvaluematching=true` and `multiplevaluematching=true` are not
   done: the search is made without, and the answer carries the `Warning: 299` header the
   standard gives for each (PS3.18 8.3.4.2, 8.3.4.5, 8.3.4.6).
-- Not a key yet: Request Attributes Sequence and its items (sequence matching), and the
-  searches from the root for all series or all instances.
+- Not a key yet: Request Attributes Sequence and its items, which the matcher answers
+  (sequence matching, as [C-FIND](dimse.md#being-searched) uses it) but a query parameter
+  cannot yet name; and the searches from the root for all series or all instances.
 
 SQLite and Postgres answer the same: one rule in the code decides every match, and the
 database only narrows what it is asked about.

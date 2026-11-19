@@ -5,8 +5,9 @@ crates. Its index is SQLite or Postgres; its files are on disk or in S3-compatib
 
 Status: early development. `pacs-server` serves DICOMweb and a REST API over HTTP, with files on
 disk or in S3 and a SQLite or Postgres index, a web interface with a viewer, and speaks DIMSE:
-C-ECHO, C-STORE into the archive, and C-FIND and C-MOVE to search another archive's studies and
-pull them in, de-identified on the way in when a project asks for it.
+C-ECHO, C-STORE into the archive, C-FIND for the viewers and workstations that search it, and
+C-FIND and C-MOVE to search another archive's studies and pull them in, de-identified on the way
+in when a project asks for it.
 
 **Site: <https://aegyptiacus11.github.io/pacs-rs/>**, and the documentation at
 <https://aegyptiacus11.github.io/pacs-rs/docs/> (its pages are in [docs/](docs)).
@@ -68,7 +69,7 @@ an authenticating proxy in front before opening it to a network.
 | `pacs-archive` | ingest (compress, store, then index, undone if the index refuses) and deletion (index then files) |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
-| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND and C-MOVE SCU |
+| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND SCP and SCU, C-MOVE SCU |
 | `pacs-audit` | DICOM audit trail messages (PS3.15 A.5) as the syslog lines of IHE ATNA; no network or storage, usable on its own |
 | `pacs-deid` | de-identification by PS3.15 Annex E, configured per project; no network or storage, usable on its own |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |

@@ -52,6 +52,9 @@ pub const URI: Code = Code::rfc3881("12", "URI");
 pub const PATIENT_NUMBER: Code = Code::rfc3881("2", "Patient Number");
 /// The ID of a node a security alert is about (A.5.3.11).
 pub const NODE_ID: Code = Code::dcm("110182", "Node ID");
+/// The ID of a DICOM query's participant object is the UID of the SOP Class queried
+/// (A.5.3.10).
+pub const SOP_CLASS_UID: Code = Code::dcm("110181", "SOP Class UID");
 /// The ID of a study participant object is its Study Instance UID.
 pub const STUDY_INSTANCE_UID: Code = Code::dcm("110180", "Study Instance UID");
 
@@ -275,6 +278,42 @@ pub fn query(
             id_type: URI,
             name: NameOrQuery::Query(query.to_vec()),
             details: Vec::new(),
+            sop_classes: Vec::new(),
+        }],
+    }
+}
+
+/// Query (A.5.3.10), of a DICOM query: `issuer` asked `responder` with a C-FIND on
+/// `sop_class`, the Information Model queried. `identifier` is the Data Set of the query
+/// as it was sent, in `transfer_syntax`, which the table has written beside it.
+#[allow(clippy::too_many_arguments)]
+pub fn dicom_query(
+    source: &Source,
+    time: SystemTime,
+    outcome: Outcome,
+    issuer: Participant,
+    responder: Participant,
+    sop_class: &str,
+    transfer_syntax: &str,
+    identifier: &[u8],
+) -> Message {
+    Message {
+        event_id: event::QUERY,
+        event_types: Vec::new(),
+        action: Some(Action::Execute),
+        time,
+        outcome,
+        outcome_description: None,
+        participants: vec![issuer.role(role::SOURCE), responder.role(role::DESTINATION)],
+        source: source.clone(),
+        objects: vec![Object {
+            id: sop_class.to_owned(),
+            type_code: Some("2"),
+            role: Some("3"),
+            life_cycle: None,
+            id_type: SOP_CLASS_UID,
+            name: NameOrQuery::Query(identifier.to_vec()),
+            details: vec![("TransferSyntax".into(), transfer_syntax.as_bytes().to_vec())],
             sop_classes: Vec::new(),
         }],
     }

@@ -666,3 +666,373 @@ async fn pacs_rs_pulls_from_pynetdicom() {
         other => panic!("{other:?}"),
     }
 }
+
+// ---- pacs-rs as a Query SCP (PS3.4 C.4.1.3), asked by DCMTK's findscu and by pynetdicom ----
+
+/// A configuration that answers the queries of these AE titles.
+fn answering(callers: &[&str]) -> pacs_dimse::Config {
+    let mut config = config();
+    config.remotes = callers
+        .iter()
+        .map(|title| {
+            format!("{}={title}@127.0.0.1:104", title.to_lowercase())
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    config
+}
+
+/// Doe's CT of two series and Roe's MR, in `archive`.
+async fn two_studies(archive: &pacs_archive::Archive) -> [SyntheticSeries; 3] {
+    let series = [
+        SyntheticSeries::new(401, 2)
+            .with_patient("Doe^Jane", None)
+            .at("20260105", "100000"),
+        SyntheticSeries::new(402, 3)
+            .in_study(401, 2)
+            .with_patient("Doe^Jane", None)
+            .at("20260105", "100000"),
+        SyntheticSeries::new(403, 1)
+            .with_patient("Roe^Richard", None)
+            .at("20260106", "120000")
+            .of_modality("MR"),
+    ];
+    for one in &series {
+        ingest(archive, one).await;
+    }
+    series
+}
+
+/// findscu on the Study Root model, as FINDSCU, with `keys` (`-k` each) and `more`
+/// options: its output, and the Identifiers it extracted, in the order they came.
+async fn findscu(
+    port: u16,
+    calling: &str,
+    keys: &[&str],
+    more: &[&str],
+) -> (Output, Vec<dicom_object::InMemDicomObject>) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut findscu = dcmtk("findscu");
+    findscu.args(["-v", "-S", "-aet", calling, "-aec", "PACSRS", "-X", "-od"]);
+    findscu.arg(dir.path());
+    findscu.args(more);
+    for key in keys {
+        findscu.args(["-k", key]);
+    }
+    findscu.args(["127.0.0.1", &port.to_string()]);
+    let output = run(findscu).await;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    files.sort();
+    let found = files
+        .iter()
+        .map(|file| {
+            dicom_object::open_file(file)
+                .unwrap_or_else(|e| panic!("{}: {e}", file.display()))
+                .into_inner()
+        })
+        .collect();
+    (output, found)
+}
+
+fn values(found: &[dicom_object::InMemDicomObject], tag: dicom_core::Tag) -> Vec<String> {
+    found
+        .iter()
+        .map(|identifier| value(identifier, tag).unwrap_or_default())
+        .collect()
+}
+
+/// findscu searches studies by a wild card and a range, then goes down to a study's
+/// series and a series' instances.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_findscu_queries_the_three_levels() {
+    use dicom_dictionary_std::tags;
+    let archive = archive().await;
+    let [doe, report, roe] = two_studies(&archive).await;
+    let addr = start(answering(&["FINDSCU"]), archive).await;
+
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &[
+            "QueryRetrieveLevel=STUDY",
+            "PatientName=DOE*",
+            "StudyDate=20260101-20260131",
+            "StudyInstanceUID",
+            "PatientID",
+            "ModalitiesInStudy",
+            "NumberOfStudyRelatedInstances",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(found.len(), 1, "{}", text(&output));
+    for (tag, expected) in [
+        (tags::STUDY_INSTANCE_UID, doe.study_uid()),
+        (tags::PATIENT_NAME, "Doe^Jane".into()),
+        (tags::PATIENT_ID, "SYN401".into()),
+        (tags::STUDY_DATE, "20260105".into()),
+        (tags::MODALITIES_IN_STUDY, "CT".into()),
+        (tags::NUMBER_OF_STUDY_RELATED_INSTANCES, "5".into()),
+        (tags::QUERY_RETRIEVE_LEVEL, "STUDY".into()),
+        (tags::RETRIEVE_AE_TITLE, "PACSRS".into()),
+    ] {
+        assert_eq!(value(&found[0], tag), Some(expected), "{tag}");
+    }
+
+    // every study, then one that is not there
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &[
+            "QueryRetrieveLevel=STUDY",
+            "StudyInstanceUID",
+            "PatientName",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    let mut names = values(&found, tags::PATIENT_NAME);
+    names.sort();
+    assert_eq!(names, ["Doe^Jane", "Roe^Richard"]);
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &["QueryRetrieveLevel=STUDY", "PatientID=NOBODY"],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(found.is_empty());
+
+    let study = format!("StudyInstanceUID={}", doe.study_uid());
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &[
+            "QueryRetrieveLevel=SERIES",
+            &study,
+            "SeriesInstanceUID",
+            "Modality",
+            "SeriesNumber",
+            "NumberOfSeriesRelatedInstances",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        values(&found, tags::SERIES_INSTANCE_UID),
+        [doe.series_uid(), report.series_uid()]
+    );
+    assert_eq!(
+        values(&found, tags::NUMBER_OF_SERIES_RELATED_INSTANCES),
+        ["2", "3"]
+    );
+
+    let series = format!("SeriesInstanceUID={}", report.series_uid());
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &[
+            "QueryRetrieveLevel=IMAGE",
+            &study,
+            &series,
+            "SOPInstanceUID",
+            "InstanceNumber",
+            "Rows",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        values(&found, tags::SOP_INSTANCE_UID),
+        [0, 1, 2].map(|slice| report.instance_uid(slice))
+    );
+    assert_eq!(values(&found, tags::INSTANCE_NUMBER), ["1", "2", "3"]);
+    // a series of another study is not found under this one
+    let other = format!("StudyInstanceUID={}", roe.study_uid());
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &[
+            "QueryRetrieveLevel=IMAGE",
+            &other,
+            &series,
+            "SOPInstanceUID",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(found.is_empty());
+}
+
+/// findscu is told what is wrong: an AE title pacs-rs does not answer, and an Identifier
+/// without the Unique Key of the level above.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_findscu_is_refused_with_a_status_it_shows() {
+    let archive = archive().await;
+    two_studies(&archive).await;
+    let addr = start(answering(&["FINDSCU"]), archive).await;
+    let (output, found) = findscu(
+        addr.port(),
+        "STRANGER",
+        &["QueryRetrieveLevel=STUDY", "PatientName"],
+        &[],
+    )
+    .await;
+    assert!(found.is_empty(), "{}", text(&output));
+    // a status DCMTK has no name for
+    assert!(text(&output).contains("Status: 0x124"), "{}", text(&output));
+
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &["QueryRetrieveLevel=SERIES", "SeriesInstanceUID"],
+        &[],
+    )
+    .await;
+    assert!(found.is_empty(), "{}", text(&output));
+    assert!(
+        text(&output).contains("DataSetDoesNotMatchSOPClass"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// findscu cancels after the first match: the search ends with status Cancel, short of
+/// its matches. The server is held until the cancel has left findscu ([`gate`]).
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_findscu_cancels_in_the_middle() {
+    const STUDIES: u32 = 2500;
+    let archive = archive().await;
+    for seed in 0..STUDIES {
+        ingest(&archive, &SyntheticSeries::new(30_000 + seed, 1)).await;
+    }
+    let server = start(answering(&["FINDSCU"]), archive).await;
+    let addr = gate(server, 2048, 2).await;
+    let (output, found) = findscu(
+        addr.port(),
+        "FINDSCU",
+        &["QueryRetrieveLevel=STUDY", "StudyInstanceUID", "PatientID"],
+        &["--cancel", "1"],
+    )
+    .await;
+    let said = text(&output);
+    assert!(said.contains("Cancel"), "{said}");
+    assert!(
+        !found.is_empty() && found.len() < STUDIES as usize,
+        "{}",
+        found.len()
+    );
+}
+
+/// pynetdicom queries the three levels, with a name in UTF-8, and under an AE title
+/// pacs-rs does not answer it gets Refused: Not authorized.
+#[tokio::test]
+#[ignore = "needs pynetdicom"]
+async fn pynetdicom_queries_the_three_levels() {
+    let archive = archive().await;
+    let [doe, report, _] = two_studies(&archive).await;
+    ingest(
+        &archive,
+        &SyntheticSeries::new(404, 1).with_patient("Benaïssa^Amel", Some("ISO_IR 192")),
+    )
+    .await;
+    let addr = start(answering(&["PYNETDICOM"]), archive).await;
+    let script = r#"
+import sys
+from pydicom.dataset import Dataset
+from pynetdicom import AE
+from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelFind as FIND
+port, study, series, second = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+
+def find(assoc, **keys):
+    ds = Dataset()
+    for name, value in keys.items():
+        setattr(ds, name, value)
+    found, last = [], None
+    for status, identifier in assoc.send_c_find(ds, FIND):
+        assert status, "no response"
+        if status.Status in (0xFF00, 0xFF01):
+            found.append((status.Status, identifier))
+        else:
+            last = status.Status
+    return found, last
+
+ae = AE(ae_title="PYNETDICOM")
+ae.add_requested_context(FIND)
+assoc = ae.associate("127.0.0.1", port, ae_title="PACSRS")
+assert assoc.is_established, "no association"
+
+found, last = find(assoc, QueryRetrieveLevel="STUDY", PatientName="doe^*", StudyInstanceUID="",
+                   StudyDate="", ModalitiesInStudy="", NumberOfStudyRelatedSeries="")
+assert last == 0x0000, hex(last)
+assert [s for s, _ in found] == [0xFF00], found
+ds = found[0][1]
+assert ds.StudyInstanceUID == study and str(ds.PatientName) == "Doe^Jane", ds
+assert ds.StudyDate == "20260105" and ds.NumberOfStudyRelatedSeries == 2, ds
+assert ds.ModalitiesInStudy == "CT" and ds.RetrieveAETitle == "PACSRS", ds
+
+# a name outside ASCII, asked and answered in UTF-8
+ds = Dataset()
+ds.SpecificCharacterSet = "ISO_IR 192"
+ds.QueryRetrieveLevel = "STUDY"
+ds.PatientName = "Benaïssa*"
+ds.StudyInstanceUID = ""
+names = [str(i.PatientName) for s, i in assoc.send_c_find(ds, FIND) if s.Status == 0xFF00]
+assert names == ["Benaïssa^Amel"], names
+
+# a key pacs-rs does not have: left out, and the status says so
+found, last = find(assoc, QueryRetrieveLevel="STUDY", PatientID="SYN401", StudyInstanceUID="",
+                   AdmittingDiagnosesDescription="")
+assert last == 0x0000 and [s for s, _ in found] == [0xFF01], (found, last)
+assert "AdmittingDiagnosesDescription" not in found[0][1], found[0][1]
+
+found, last = find(assoc, QueryRetrieveLevel="SERIES", StudyInstanceUID=study,
+                   SeriesInstanceUID="", Modality="", SeriesNumber="")
+assert last == 0x0000, hex(last)
+assert [i.SeriesInstanceUID for _, i in found] == [series, second], found
+assert [i.SeriesNumber for _, i in found] == [1, 2], found
+
+found, last = find(assoc, QueryRetrieveLevel="IMAGE", StudyInstanceUID=study,
+                   SeriesInstanceUID=second, SOPInstanceUID="", InstanceNumber="", Rows=None)
+assert last == 0x0000, hex(last)
+assert [i.InstanceNumber for _, i in found] == [1, 2, 3], found
+assert all(i.Rows == 4 and i.StudyInstanceUID == study for _, i in found), found
+
+# a SERIES query without its study: the Identifier does not match the SOP class
+found, last = find(assoc, QueryRetrieveLevel="SERIES", SeriesInstanceUID="")
+assert last == 0xA900 and not found, (found, last)
+assoc.release()
+
+stranger = AE(ae_title="STRANGER")
+stranger.add_requested_context(FIND)
+assoc = stranger.associate("127.0.0.1", port, ae_title="PACSRS")
+assert assoc.is_established, "no association"
+found, last = find(assoc, QueryRetrieveLevel="STUDY", StudyInstanceUID="")
+assert last == 0x0124 and not found, (found, last)
+assoc.release()
+"#;
+    let mut py = python();
+    py.args([
+        "-c",
+        script,
+        &addr.port().to_string(),
+        &doe.study_uid(),
+        &doe.series_uid(),
+        &report.series_uid(),
+    ]);
+    let output = run(py).await;
+    assert!(output.status.success(), "{}", text(&output));
+}

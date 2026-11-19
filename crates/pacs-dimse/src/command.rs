@@ -33,6 +33,7 @@ pub mod tag {
     pub const PRIORITY: u16 = 0x0700;
     pub const COMMAND_DATA_SET_TYPE: u16 = 0x0800;
     pub const STATUS: u16 = 0x0900;
+    pub const OFFENDING_ELEMENT: u16 = 0x0901;
     pub const ERROR_COMMENT: u16 = 0x0902;
     pub const AFFECTED_SOP_INSTANCE_UID: u16 = 0x1000;
     pub const NUMBER_OF_REMAINING_SUB_OPERATIONS: u16 = 0x1020;
@@ -46,6 +47,10 @@ pub mod tag {
 /// Command Data Set Type (0000,0800) when no data set follows (PS3.7 E.1-1, "Null");
 /// any other value means one does.
 pub const NO_DATA_SET: u16 = 0x0101;
+
+/// Command Data Set Type of a response a data set follows: any value but 0101H says so
+/// (PS3.7 Table 9.3-4).
+pub const DATA_SET_PRESENT: u16 = 0x0001;
 
 /// Priority (0000,0700): MEDIUM (PS3.7 E.1-1).
 pub const PRIORITY_MEDIUM: u16 = 0x0000;
@@ -98,6 +103,17 @@ impl Command {
         let mut value = text.as_bytes().to_vec();
         if value.len() % 2 == 1 {
             value.push(b' ');
+        }
+        self.elements.insert(element, value);
+        self
+    }
+
+    /// An AT element: each tag as its group, then its element (PS3.5 6.2, AT).
+    pub fn with_tags(mut self, element: u16, tags: &[dicom_core::Tag]) -> Self {
+        let mut value = Vec::with_capacity(tags.len() * 4);
+        for tag in tags {
+            value.extend_from_slice(&tag.group().to_le_bytes());
+            value.extend_from_slice(&tag.element().to_le_bytes());
         }
         self.elements.insert(element, value);
         self

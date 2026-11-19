@@ -25,8 +25,11 @@ use crate::message::{self, Incoming, MessageError};
 /// far beyond what an Identifier holds.
 const MAX_IDENTIFIER_COST: u64 = 64 << 20;
 
-/// A response Identifier from a remote AE, which is not trusted to tell the truth about lengths.
-fn read_identifier(bytes: &[u8], ts: &TransferSyntax) -> Result<InMemDicomObject, String> {
+/// An Identifier from a remote AE, which is not trusted to tell the truth about lengths.
+pub(crate) fn read_identifier(
+    bytes: &[u8],
+    ts: &TransferSyntax,
+) -> Result<InMemDicomObject, String> {
     let checked = pacs_core::wire::checked_data_set(bytes, ts.uid(), MAX_IDENTIFIER_COST)
         .map_err(|e| e.to_string())?;
     InMemDicomObject::read_dataset_with_ts(&*checked, ts).map_err(|e| e.to_string())
