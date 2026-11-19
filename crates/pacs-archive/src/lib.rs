@@ -2,8 +2,9 @@
 //! kept in step. Every way in (DICOMweb STOW-RS, a plain upload, DIMSE C-STORE later)
 //! goes through [`Archive::ingest`], every way out through [`Archive::delete`].
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+pub mod frames;
 pub mod observed;
 
 use bytes::Bytes;
@@ -101,6 +102,10 @@ pub struct Archive {
     /// The same amount in KiB, shared by the files being read, so that a few at once cannot
     /// add up to what one is refused for.
     reading: Arc<Semaphore>,
+    /// Frames of a file at least this large are read on their own ([`frames`]).
+    frames_alone_from: u64,
+    /// Where the frames of files are, once found.
+    layouts: Arc<Mutex<frames::Layouts>>,
 }
 
 /// Room in the archive's read limit, for as long as it is held.
@@ -120,6 +125,8 @@ impl Archive {
             writes: Arc::default(),
             read_limit: DEFAULT_READ_LIMIT,
             reading: Arc::new(Semaphore::new(read_permits(DEFAULT_READ_LIMIT))),
+            frames_alone_from: frames::DEFAULT_FRAMES_ALONE_FROM,
+            layouts: Arc::default(),
         }
     }
 

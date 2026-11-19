@@ -414,19 +414,37 @@ pub(crate) async fn frames(
     if validator.matches(&headers) {
         return Ok(validator.not_modified());
     }
-    let file = state.archive.file(&entry).await?;
-    let reading = state.archive.admit_stored(&file).await;
-    let (frames, shape) = tokio::task::spawn_blocking(move || {
-        let _reading = reading;
-        let instance = Instance::from_bytes(&file).map_err(ApiError::internal)?;
-        let frames = numbers
-            .into_iter()
-            .map(|n| instance.frame(n).map_err(frame_error))
-            .collect::<Result<Vec<_>, ApiError>>()?;
-        Ok::<_, ApiError>((frames, instance.shape()))
-    })
-    .await
-    .map_err(ApiError::internal)??;
+    // From a large file, only the frames are read (`pacs_archive::frames`); from any other,
+    // and whenever that does not give them, they are cut from the whole file.
+    let alone = match state.archive.frame_layout(&entry).await {
+        Some(layout) => {
+            for number in &numbers {
+                layout.range(*number).map_err(frame_error)?;
+            }
+            let frames = state.archive.frames_alone(&entry, &layout, &numbers).await;
+            frames.map(|frames| (frames, layout.shape()))
+        }
+        None => None,
+    };
+    let (frames, shape) = match alone {
+        Some(alone) => alone,
+        None => {
+            let file = state.archive.file(&entry).await?;
+            let reading = state.archive.admit_stored(&file).await;
+            tokio::task::spawn_blocking(move || {
+                let _reading = reading;
+                let instance = Instance::from_bytes(&file).map_err(ApiError::internal)?;
+                let frames = numbers
+                    .into_iter()
+                    .map(|n| instance.frame(n).map_err(frame_error))
+                    .collect::<Result<Vec<_>, ApiError>>()?;
+                let shape = instance.shape().map_err(|e| e.to_string());
+                Ok::<_, ApiError>((frames, shape))
+            })
+            .await
+            .map_err(ApiError::internal)??
+        }
+    };
 
     let accept = accept(&headers);
     let (media_type, ts) = (frames[0].media_type, frames[0].transfer_syntax_uid.clone());
@@ -441,7 +459,7 @@ pub(crate) async fn frames(
     let frames = match choice {
         Choice::Stored => frames,
         Choice::Candidate(i) => {
-            let shape = shape.map_err(|e| refused(e.to_string()))?;
+            let shape = shape.map_err(refused)?;
             let target = candidates[i].1;
             tokio::task::spawn_blocking(move || transcode_frames(frames, shape, target))
                 .await
