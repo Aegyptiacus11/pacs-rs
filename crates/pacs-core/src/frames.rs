@@ -6,11 +6,22 @@
 //! transfer syntax PS3.18 Table 8.7.3-4 gives uncompressed bulk data. Encapsulated pixel
 //! data is returned fragment by fragment, mapped to frames by the fragment count, the
 //! Extended Offset Table or the Basic Offset Table.
+//!
+//! [`Instance::frame`] cuts a frame out of a whole file. [`FrameLayout`] is where the frames
+//! of a stored file are, so that one can be read from the store without the rest: it is
+//! made from the start of the file ([`crate::wire::pixel_data_at`], [`FrameLayout::plan`])
+//! and, for encapsulated pixel data, a few bytes more ([`FrameSearch`]). It is made only
+//! for a file in which [`Instance::frame`] would find the same bytes; for any other there
+//! is none, and the whole file is read.
+
+use std::ops::Range;
 
 use dicom_core::DicomValue;
 use dicom_dictionary_std::{tags, uids};
 
 use crate::Instance;
+use crate::codec::Shape;
+use crate::wire::PixelDataAt;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum FrameError {
@@ -215,4 +226,289 @@ fn encapsulated_frame(
         )));
     }
     Ok(frame)
+}
+
+const ITEM: [u8; 4] = [0xFE, 0xFF, 0x00, 0xE0];
+const SEQUENCE_END: [u8; 4] = [0xFE, 0xFF, 0xDD, 0xE0];
+const UNDEFINED: u32 = u32::MAX;
+
+/// An item's length, if these eight bytes are the head of one.
+fn item_len(head: &[u8]) -> Option<u32> {
+    let (tag, len) = head.split_first_chunk::<4>()?;
+    let len = u32::from_le_bytes(*len.first_chunk::<4>()?);
+    (*tag == ITEM && len != UNDEFINED).then_some(len)
+}
+
+/// Where the frames of a stored file are, to read one without the rest of the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameLayout {
+    frames: u32,
+    transfer_syntax_uid: String,
+    media_type: &'static str,
+    shape: Result<Shape, String>,
+    spans: Spans,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Spans {
+    /// Native pixel data: frames of `len` bytes from `start`.
+    Native { start: u64, len: u64 },
+    /// A fragment a frame: where the bytes of each are.
+    Fragments(Vec<Range<u64>>),
+    /// By an offset table: where the first item of each frame starts. The last frame's
+    /// items end with the pixel data, before `end` at the latest.
+    Table { starts: Vec<u64>, end: u64 },
+}
+
+/// The next step towards a [`FrameLayout`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FramePlan {
+    Ready(FrameLayout),
+    /// More of the file is to be read first.
+    Read(FrameSearch),
+}
+
+/// The search for the frames of encapsulated pixel data: it [`wants`](FrameSearch::wants)
+/// some bytes of the file, and is [given](FrameSearch::give) them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameSearch {
+    layout: FrameLayout,
+    extended_offsets: Option<Vec<u64>>,
+    size: u64,
+    step: Step,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Step {
+    /// The head of the Basic Offset Table item, at the start of the pixel data.
+    TableHead { at: u64 },
+    /// The Basic Offset Table.
+    Table { at: u64, len: u64 },
+    /// The head of the next fragment, when no table says where frames start: there has to
+    /// be a fragment a frame.
+    Fragment { at: u64, found: Vec<Range<u64>> },
+}
+
+impl FrameLayout {
+    /// How to find the frames of a file of `size` bytes, from `header`, the file cut where
+    /// its Pixel Data element starts (`at.element`) and read as an instance. `None` when
+    /// frames are not to be read on their own: there is one frame, so reading it is
+    /// reading the file, or the file is not one to cut without all of it at hand.
+    pub fn plan(header: &Instance, at: PixelDataAt, size: u64) -> Option<FramePlan> {
+        let frames = header.number_of_frames();
+        // Big endian pixel data is not returned as its bytes are in the file.
+        if frames == 1 || at.big_endian {
+            return None;
+        }
+        let shape = header.shape().map_err(|e| e.to_string());
+        let value = at.value as u64;
+        match at.len {
+            Some(value_len) => {
+                let len = header.native_frame_len().ok()? as u64;
+                let end = value.checked_add(u64::from(value_len))?;
+                if len == 0
+                    || u64::from(frames).checked_mul(len)? > u64::from(value_len)
+                    || end > size
+                {
+                    return None;
+                }
+                Some(FramePlan::Ready(FrameLayout {
+                    frames,
+                    transfer_syntax_uid: uids::EXPLICIT_VR_LITTLE_ENDIAN.to_owned(),
+                    media_type: NATIVE_MEDIA_TYPE,
+                    shape,
+                    spans: Spans::Native { start: value, len },
+                }))
+            }
+            None => {
+                let ts = &header.key.transfer_syntax_uid;
+                let search = FrameSearch {
+                    layout: FrameLayout {
+                        frames,
+                        transfer_syntax_uid: ts.clone(),
+                        media_type: compressed_media_type(ts)?,
+                        shape,
+                        spans: Spans::Fragments(Vec::new()),
+                    },
+                    extended_offsets: header.extended_offsets().filter(|table| !table.is_empty()),
+                    size,
+                    step: Step::TableHead { at: value },
+                };
+                search.within_file().map(FramePlan::Read)
+            }
+        }
+    }
+
+    /// Number of Frames.
+    pub fn frames(&self) -> u32 {
+        self.frames
+    }
+
+    /// The pixel layout every frame shares, or why the codecs do not handle it
+    /// ([`Instance::shape`]).
+    pub fn shape(&self) -> Result<Shape, String> {
+        self.shape.clone()
+    }
+
+    /// About how many bytes this takes in memory.
+    pub fn weight(&self) -> usize {
+        size_of::<Self>()
+            + self.transfer_syntax_uid.len()
+            + match &self.spans {
+                Spans::Native { .. } => 0,
+                Spans::Fragments(found) => found.len() * size_of::<Range<u64>>(),
+                Spans::Table { starts, .. } => starts.len() * size_of::<u64>(),
+            }
+    }
+
+    /// The bytes of the file to read for frame `number`, counting from 1.
+    pub fn range(&self, number: u32) -> Result<Range<u64>, FrameError> {
+        if number == 0 || number > self.frames {
+            return Err(FrameError::OutOfRange(number, self.frames));
+        }
+        let index = number as usize - 1;
+        Ok(match &self.spans {
+            Spans::Native { start, len } => {
+                let from = start + index as u64 * len;
+                from..from + len
+            }
+            Spans::Fragments(found) => found[index].clone(),
+            Spans::Table { starts, end } => {
+                starts[index]..starts.get(index + 1).copied().unwrap_or(*end)
+            }
+        })
+    }
+
+    /// Frame `number` from `bytes`, the bytes of the file in its [`range`](Self::range).
+    /// `None` when they are not what the layout says is there, as in a file whose offset
+    /// table is wrong: the whole file is to be read then.
+    pub fn frame(&self, number: u32, bytes: &[u8]) -> Option<Frame> {
+        let range = self.range(number).ok()?;
+        if bytes.len() as u64 != range.end - range.start {
+            return None;
+        }
+        let bytes = match &self.spans {
+            Spans::Native { .. } | Spans::Fragments(_) => bytes.to_vec(),
+            Spans::Table { .. } => items(bytes, number == self.frames)?,
+        };
+        Some(Frame {
+            bytes,
+            transfer_syntax_uid: self.transfer_syntax_uid.clone(),
+            media_type: self.media_type,
+        })
+    }
+}
+
+/// The fragments in `bytes`, joined: items from its first byte to its last, or, for the
+/// `last` frame, to the delimiter that ends the pixel data.
+fn items(bytes: &[u8], last: bool) -> Option<Vec<u8>> {
+    let mut frame = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    let mut found = false;
+    while !rest.is_empty() {
+        let (head, after) = rest.split_at_checked(8)?;
+        if last && found && head[..4] == SEQUENCE_END {
+            return Some(frame);
+        }
+        let (fragment, after) = after.split_at_checked(item_len(head)? as usize)?;
+        frame.extend_from_slice(fragment);
+        found = true;
+        rest = after;
+    }
+    // The last frame without its delimiter is a file cut short.
+    (found && !last).then_some(frame)
+}
+
+impl FrameSearch {
+    /// The bytes of the file this step reads.
+    pub fn wants(&self) -> Range<u64> {
+        match &self.step {
+            Step::TableHead { at } | Step::Fragment { at, .. } => *at..at + 8,
+            Step::Table { at, len } => *at..at + len,
+        }
+    }
+
+    /// The search, if what it wants is in the file.
+    fn within_file(self) -> Option<Self> {
+        (self.wants().end <= self.size).then_some(self)
+    }
+
+    fn step(mut self, step: Step) -> Option<FramePlan> {
+        self.step = step;
+        self.within_file().map(FramePlan::Read)
+    }
+
+    /// The next step, given the bytes [wanted](Self::wants). `None` when the frames are not
+    /// to be read on their own after all.
+    pub fn give(self, bytes: &[u8]) -> Option<FramePlan> {
+        let wanted = self.wants();
+        if bytes.len() as u64 != wanted.end - wanted.start {
+            return None;
+        }
+        match self.step.clone() {
+            Step::TableHead { at } => {
+                let len = u64::from(item_len(bytes)?);
+                if len % 4 != 0 {
+                    return None;
+                }
+                if len == 0 {
+                    return self.tabled(at + 8, &[]);
+                }
+                self.step(Step::Table { at: at + 8, len })
+            }
+            Step::Table { at, len } => self.tabled(at + len, bytes),
+            Step::Fragment { at, mut found } => {
+                if bytes[..4] == SEQUENCE_END {
+                    let FrameSearch { mut layout, .. } = self;
+                    if found.len() != layout.frames as usize {
+                        return None;
+                    }
+                    layout.spans = Spans::Fragments(found);
+                    return Some(FramePlan::Ready(layout));
+                }
+                let end = at + 8 + u64::from(item_len(bytes)?);
+                if end > self.size || found.len() == self.layout.frames as usize {
+                    return None;
+                }
+                found.push(at + 8..end);
+                self.step(Step::Fragment { at: end, found })
+            }
+        }
+    }
+
+    /// With the Basic Offset Table read, the first fragment being at `first`.
+    fn tabled(self, first: u64, basic_offsets: &[u8]) -> Option<FramePlan> {
+        let offsets: Vec<u64> = match &self.extended_offsets {
+            Some(extended) => extended.clone(),
+            None => basic_offsets
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u64::from(u32::from_le_bytes(*c)))
+                .collect(),
+        };
+        if offsets.is_empty() {
+            return self.step(Step::Fragment {
+                at: first,
+                found: Vec::new(),
+            });
+        }
+        let FrameSearch {
+            mut layout, size, ..
+        } = self;
+        // A table to go by has an entry a frame, the first frame at the first fragment, and
+        // each frame after the one before.
+        if offsets.len() != layout.frames as usize
+            || offsets[0] != 0
+            || !offsets.is_sorted_by(|a, b| a < b)
+        {
+            return None;
+        }
+        let starts = offsets
+            .iter()
+            .map(|offset| first.checked_add(*offset).filter(|start| start + 8 <= size))
+            .collect::<Option<Vec<u64>>>()?;
+        layout.spans = Spans::Table { starts, end: size };
+        Some(FramePlan::Ready(layout))
+    }
 }
