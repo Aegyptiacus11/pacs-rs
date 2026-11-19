@@ -1,54 +1,103 @@
-//! Real DICOM as test data: two files made by scanners, a CT and an MR, from pydicom's test
-//! data (`tests/data/pydicom`, with where they come from and under what terms), written
-//! under other identifiers for the tests that need several patients, studies and series.
+//! Real DICOM as test data: files from pydicom's test data (`tests/data/pydicom`, with
+//! where each comes from and under what terms), written under other identifiers for the
+//! tests that need several patients, studies and series.
 //!
-//! What a [`RealSeries`] writes is the scanner's file but for what tells one entity from
-//! another: the UIDs, the Patient ID, the Accession Number, the Study ID, the series and
-//! instance numbers, and what a test sets by name (a patient's name, a study's date and
-//! time, a modality). The pixel data and every other attribute are the file's own. There
-//! is one image of each kind, so the slices of a series are that image under as many SOP
-//! Instance UIDs.
+//! What a [`RealSeries`] writes is the file but for what tells one entity from another:
+//! the UIDs, the Patient ID, the Accession Number, the Study ID, the series and instance
+//! numbers, and what a test sets by name (a patient's name, a study's date and time, a
+//! modality). The pixel data and every other attribute are the file's own. There is one
+//! image of each kind, so the slices of a series are that image under as many SOP Instance
+//! UIDs.
+//!
+//! Beside the CT and the MR of one frame there are an MR of ten frames, the same MRs in
+//! JPEG-LS and a nuclear medicine image in lossy JPEG, for the tests of frames and of
+//! transfer syntaxes. [`RealSeries::refragmented`] is the one alteration of pixel data:
+//! the real codestreams, cut into other fragments.
 //!
 //! The files are read from the checkout, so this is for tests run from it, not for a
 //! published crate.
 
 use std::sync::OnceLock;
 
+use dicom_core::value::{PixelFragmentSequence, Value as DicomValue};
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
 
-/// Which of the two files a series is made of.
+/// The files, by what a test asks of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scanned {
     /// `CT_small.dcm`: CT Image Storage, 128 x 128.
     Ct,
     /// `MR_small.dcm`: MR Image Storage, 64 x 64.
     Mr,
+    /// `MR_small_jpeg_ls_lossless.dcm`: the MR in JPEG-LS Lossless, one fragment.
+    MrJpegLs,
+    /// `emri_small.dcm`: Enhanced MR Image Storage, ten frames of 64 x 64.
+    Frames,
+    /// `emri_small_jpeg_ls_lossless.dcm`: the same in JPEG-LS Lossless, a fragment a frame.
+    FramesJpegLs,
+    /// `JPEG-lossy.dcm`: a nuclear medicine image in JPEG Extended (Process 2 and 4).
+    JpegLossy,
 }
 
-/// The data sets of the two files, read once: the CT, then the MR.
-fn files() -> &'static [InMemDicomObject; 2] {
-    static READ: OnceLock<[InMemDicomObject; 2]> = OnceLock::new();
+const NAMES: [&str; 6] = [
+    "CT_small.dcm",
+    "MR_small.dcm",
+    "MR_small_jpeg_ls_lossless.dcm",
+    "emri_small.dcm",
+    "emri_small_jpeg_ls_lossless.dcm",
+    "JPEG-lossy.dcm",
+];
+
+/// Where a file of `tests/data/pydicom` is in the checkout.
+pub fn path(name: &str) -> String {
+    format!("{}/tests/data/pydicom/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// A file of `tests/data/pydicom` as it is, byte for byte.
+pub fn file_bytes(name: &str) -> Vec<u8> {
+    let path = path(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("the test file {path}: {e}"))
+}
+
+/// The data sets of the files, read once, each with its transfer syntax.
+fn files() -> &'static [(InMemDicomObject, String); 6] {
+    static READ: OnceLock<[(InMemDicomObject, String); 6]> = OnceLock::new();
     READ.get_or_init(|| {
-        ["CT_small.dcm", "MR_small.dcm"].map(|name| {
-            let path = format!("{}/tests/data/pydicom/{name}", env!("CARGO_MANIFEST_DIR"));
-            dicom_object::open_file(&path)
-                .unwrap_or_else(|e| panic!("the test file {path}: {e}"))
-                .into_inner()
+        NAMES.map(|name| {
+            let path = path(name);
+            let file = dicom_object::open_file(&path)
+                .unwrap_or_else(|e| panic!("the test file {path}: {e}"));
+            let syntax = file.meta().transfer_syntax().to_owned();
+            (file.into_inner(), syntax)
         })
     })
 }
 
-/// The same data sets without their pixel data: what an index keeps of an instance.
+/// The CT's and the MR's data sets without their pixel data: what an index keeps of an
+/// instance.
 fn headers() -> &'static [InMemDicomObject; 2] {
     static READ: OnceLock<[InMemDicomObject; 2]> = OnceLock::new();
     READ.get_or_init(|| {
-        files().clone().map(|mut header| {
+        [Scanned::Ct, Scanned::Mr].map(|scanned| {
+            let mut header = files()[scanned as usize].0.clone();
             header.remove_element(tags::PIXEL_DATA);
             header
         })
     })
+}
+
+/// The values of 16 bits of native pixel data.
+fn words(object: &InMemDicomObject) -> Vec<u16> {
+    object
+        .element(tags::PIXEL_DATA)
+        .expect("the file has pixel data")
+        .to_bytes()
+        .expect("the file's pixel data is native")
+        .chunks(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect()
 }
 
 /// A series of a scanner's image: `slices` instances of it.
@@ -69,6 +118,12 @@ pub struct RealSeries {
     at: Option<(String, String)>,
     /// The file's own unless set.
     modality: Option<String>,
+    /// Patient's Birth Date; the file's own (the CT's and the MR's are empty) unless set.
+    born: Option<String>,
+    /// Referring Physician's Name; the file's own (empty in both) unless set.
+    referrer: Option<String>,
+    /// Series Description; the file's own (neither has one) unless set.
+    description: Option<String>,
 }
 
 impl RealSeries {
@@ -84,6 +139,9 @@ impl RealSeries {
             patient: None,
             at: None,
             modality: None,
+            born: None,
+            referrer: None,
+            description: None,
         }
     }
 
@@ -125,6 +183,24 @@ impl RealSeries {
         self
     }
 
+    /// The same series, of a patient born on `date` (YYYYMMDD).
+    pub fn born(mut self, date: &str) -> Self {
+        self.born = Some(date.into());
+        self
+    }
+
+    /// The same series, described as `text` (Series Description).
+    pub fn described(mut self, text: &str) -> Self {
+        self.description = Some(text.into());
+        self
+    }
+
+    /// The same series, of a study asked for by `name`.
+    pub fn referred_by(mut self, name: &str) -> Self {
+        self.referrer = Some(name.into());
+        self
+    }
+
     /// The same series for a patient named `name`, in `character_set` (e.g. `ISO_IR 100`).
     pub fn with_patient(mut self, name: &str, character_set: Option<&'static str>) -> Self {
         self.patient = Some((name.into(), character_set));
@@ -148,19 +224,91 @@ impl RealSeries {
     /// The pixel data as it is in the file, values of 16 bits: the same for every slice,
     /// the file having one image of one frame.
     pub fn pixels(&self, _slice: u32, _frame: u32) -> Vec<u16> {
-        files()[self.scanned as usize]
-            .element(tags::PIXEL_DATA)
-            .expect("the file has pixel data")
-            .to_bytes()
-            .expect("the file's pixel data is native")
-            .chunks(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect()
+        words(&files()[self.scanned as usize].0)
     }
 
     /// One slice as a data set: the file's, under this series' identifiers.
     pub fn slice_object(&self, slice: u32) -> InMemDicomObject {
-        self.renamed(slice, files()[self.scanned as usize].clone())
+        self.renamed(slice, files()[self.scanned as usize].0.clone())
+    }
+
+    /// The frames of [`RealSeries::multiframe_bytes`].
+    pub const FRAMES: u32 = 10;
+
+    /// The file of ten frames (an Enhanced MR, native pixel data) under this series'
+    /// identifiers, as instance `slice`.
+    pub fn multiframe_bytes(&self, slice: u32) -> Vec<u8> {
+        self.file_of(Scanned::Frames, slice)
+    }
+
+    /// One frame (from 0) of [`RealSeries::multiframe_bytes`], values of 16 bits.
+    pub fn frame_pixels(frame: u32) -> Vec<u16> {
+        let all = words(&files()[Scanned::Frames as usize].0);
+        let size = all.len() / Self::FRAMES as usize;
+        all[frame as usize * size..(frame as usize + 1) * size].to_vec()
+    }
+
+    /// The MR in JPEG-LS Lossless as the file has it (one frame, one fragment), under this
+    /// series' identifiers.
+    pub fn jpeg_ls_bytes(&self, slice: u32) -> Vec<u8> {
+        self.file_of(Scanned::MrJpegLs, slice)
+    }
+
+    /// The file of ten frames in JPEG-LS Lossless as it is (a fragment a frame, an empty
+    /// offset table), under this series' identifiers.
+    pub fn jpeg_ls_multiframe_bytes(&self, slice: u32) -> Vec<u8> {
+        self.file_of(Scanned::FramesJpegLs, slice)
+    }
+
+    /// The nuclear medicine image in lossy JPEG, a transfer syntax pacs-rs has no codec
+    /// for (`1.2.840.10008.1.2.4.51`), under this series' identifiers.
+    pub fn jpeg_lossy_bytes(&self, slice: u32) -> Vec<u8> {
+        self.file_of(Scanned::JpegLossy, slice)
+    }
+
+    /// The JPEG-LS codestreams of the file of ten frames, one a frame, as its fragments
+    /// hold them.
+    pub fn jpeg_ls_frames() -> Vec<Vec<u8>> {
+        match files()[Scanned::FramesJpegLs as usize]
+            .0
+            .element(tags::PIXEL_DATA)
+            .expect("the file has pixel data")
+            .value()
+        {
+            DicomValue::PixelSequence(sequence) => sequence.fragments().to_vec(),
+            _ => panic!("the file's pixel data is encapsulated"),
+        }
+    }
+
+    /// The file of ten frames in JPEG-LS with its pixel data cut otherwise: said to have
+    /// `frames` frames, in these fragments, behind this basic offset table. For what no
+    /// file at hand has: a frame in several fragments, an offset table that is not empty.
+    pub fn refragmented(
+        &self,
+        slice: u32,
+        frames: u32,
+        offset_table: Vec<u32>,
+        fragments: Vec<Vec<u8>>,
+    ) -> Vec<u8> {
+        let (object, syntax) = &files()[Scanned::FramesJpegLs as usize];
+        let mut object = self.renamed(slice, object.clone());
+        object.put(DataElement::new(
+            tags::NUMBER_OF_FRAMES,
+            VR::IS,
+            PrimitiveValue::from(frames.to_string()),
+        ));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new(offset_table, fragments),
+        ));
+        to_file(object, syntax)
+    }
+
+    /// One of the files under this series' identifiers, in its own transfer syntax.
+    fn file_of(&self, scanned: Scanned, slice: u32) -> Vec<u8> {
+        let (object, syntax) = &files()[scanned as usize];
+        to_file(self.renamed(slice, object.clone()), syntax)
     }
 
     /// `object`, the file's data set or its header, under this series' identifiers.
@@ -197,18 +345,30 @@ impl RealSeries {
         if let Some(modality) = &self.modality {
             put(tags::MODALITY, VR::CS, modality.clone());
         }
+        if let Some(born) = &self.born {
+            put(tags::PATIENT_BIRTH_DATE, VR::DA, born.clone());
+        }
+        if let Some(description) = &self.description {
+            put(tags::SERIES_DESCRIPTION, VR::LO, description.clone());
+        }
+        if let Some(referrer) = &self.referrer {
+            put(tags::REFERRING_PHYSICIAN_NAME, VR::PN, referrer.clone());
+        }
         object
     }
 
     /// One slice as a DICOM Part 10 file in Explicit VR Little Endian, as the file is.
     pub fn slice_bytes(&self, slice: u32) -> Vec<u8> {
-        to_file(self.slice_object(slice))
+        self.file_of(self.scanned, slice)
     }
 
     /// One slice's file without its pixel data: enough for an index that is filled
     /// without a store, when a test searches thousands of studies and retrieves none.
     pub fn header_bytes(&self, slice: u32) -> Vec<u8> {
-        to_file(self.renamed(slice, headers()[self.scanned as usize].clone()))
+        to_file(
+            self.renamed(slice, headers()[self.scanned as usize].clone()),
+            "1.2.840.10008.1.2.1",
+        )
     }
 
     /// Every slice, in instance-number order.
@@ -217,9 +377,9 @@ impl RealSeries {
     }
 }
 
-fn to_file(object: InMemDicomObject) -> Vec<u8> {
+fn to_file(object: InMemDicomObject, transfer_syntax: &str) -> Vec<u8> {
     let file = object
-        .with_meta(FileMetaTableBuilder::new().transfer_syntax("1.2.840.10008.1.2.1"))
+        .with_meta(FileMetaTableBuilder::new().transfer_syntax(transfer_syntax))
         .expect("the file has the SOP class and instance UIDs");
     let mut bytes = Vec::new();
     file.write_all(&mut bytes)
@@ -305,9 +465,35 @@ mod tests {
     /// origin and these sizes' files' hashes.
     #[test]
     fn the_files_are_the_ones_the_readme_names() {
-        for (name, size) in [("CT_small.dcm", 39206), ("MR_small.dcm", 9830)] {
-            let path = format!("{}/tests/data/pydicom/{name}", env!("CARGO_MANIFEST_DIR"));
-            assert_eq!(std::fs::metadata(&path).unwrap().len(), size, "{name}");
+        for (name, size) in [
+            ("CT_small.dcm", 39206),
+            ("MR_small.dcm", 9830),
+            ("MR_small_jpeg_ls_lossless.dcm", 6124),
+            ("emri_small.dcm", 84256),
+            ("emri_small_jpeg_ls_lossless.dcm", 42834),
+            ("JPEG-lossy.dcm", 9844),
+            ("UN_sequence.dcm", 674),
+        ] {
+            assert_eq!(std::fs::metadata(path(name)).unwrap().len(), size, "{name}");
         }
+    }
+
+    #[test]
+    fn the_file_of_ten_frames_and_its_jpeg_ls() {
+        let series = RealSeries::new(11, 1);
+        let native = Instance::from_bytes(&series.multiframe_bytes(0)).unwrap();
+        assert_eq!(native.key.sop_instance_uid, series.instance_uid(0));
+        assert_eq!(native.number_of_frames(), RealSeries::FRAMES);
+        assert_eq!(native.key.transfer_syntax_uid, "1.2.840.10008.1.2.1");
+        assert_eq!(RealSeries::frame_pixels(0).len(), 64 * 64);
+        assert_ne!(RealSeries::frame_pixels(0), RealSeries::frame_pixels(9));
+        let jls = Instance::from_bytes(&series.jpeg_ls_multiframe_bytes(0)).unwrap();
+        assert_eq!(jls.key.transfer_syntax_uid, "1.2.840.10008.1.2.4.80");
+        assert_eq!(RealSeries::jpeg_ls_frames().len(), 10);
+        let one = Instance::from_bytes(&series.jpeg_ls_bytes(0)).unwrap();
+        assert_eq!(one.key.transfer_syntax_uid, "1.2.840.10008.1.2.4.80");
+        assert_eq!(one.string(tags::MANUFACTURER).unwrap(), "TOSHIBA_MEC");
+        let lossy = Instance::from_bytes(&series.jpeg_lossy_bytes(0)).unwrap();
+        assert_eq!(lossy.key.transfer_syntax_uid, "1.2.840.10008.1.2.4.51");
     }
 }
