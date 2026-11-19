@@ -275,8 +275,15 @@ pub struct FrameSearch {
     layout: FrameLayout,
     extended_offsets: Option<Vec<u64>>,
     size: u64,
+    block: u64,
     step: Step,
 }
+
+/// How much of the file is read at once to pass over fragments when no table says where
+/// frames start. A read for each fragment's head is as many requests to the store as there
+/// are frames; in blocks, small fragments are passed over many at a time, at the cost of
+/// reading them.
+const FRAGMENT_BLOCK: u64 = 4 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
@@ -284,9 +291,14 @@ enum Step {
     TableHead { at: u64 },
     /// The Basic Offset Table.
     Table { at: u64, len: u64 },
-    /// The head of the next fragment, when no table says where frames start: there has to
-    /// be a fragment a frame.
-    Fragment { at: u64, found: Vec<Range<u64>> },
+    /// The next fragments from `at`, where one starts, when no table says where frames
+    /// start: there has to be a fragment a frame. `read` bytes are read: a block, or the
+    /// head alone of a fragment after one a block would not have held.
+    Fragment {
+        at: u64,
+        read: u64,
+        found: Vec<Range<u64>>,
+    },
 }
 
 impl FrameLayout {
@@ -332,6 +344,7 @@ impl FrameLayout {
                     },
                     extended_offsets: header.extended_offsets().filter(|table| !table.is_empty()),
                     size,
+                    block: FRAGMENT_BLOCK,
                     step: Step::TableHead { at: value },
                 };
                 search.within_file().map(FramePlan::Read)
@@ -423,9 +436,27 @@ impl FrameSearch {
     /// The bytes of the file this step reads.
     pub fn wants(&self) -> Range<u64> {
         match &self.step {
-            Step::TableHead { at } | Step::Fragment { at, .. } => *at..at + 8,
+            Step::TableHead { at } => *at..at + 8,
             Step::Table { at, len } => *at..at + len,
+            // To the end of the file at the most, and a head at the least: a file that ends
+            // before one is not searched further.
+            Step::Fragment { at, read, .. } => *at..(at + read).min(self.size).max(at + 8),
         }
+    }
+
+    /// The same search passing over fragments `bytes` at a time, from its next step on,
+    /// instead of [`FRAGMENT_BLOCK`]; a head, 8 bytes, at the least.
+    pub fn in_blocks_of(mut self, bytes: u64) -> Self {
+        self.block = bytes.max(8);
+        self
+    }
+
+    /// The step that passes over the fragments from `at`, the last one passed being of
+    /// `last` bytes.
+    fn fragments_from(self, at: u64, last: u64, found: Vec<Range<u64>>) -> Option<FramePlan> {
+        // Fragments as large as a block are not read to be passed over: their heads alone.
+        let read = if last >= self.block { 8 } else { self.block };
+        self.step(Step::Fragment { at, read, found })
     }
 
     /// The search, if what it wants is in the file.
@@ -457,21 +488,30 @@ impl FrameSearch {
                 self.step(Step::Table { at: at + 8, len })
             }
             Step::Table { at, len } => self.tabled(at + len, bytes),
-            Step::Fragment { at, mut found } => {
-                if bytes[..4] == SEQUENCE_END {
-                    let FrameSearch { mut layout, .. } = self;
-                    if found.len() != layout.frames as usize {
+            Step::Fragment { at, mut found, .. } => {
+                let frames = self.layout.frames as usize;
+                let (mut rest, mut next, mut last) = (bytes, at, 0);
+                // Each head that is whole in what was read; the fragment after it may end
+                // past it, and the next read starts where that one ends.
+                while let Some((head, after)) = rest.split_at_checked(8) {
+                    if head[..4] == SEQUENCE_END {
+                        let FrameSearch { mut layout, .. } = self;
+                        if found.len() != frames {
+                            return None;
+                        }
+                        layout.spans = Spans::Fragments(found);
+                        return Some(FramePlan::Ready(layout));
+                    }
+                    last = u64::from(item_len(head)?);
+                    let end = next + 8 + last;
+                    if end > self.size || found.len() == frames {
                         return None;
                     }
-                    layout.spans = Spans::Fragments(found);
-                    return Some(FramePlan::Ready(layout));
+                    found.push(next + 8..end);
+                    next = end;
+                    rest = after.get(last as usize..).unwrap_or_default();
                 }
-                let end = at + 8 + u64::from(item_len(bytes)?);
-                if end > self.size || found.len() == self.layout.frames as usize {
-                    return None;
-                }
-                found.push(at + 8..end);
-                self.step(Step::Fragment { at: end, found })
+                self.fragments_from(next, last, found)
             }
         }
     }
@@ -488,10 +528,7 @@ impl FrameSearch {
                 .collect(),
         };
         if offsets.is_empty() {
-            return self.step(Step::Fragment {
-                at: first,
-                found: Vec::new(),
-            });
+            return self.fragments_from(first, 0, Vec::new());
         }
         let FrameSearch {
             mut layout, size, ..

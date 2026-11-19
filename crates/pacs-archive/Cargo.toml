@@ -21,3 +21,4 @@ tracing.workspace = true
 dicom-dictionary-std.workspace = true
 pacs-core = { workspace = true, features = ["real"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
