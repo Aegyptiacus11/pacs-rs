@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod scripted;
+pub mod storage;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -408,4 +409,121 @@ pub async fn gate(server: SocketAddr, first: usize, open_at: usize) -> SocketAdd
         let _ = tokio::io::copy(&mut from_server, &mut to_client).await;
     });
     addr
+}
+
+/// How a retrieval went: its Pending responses, the final one, and the SOP Instance UIDs
+/// of the Failed SOP Instance UID List when the final response has one.
+pub struct Retrieval {
+    pub pending: Vec<Command>,
+    pub last: Command,
+    pub failed: Vec<String>,
+}
+
+impl Retrieval {
+    pub fn status(&self) -> pacs_dimse::Status {
+        self.last.status().unwrap()
+    }
+
+    /// The Remaining, Completed, Failed and Warning counts of a response; `None` for one
+    /// it does not have.
+    pub fn counts(response: &Command) -> [Option<u16>; 4] {
+        [
+            tag::NUMBER_OF_REMAINING_SUB_OPERATIONS,
+            tag::NUMBER_OF_COMPLETED_SUB_OPERATIONS,
+            tag::NUMBER_OF_FAILED_SUB_OPERATIONS,
+            tag::NUMBER_OF_WARNING_SUB_OPERATIONS,
+        ]
+        .map(|count| response.us(count).ok())
+    }
+}
+
+pub fn c_move_rq(message_id: u16, sop_class: &str, destination: &str) -> Command {
+    Command::new()
+        .with_ui(tag::AFFECTED_SOP_CLASS_UID, sop_class)
+        .with_us(tag::COMMAND_FIELD, field::C_MOVE_RQ)
+        .with_us(tag::MESSAGE_ID, message_id)
+        .with_text(tag::MOVE_DESTINATION, destination)
+        .with_us(tag::PRIORITY, PRIORITY_MEDIUM)
+        .with_us(tag::COMMAND_DATA_SET_TYPE, 0x0102)
+}
+
+impl Client {
+    /// The responses to a retrieval already sent, to the final one. A Pending response
+    /// has no data set; the final one may have the list of what failed.
+    pub async fn retrieval(&mut self, sop_class: &str) -> Retrieval {
+        let ts = self.transfer_syntax(sop_class);
+        let mut pending = Vec::new();
+        loop {
+            let message = match message::receive(&mut self.association, 1 << 20)
+                .await
+                .unwrap()
+            {
+                Incoming::Message(message) => message,
+                other => panic!("expected a response, got {other:?}"),
+            };
+            let status = message.command.status().unwrap();
+            if status.class() == pacs_dimse::StatusClass::Pending {
+                assert_eq!(
+                    message.data,
+                    DataSet::None,
+                    "a Pending response has no data set"
+                );
+                pending.push(message.command);
+                continue;
+            }
+            let failed = match message.data {
+                DataSet::None => Vec::new(),
+                DataSet::Received(bytes) => {
+                    let identifier =
+                        dicom_object::InMemDicomObject::read_dataset_with_ts(&*bytes, ts).unwrap();
+                    // nothing but the list (PS3.4 C.4.2.1.4.2)
+                    assert_eq!(identifier.iter().count(), 1);
+                    identifier
+                        .get(dicom_dictionary_std::tags::FAILED_SOP_INSTANCE_UID_LIST)
+                        .unwrap()
+                        .to_multi_str()
+                        .unwrap()
+                        .iter()
+                        .map(|uid| uid.trim_end_matches(['\0', ' ']).to_owned())
+                        .collect()
+                }
+                DataSet::Dropped { size } => panic!("an Identifier of {size} bytes"),
+            };
+            return Retrieval {
+                pending,
+                last: message.command,
+                failed,
+            };
+        }
+    }
+
+    /// A C-MOVE of `identifier` to `destination` on `sop_class`, to its final response.
+    pub async fn c_move(
+        &mut self,
+        sop_class: &str,
+        destination: &str,
+        identifier: &dicom_object::InMemDicomObject,
+    ) -> Retrieval {
+        let mut bytes = Vec::new();
+        identifier
+            .write_dataset_with_ts(&mut bytes, self.transfer_syntax(sop_class))
+            .unwrap();
+        let id = self.message_id();
+        let context = self.context(sop_class);
+        message::send(
+            &mut self.association,
+            context,
+            &c_move_rq(id, sop_class, destination),
+            Some(&bytes),
+        )
+        .await
+        .unwrap();
+        let retrieval = self.retrieval(sop_class).await;
+        assert_eq!(retrieval.last.command_field(), Ok(field::C_MOVE_RSP));
+        assert_eq!(
+            retrieval.last.us(tag::MESSAGE_ID_BEING_RESPONDED_TO),
+            Ok(id)
+        );
+        retrieval
+    }
 }
