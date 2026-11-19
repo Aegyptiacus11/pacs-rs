@@ -1036,3 +1036,248 @@ assoc.release()
     let output = run(py).await;
     assert!(output.status.success(), "{}", text(&output));
 }
+
+// ---- pacs-rs as a Storage SCU (PS3.4 Annex B), sending to DCMTK's storescp and to pynetdicom ----
+
+/// A series ingested into an archive that compresses (JPEG-LS lossless), with what the
+/// index says of its instances and their stored files.
+async fn compressed_series(
+    seed: u32,
+    slices: u32,
+) -> (
+    SyntheticSeries,
+    Vec<(pacs_index::InstanceEntry, bytes::Bytes)>,
+) {
+    let archive = pacs_archive::Archive::new(
+        pacs_store::Store::memory(),
+        pacs_index::Index::in_memory().await.unwrap(),
+    );
+    let series = SyntheticSeries::new(seed, slices);
+    ingest(&archive, &series).await;
+    let entries = archive
+        .index()
+        .instances(&series.study_uid(), &series.series_uid(), None)
+        .await
+        .unwrap();
+    let mut files = Vec::new();
+    for entry in entries {
+        assert_eq!(entry.transfer_syntax_uid, "1.2.840.10008.1.2.4.80");
+        let file = archive.file(&entry).await.unwrap();
+        files.push((entry, file));
+    }
+    (series, files)
+}
+
+/// Send `files` to `remote` as PACSRS; every one must be stored. The transfer syntaxes
+/// the peer accepted.
+async fn send_series(
+    remote: &RemoteAe,
+    files: &[(pacs_index::InstanceEntry, bytes::Bytes)],
+) -> Vec<String> {
+    let stored: Vec<(String, String)> = files
+        .iter()
+        .map(|(entry, _)| {
+            (
+                entry.sop_class_uid.clone(),
+                entry.transfer_syntax_uid.clone(),
+            )
+        })
+        .collect();
+    let mut sender = pacs_dimse::Sender::open(
+        remote,
+        &AeTitle::new("PACSRS").unwrap(),
+        &stored,
+        Duration::from_secs(10),
+        None,
+    )
+    .await
+    .unwrap();
+    let accepted = sender
+        .accepted()
+        .iter()
+        .map(|context| context.transfer_syntax.clone())
+        .collect();
+    for (entry, file) in files {
+        let status = sender
+            .send(
+                file.clone(),
+                &entry.sop_class_uid,
+                &entry.sop_instance_uid,
+                &entry.transfer_syntax_uid,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{}: {e}", entry.sop_instance_uid));
+        assert_eq!(status, pacs_dimse::Status::SUCCESS);
+    }
+    sender.release().await;
+    accepted
+}
+
+/// The files a peer wrote in `dir`, once there are `count` of them, by SOP Instance UID:
+/// each one's transfer syntax and its pixels as 16-bit values.
+async fn written(dir: &std::path::Path, count: usize) -> Vec<(String, String, Vec<u16>)> {
+    use dicom_dictionary_std::tags;
+    let mut paths = Vec::new();
+    for _ in 0..100 {
+        paths = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| !path.to_string_lossy().ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        if paths.len() >= count {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(paths.len(), count, "{paths:?}");
+    let mut files: Vec<(String, String, Vec<u16>)> = paths
+        .iter()
+        .map(|path| {
+            let object =
+                dicom_object::open_file(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let pixels = object
+                .element(tags::PIXEL_DATA)
+                .unwrap()
+                .to_bytes()
+                .unwrap()
+                .chunks(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            (
+                value(&object, tags::SOP_INSTANCE_UID).unwrap(),
+                object
+                    .meta()
+                    .transfer_syntax()
+                    .trim_end_matches('\0')
+                    .to_owned(),
+                pixels,
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// storescp as it comes takes uncompressed transfer syntaxes only: a series stored in
+/// JPEG-LS is decoded on the way, and the files storescp writes have the original pixels.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn pacs_rs_sends_a_compressed_series_to_dcmtk_storescp() {
+    let port = free_port();
+    let out = tempfile::tempdir().unwrap();
+    let mut storescp = dcmtk("storescp");
+    storescp
+        .args(["-aet", "STORESCP", "-od"])
+        .arg(out.path())
+        .arg(port.to_string());
+    let _storescp = Killed(storescp.spawn().expect("storescp could not start"));
+    listening(port).await;
+    let remote: RemoteAe = format!("dcmtk=STORESCP@127.0.0.1:{port}").parse().unwrap();
+    let (series, files) = compressed_series(81, 3).await;
+    let accepted = send_series(&remote, &files).await;
+    assert_eq!(
+        accepted,
+        ["1.2.840.10008.1.2.1"],
+        "the stored syntax was not taken"
+    );
+    let written = written(out.path(), 3).await;
+    for (slice, (uid, transfer_syntax, pixels)) in written.iter().enumerate() {
+        assert_eq!(*uid, series.instance_uid(slice as u32));
+        assert_eq!(transfer_syntax, "1.2.840.10008.1.2.1");
+        assert_eq!(*pixels, series.pixels(slice as u32, 0));
+    }
+}
+
+/// storescp told to prefer JPEG-LS lossless takes the stored transfer syntax: the files
+/// it writes are in it, and DCMTK's own dcmdjpls decodes them to the original pixels.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn pacs_rs_sends_a_series_as_stored_to_dcmtk_storescp() {
+    let port = free_port();
+    let out = tempfile::tempdir().unwrap();
+    let mut storescp = dcmtk("storescp");
+    storescp
+        .args(["-aet", "STORESCP", "+xt", "-od"])
+        .arg(out.path())
+        .arg(port.to_string());
+    let _storescp = Killed(storescp.spawn().expect("storescp could not start"));
+    listening(port).await;
+    let remote: RemoteAe = format!("dcmtk=STORESCP@127.0.0.1:{port}").parse().unwrap();
+    let (series, files) = compressed_series(82, 2).await;
+    let accepted = send_series(&remote, &files).await;
+    assert!(
+        accepted.iter().any(|ts| ts == "1.2.840.10008.1.2.4.80"),
+        "{accepted:?}"
+    );
+    let decoded = tempfile::tempdir().unwrap();
+    for entry in std::fs::read_dir(out.path()).unwrap() {
+        let path = entry.unwrap().path();
+        let object = dicom_object::open_file(&path).unwrap();
+        assert_eq!(
+            object.meta().transfer_syntax().trim_end_matches('\0'),
+            "1.2.840.10008.1.2.4.80"
+        );
+        let mut dcmdjpls = dcmtk("dcmdjpls");
+        dcmdjpls
+            .arg(&path)
+            .arg(decoded.path().join(path.file_name().unwrap()));
+        let output = run(dcmdjpls).await;
+        assert!(output.status.success(), "{}", text(&output));
+    }
+    let written = written(decoded.path(), 2).await;
+    for (slice, (uid, _, pixels)) in written.iter().enumerate() {
+        assert_eq!(*uid, series.instance_uid(slice as u32));
+        assert_eq!(*pixels, series.pixels(slice as u32, 0));
+    }
+}
+
+/// A pynetdicom Storage SCP that takes CT in Implicit VR Little Endian only: the series
+/// is decoded and written again for it, and pydicom reads the original pixels.
+#[tokio::test]
+#[ignore = "needs pynetdicom"]
+async fn pacs_rs_sends_a_compressed_series_to_pynetdicom() {
+    let port = free_port();
+    let out = tempfile::tempdir().unwrap();
+    let script = r#"
+import sys, os
+from pynetdicom import AE, evt
+from pynetdicom.sop_class import CTImageStorage
+from pydicom.uid import ImplicitVRLittleEndian
+port, out = int(sys.argv[1]), sys.argv[2]
+
+def on_store(event):
+    assert event.context.transfer_syntax == ImplicitVRLittleEndian
+    ds = event.dataset
+    ds.file_meta = event.file_meta
+    assert ds.Rows == 4 and ds.Columns == 4, (ds.Rows, ds.Columns)
+    # the pixels as pydicom reads them, 16 bits little endian, for the test to compare
+    raw = ds.PixelData
+    values = [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)]
+    with open(os.path.join(out, ds.SOPInstanceUID + ".txt.tmp"), "w") as f:
+        f.write(" ".join(str(v) for v in values))
+    os.rename(os.path.join(out, ds.SOPInstanceUID + ".txt.tmp"),
+              os.path.join(out, ds.SOPInstanceUID + ".txt"))
+    return 0x0000
+
+ae = AE(ae_title="PYSTORE")
+ae.add_supported_context(CTImageStorage, ImplicitVRLittleEndian)
+ae.start_server(("127.0.0.1", port), block=True, evt_handlers=[(evt.EVT_C_STORE, on_store)])
+"#;
+    let mut py = python();
+    py.args(["-c", script, &port.to_string()]).arg(out.path());
+    let _scp = Killed(py.spawn().expect("python could not start"));
+    listening(port).await;
+    let remote: RemoteAe = format!("py=PYSTORE@127.0.0.1:{port}").parse().unwrap();
+    let (series, files) = compressed_series(83, 2).await;
+    let accepted = send_series(&remote, &files).await;
+    assert_eq!(accepted, ["1.2.840.10008.1.2"]);
+    for slice in 0..2 {
+        let path = out
+            .path()
+            .join(format!("{}.txt", series.instance_uid(slice)));
+        let read =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let pixels: Vec<u16> = read.split(' ').map(|v| v.parse().unwrap()).collect();
+        assert_eq!(pixels, series.pixels(slice, 0));
+    }
+}

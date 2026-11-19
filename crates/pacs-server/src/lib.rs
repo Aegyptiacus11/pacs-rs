@@ -215,6 +215,12 @@ pub struct Settings {
     #[arg(long, env = "PACS_DIMSE_REMOTES", value_delimiter = ',')]
     pub dimse_remotes: Vec<RemoteAe>,
 
+    /// The remote AEs studies may be sent to, by the id each has in PACS_DIMSE_REMOTES,
+    /// comma-separated: the destinations a C-MOVE asked of this server may name. None
+    /// unless named.
+    #[arg(long, env = "PACS_DIMSE_MOVE_DESTINATIONS", value_delimiter = ',')]
+    pub dimse_move_destinations: Vec<String>,
+
     /// Accept associations only from the AE titles of PACS_DIMSE_REMOTES.
     #[arg(long, env = "PACS_DIMSE_KNOWN_CALLERS_ONLY", default_value_t = false)]
     pub dimse_known_callers_only: bool,
@@ -429,6 +435,22 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
             );
         }
         config.remotes.push(remote.clone());
+    }
+    for id in &settings.dimse_move_destinations {
+        let Some(remote) = config.remote(id) else {
+            bail!(
+                "PACS_DIMSE_MOVE_DESTINATIONS names {id}, which is not a remote AE of PACS_DIMSE_REMOTES"
+            );
+        };
+        // a destination is asked for by its AE title: two under one title would be one
+        if let Some(other) = config.move_destination(remote.ae_title.as_str()) {
+            bail!(
+                "PACS_DIMSE_MOVE_DESTINATIONS names {id} and {}, which have the same AE title {}",
+                other.id,
+                remote.ae_title
+            );
+        }
+        config.move_destinations.push(id.clone());
     }
     config.known_callers_only = settings.dimse_known_callers_only;
     if settings.dimse_max_associations == 0 {

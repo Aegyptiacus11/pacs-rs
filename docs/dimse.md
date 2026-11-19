@@ -62,8 +62,32 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
 into a project shows there de-identified. Not yet: retrieving from pacs-rs (C-MOVE and C-GET
-as SCP), Patient Root, C-GET as SCU, C-STORE SCU. The order is in [the hospital interfaces
+as SCP), Patient Root, C-GET as SCU. The order is in [the hospital interfaces
 plan](interop.md).
+
+## Sending
+
+What a retrieval from pacs-rs will send with is built, and nothing sends with it yet: the
+C-STORE SCU (`pacs_dimse::Sender`), and the list of AEs it may send to.
+
+- **Destinations**: `PACS_DIMSE_MOVE_DESTINATIONS` names, by their `id`, the remote AEs of
+  `PACS_DIMSE_REMOTES` that studies may be sent to. None unless named: the hospital's
+  archive is among the remote AEs, and a research PACS only reads from it. A name that is
+  not a remote AE, or two destinations with one AE title, stops the start.
+- **Transfer syntax**: for each SOP class pacs-rs proposes the transfer syntax the instance
+  is stored in, and Explicit and Implicit VR Little Endian. A peer that takes the stored one
+  gets the data set as stored, byte for byte; one that takes only uncompressed ones, as
+  DCMTK's `storescp` does unless told otherwise, gets the pixel data decoded. What the
+  codecs do not decode (colour, more than 16 bits) and the peer does not take as stored is
+  not sent, and says so.
+- **An instance whose SOP class the peer accepted no presentation context for is not sent**,
+  and the others are: a failed sub-operation, as PS3.4 C.4.2.3.1 has it.
+- A C-STORE that is the sub-operation of a move carries the Move Originator AE title and
+  Message ID (PS3.7 9.3.1.1).
+
+Tested against DCMTK 3.6.9 `storescp` (uncompressed only, and preferring JPEG-LS: the files
+it writes hold the original pixels either way, checked with `dcmdjpls`) and a pynetdicom
+3.0.4 Storage SCP that takes Implicit VR Little Endian only.
 
 ## Being searched
 

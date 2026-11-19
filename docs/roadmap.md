@@ -60,7 +60,9 @@ So that workstations, viewers and other archives can use pacs-rs as they use any
 Built: [C-FIND as SCP](dimse.md#being-searched) on the Study Root model, which DCMTK's
 `findscu` and pynetdicom search at its three levels, with sequence matching (PS3.4
 C.2.2.2.6) added to the [one matcher](dicomweb.md#searching) it shares with QIDO-RS and
-`/tools/find`. What remains:
+`/tools/find`. And what a retrieval will send with, which nothing uses yet: the [C-STORE
+SCU](dimse.md#sending), which decodes for a peer that does not take the stored transfer
+syntax, and the list of AEs it may send to (`PACS_DIMSE_MOVE_DESTINATIONS`). What remains:
 
 | Item | Done when |
 |---|---|
@@ -68,11 +70,11 @@ C.2.2.2.6) added to the [one matcher](dicomweb.md#searching) it shares with QIDO
 | Sequence matching over HTTP | QIDO-RS takes a key inside a sequence (`RequestAttributesSequence.ScheduledProcedureStepID`), which the matcher already answers |
 | Patient Root | both information models of PS3.4 C.6, as SCU and SCP |
 | C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |
-| C-STORE SCU | pacs-rs sends studies to another AE, transcoding when the peer asks |
+| C-STORE SCU | pacs-rs sends studies to another AE, transcoding when the peer asks (the SCU is built; what sends with it is the C-MOVE above, and the write-back) |
 | Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |
 | A service per SOP class | the SCP finds its handler for each SOP class in a registry, so a new service is added without touching the association loop |
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |
-| Destinations for C-MOVE | the AE titles pacs-rs may send to are configured, and a move to any other is refused with status A801 |
+| Destinations for C-MOVE | the AE titles pacs-rs may send to are configured (built), and a move to any other is refused with status A801 (with the C-MOVE above) |
 | Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
 | DICOMweb to the end | `includefield`, rendered media, STOW-RS with JSON or XML and bulk data, BulkDataURI in metadata |
 | Lossless storage of every image | colour and more than 16 bits are compressed too, checked as today |

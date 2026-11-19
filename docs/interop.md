@@ -108,6 +108,9 @@ Not yet:
   `PACS_DIMSE_REMOTES`; the called AE title sets what is seen, a project's showing that project only.
   *Built for C-FIND.*
 - **Information models** (PS3.4 C.6): Patient Root and Study Root; Patient/Study Only is retired.
+- **Sending**: the C-STORE SCU sends in the stored transfer syntax or decodes for the peer; the
+  destinations a C-MOVE may name are a list of their own, empty unless set, since the hospital's
+  PACS is among the remote AEs and stays read-only. *Built ([sending](dimse.md#sending)).*
 - **C-MOVE** (PS3.4 C.4.2.3.1): Pending responses carry the Remaining, Completed, Failed and Warning counts;
   the final one is Success, Warning or Failure.
 - **C-GET** (PS3.4 C.4.3.3.1): the C-STORE sub-operations run on the same association; role selection as

@@ -69,7 +69,7 @@ an authenticating proxy in front before opening it to a network.
 | `pacs-archive` | ingest (compress, store, then index, undone if the index refuses) and deletion (index then files) |
 | `pacs-dicomweb` | QIDO-RS, WADO-RS, STOW-RS over axum |
 | `pacs-rest` | the REST API: resources by public ID, uploads, deletion, find, archives |
-| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive, C-FIND SCP and SCU, C-MOVE SCU |
+| `pacs-dimse` | DIMSE on dicom-ul: C-ECHO SCP and SCU, C-STORE SCP into the archive and SCU, C-FIND SCP and SCU, C-MOVE SCU |
 | `pacs-audit` | DICOM audit trail messages (PS3.15 A.5) as the syslog lines of IHE ATNA; no network or storage, usable on its own |
 | `pacs-deid` | de-identification by PS3.15 Annex E, configured per project; no network or storage, usable on its own |
 | `pacs-server` | the binary: settings, `/healthz`, the REST API at `/`, DICOMweb under `/dicom-web`, the web interface at `/ui/` |
