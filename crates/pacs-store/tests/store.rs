@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use pacs_core::Instance;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_store::{Error, S3Config, Store};
 
 /// Put a series, read every file back byte for byte, delete one, then the rest at once.
 async fn round_trip(store: &Store, seed: u32) {
-    let series = SyntheticSeries::new(seed, 3);
+    let series = RealSeries::new(seed, 3);
     let mut keys = Vec::new();
     for bytes in series.all_bytes() {
         let instance = Instance::from_bytes(&bytes).unwrap();
@@ -44,7 +44,7 @@ async fn memory_round_trip() {
 async fn local_disk_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::local(dir.path(), "dicom").unwrap();
-    let series = SyntheticSeries::new(12, 1);
+    let series = RealSeries::new(12, 1);
     let instance = Instance::from_bytes(&series.slice_bytes(0)).unwrap();
     let key = store
         .put(&instance.key, series.slice_bytes(0).into())
@@ -64,7 +64,7 @@ async fn local_disk_round_trip() {
 
 #[tokio::test]
 async fn a_key_is_never_built_from_a_bad_uid() {
-    let mut key = Instance::from_bytes(&SyntheticSeries::new(13, 1).slice_bytes(0))
+    let mut key = Instance::from_bytes(&RealSeries::new(13, 1).slice_bytes(0))
         .unwrap()
         .key;
     key.sop_instance_uid = "../../escape".into();

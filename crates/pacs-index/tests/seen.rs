@@ -5,12 +5,11 @@ mod common;
 use pacs_core::Instance;
 use pacs_core::public_ids;
 use pacs_core::real::RealSeries;
-use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::{Index, Level, NewInstance, PatientQuery, StudyFilter, WorklistQuery};
 
 const READER: &str = "user:reader";
 
-async fn record(index: &Index, series: &SyntheticSeries, project: Option<&str>) {
+async fn record(index: &Index, series: &RealSeries, project: Option<&str>) {
     for (slice, bytes) in series.all_bytes().iter().enumerate() {
         let instance = Instance::from_bytes(bytes).unwrap();
         let key = format!("dicom/{}/{slice}.dcm", series.seed);
@@ -23,10 +22,10 @@ async fn record(index: &Index, series: &SyntheticSeries, project: Option<&str>) 
 
 /// One patient with a study in `liver` and one in `lung`, and another patient whose study
 /// is in no project.
-async fn three_studies(index: &Index) -> [SyntheticSeries; 3] {
-    let liver = SyntheticSeries::new(81, 2).for_patient(80);
-    let lung = SyntheticSeries::new(82, 2).for_patient(80);
-    let received = SyntheticSeries::new(83, 2);
+async fn three_studies(index: &Index) -> [RealSeries; 3] {
+    let liver = RealSeries::new(81, 2).for_patient(80);
+    let lung = RealSeries::new(82, 2).for_patient(80);
+    let received = RealSeries::new(83, 2);
     record(index, &liver, Some("liver")).await;
     record(index, &lung, Some("lung")).await;
     record(index, &received, None).await;
@@ -84,7 +83,6 @@ macro_rules! named {
         }
     };
 }
-named!(SyntheticSeries);
 named!(RealSeries);
 
 /// Index a scanner's file under `series`' identifiers, in `project`: its
@@ -393,7 +391,7 @@ async fn a_patient_is_the_studies_the_account_sees() {
         assert_eq!(patients.as_slice(), std::slice::from_ref(&shared));
         assert!(
             reader
-                .patient_public_ids(Some("SYN83"))
+                .patient_public_ids(Some("NEMA-83"))
                 .await
                 .unwrap()
                 .is_empty()

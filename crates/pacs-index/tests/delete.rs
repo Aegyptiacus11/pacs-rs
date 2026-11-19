@@ -1,11 +1,11 @@
 mod common;
 
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_core::{Instance, public_ids};
 use pacs_index::{Deleted, Index, Level, NewInstance, Statistics};
 
 /// Record a series, each instance's storage key its SOP Instance UID.
-async fn record(index: &Index, series: &SyntheticSeries) {
+async fn record(index: &Index, series: &RealSeries) {
     for (slice, bytes) in series.all_bytes().iter().enumerate() {
         let instance = Instance::from_bytes(bytes).unwrap();
         let key = series.instance_uid(slice as u32);
@@ -14,19 +14,19 @@ async fn record(index: &Index, series: &SyntheticSeries) {
     }
 }
 
-/// Patient SYN71 with two studies: study 71 (series 71 of 2 slices, series 72 of 1) and
+/// Patient NEMA-71 with two studies: study 71 (series 71 of 2 slices, series 72 of 1) and
 /// study 73 (series 73 of 1).
-async fn patient(index: &Index) -> [SyntheticSeries; 3] {
-    let a = SyntheticSeries::new(71, 2);
-    let b = SyntheticSeries::new(72, 1).in_study(71, 2).for_patient(71);
-    let c = SyntheticSeries::new(73, 1).for_patient(71);
+async fn patient(index: &Index) -> [RealSeries; 3] {
+    let a = RealSeries::new(71, 2);
+    let b = RealSeries::new(72, 1).in_study(71, 2).for_patient(71);
+    let c = RealSeries::new(73, 1).for_patient(71);
     for s in [&a, &b, &c] {
         record(index, s).await;
     }
     [a, b, c]
 }
 
-fn ids(s: &SyntheticSeries) -> (String, String, String) {
+fn ids(s: &RealSeries) -> (String, String, String) {
     let p = s.patient_id();
     (
         public_ids::patient(&p),
@@ -35,7 +35,7 @@ fn ids(s: &SyntheticSeries) -> (String, String, String) {
     )
 }
 
-fn instance_id(s: &SyntheticSeries, slice: u32) -> String {
+fn instance_id(s: &RealSeries, slice: u32) -> String {
     public_ids::instance(
         &s.patient_id(),
         &s.study_uid(),
@@ -48,7 +48,7 @@ fn instance_id(s: &SyntheticSeries, slice: u32) -> String {
 async fn a_patient_is_its_studies() {
     for index in common::indexes().await {
         let [a, _, c] = patient(&index).await;
-        record(&index, &SyntheticSeries::new(74, 1)).await;
+        record(&index, &RealSeries::new(74, 1)).await;
         let (patient, study_a, _) = ids(&a);
         let (_, study_c, _) = ids(&c);
 
@@ -56,12 +56,12 @@ async fn a_patient_is_its_studies() {
         assert_eq!(all.len(), 2);
         assert!(all.contains(&patient));
         assert_eq!(
-            index.patient_public_ids(Some("SYN71")).await.unwrap(),
+            index.patient_public_ids(Some("NEMA-71")).await.unwrap(),
             std::slice::from_ref(&patient)
         );
 
         let p = index.rest_patient(&patient).await.unwrap().unwrap();
-        assert_eq!(p.main_tags["PatientID"], "SYN71");
+        assert_eq!(p.main_tags["PatientID"], "NEMA-71");
         let mut studies = p.studies.clone();
         studies.sort();
         let mut expected = vec![study_a, study_c];
@@ -140,7 +140,7 @@ async fn deleting_takes_the_ancestors_it_empties() {
 async fn deleting_a_patient_takes_everything_and_nothing_else() {
     for index in common::indexes().await {
         let [a, b, c] = patient(&index).await;
-        let other = SyntheticSeries::new(75, 2);
+        let other = RealSeries::new(75, 2);
         record(&index, &other).await;
         let (patient, _, _) = ids(&a);
 

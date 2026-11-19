@@ -4,10 +4,9 @@ mod common;
 
 use pacs_core::Instance;
 use pacs_core::real::RealSeries;
-use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::{Index, Key, Kind, Match, NewInstance, StudySearch};
 
-async fn record(index: &Index, series: &SyntheticSeries) {
+async fn record(index: &Index, series: &RealSeries) {
     for (slice, bytes) in series.all_bytes().iter().enumerate() {
         let instance = Instance::from_bytes(bytes).unwrap();
         let key = format!("dicom/{}/{slice}.dcm", series.seed);
@@ -19,26 +18,32 @@ async fn record(index: &Index, series: &SyntheticSeries) {
 /// Five studies: seeds 201 to 205.
 async fn five(index: &Index) {
     for series in [
-        SyntheticSeries::new(201, 1)
+        RealSeries::new(201, 1)
+            .referred_by("REFERRING^PHYSICIAN")
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(202, 1)
+        RealSeries::new(202, 1)
+            .referred_by("REFERRING^PHYSICIAN")
             .with_patient("DOE^JOHN", None)
             .at("20260105", "180100"),
-        SyntheticSeries::new(203, 1)
+        RealSeries::new(203, 1)
+            .referred_by("REFERRING^PHYSICIAN")
             .with_patient("Roe^Jane", None)
             .at("20260106", "120000")
             .of_modality("MR"),
-        SyntheticSeries::new(204, 1)
+        RealSeries::new(204, 1)
+            .referred_by("REFERRING^PHYSICIAN")
             .with_patient("Do_e%^Odd", None)
             .at("20260107", "090000"),
-        SyntheticSeries::new(205, 1)
+        RealSeries::new(205, 1)
+            .referred_by("REFERRING^PHYSICIAN")
             .with_patient("Smith^Al", None)
             .at("20260201", "235959")
             .of_modality("US"),
         // a second series of the first study, of another modality
-        SyntheticSeries::new(206, 1)
+        RealSeries::new(206, 1)
             .in_study(201, 2)
+            .referred_by("REFERRING^PHYSICIAN")
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000")
             .of_modality("SR"),
@@ -130,22 +135,22 @@ async fn studies_by_every_kind_of_match() {
             ),
             // text: case-sensitive
             (
-                vec![key(PATIENT_ID, Kind::Text, "SYN201")],
+                vec![key(PATIENT_ID, Kind::Text, "NEMA-201")],
                 vec![201],
                 "an identifier",
             ),
             (
-                vec![key(PATIENT_ID, Kind::Text, "syn201")],
+                vec![key(PATIENT_ID, Kind::Text, "nema-201")],
                 vec![],
                 "in another case",
             ),
             (
-                vec![key(PATIENT_ID, Kind::Text, "SYN20?")],
+                vec![key(PATIENT_ID, Kind::Text, "NEMA-20?")],
                 vec![201, 202, 203, 204, 205],
                 "identifiers",
             ),
             (
-                vec![key(PATIENT_ID, Kind::Text, "syn20?")],
+                vec![key(PATIENT_ID, Kind::Text, "nema-20?")],
                 vec![],
                 "a pattern in another case",
             ),
