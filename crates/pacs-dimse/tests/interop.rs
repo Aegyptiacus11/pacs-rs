@@ -1114,7 +1114,7 @@ async fn send_series(
 }
 
 /// The files a peer wrote in `dir`, once there are `count` of them, by SOP Instance UID:
-/// each one's transfer syntax and its pixels as 16-bit values.
+/// each one's transfer syntax and, when it is not compressed, its pixels as 16-bit values.
 async fn written(dir: &std::path::Path, count: usize) -> Vec<(String, String, Vec<u16>)> {
     use dicom_dictionary_std::tags;
     let mut paths = Vec::new();
@@ -1135,14 +1135,18 @@ async fn written(dir: &std::path::Path, count: usize) -> Vec<(String, String, Ve
         .map(|path| {
             let object =
                 dicom_object::open_file(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            // none for pixel data that is in fragments: a compressed file
             let pixels = object
                 .element(tags::PIXEL_DATA)
                 .unwrap()
                 .to_bytes()
-                .unwrap()
-                .chunks(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                .collect();
+                .map(|bytes| {
+                    bytes
+                        .chunks(2)
+                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                        .collect()
+                })
+                .unwrap_or_default();
             (
                 value(&object, tags::SOP_INSTANCE_UID).unwrap(),
                 object
@@ -1511,6 +1515,184 @@ scp.shutdown()
         script,
         &addr.port().to_string(),
         &receiving.to_string(),
+        &series[0].study_uid(),
+    ]);
+    let output = run(py).await;
+    assert!(output.status.success(), "{}", text(&output));
+    let printed: Vec<(String, Vec<u16>)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            let mut words = line.split(' ');
+            let uid = words.next().unwrap().to_owned();
+            (uid, words.map(|v| v.parse().unwrap()).collect())
+        })
+        .collect();
+    assert_eq!(printed, expected_pixels(&series));
+}
+
+// ---- pacs-rs as a Retrieve SCP for C-GET (PS3.4 C.4.3.3), asked by DCMTK's getscu and by pynetdicom ----
+
+/// getscu on the Study Root model as `calling`, with `keys`: its output and what it wrote.
+async fn getscu(
+    port: u16,
+    calling: &str,
+    keys: &[String],
+    more: &[&str],
+    expect: usize,
+) -> (String, Vec<(String, String, Vec<u16>)>) {
+    let out = tempfile::tempdir().unwrap();
+    let mut getscu = dcmtk("getscu");
+    getscu
+        .args(["-v", "-S", "-aet", calling, "-aec", "PACSRS", "-od"])
+        .arg(out.path())
+        .args(more);
+    for key in keys {
+        getscu.args(["-k", key]);
+    }
+    getscu.args(["127.0.0.1", &port.to_string()]);
+    let output = run(getscu).await;
+    (text(&output), written(out.path(), expect).await)
+}
+
+/// getscu retrieves a study on its own association, taking the SCP role for the storage
+/// SOP classes; stored in JPEG-LS, the instances are decoded for it, or sent as stored
+/// when it prefers JPEG-LS. Then a series alone.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_getscu_retrieves_from_pacs_rs() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let addr = start(answering(&["GETSCU"]), archive).await;
+    let study = vec![
+        "QueryRetrieveLevel=STUDY".to_owned(),
+        format!("StudyInstanceUID={}", series[0].study_uid()),
+    ];
+    let (said, files) = getscu(addr.port(), "GETSCU", &study, &[], 5).await;
+    assert!(
+        said.contains("Received Final C-GET Response") || said.contains("Success"),
+        "{said}"
+    );
+    let pixels: Vec<(String, Vec<u16>)> = files
+        .iter()
+        .map(|(uid, _, pixels)| (uid.clone(), pixels.clone()))
+        .collect();
+    assert_eq!(pixels, expected_pixels(&series), "{said}");
+    assert!(files.iter().all(|(_, ts, _)| ts == "1.2.840.10008.1.2.1"));
+
+    // preferring JPEG-LS lossless, it gets the files as they are stored
+    let (said, files) = getscu(addr.port(), "GETSCU", &study, &["+xt"], 5).await;
+    assert!(
+        files
+            .iter()
+            .all(|(_, ts, _)| ts == "1.2.840.10008.1.2.4.80"),
+        "{said}"
+    );
+
+    let one = vec![
+        "QueryRetrieveLevel=SERIES".to_owned(),
+        format!("StudyInstanceUID={}", series[1].study_uid()),
+        format!("SeriesInstanceUID={}", series[1].series_uid()),
+    ];
+    let (said, files) = getscu(addr.port(), "GETSCU", &one, &[], 3).await;
+    let pixels: Vec<(String, Vec<u16>)> = files
+        .iter()
+        .map(|(uid, _, pixels)| (uid.clone(), pixels.clone()))
+        .collect();
+    assert_eq!(pixels, expected_pixels(&series[1..]), "{said}");
+}
+
+/// getscu under an AE title pacs-rs does not answer is refused, and gets nothing.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_getscu_is_refused_with_a_status_it_shows() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let addr = start(answering(&["GETSCU"]), archive).await;
+    let study = vec![
+        "QueryRetrieveLevel=STUDY".to_owned(),
+        format!("StudyInstanceUID={}", series[0].study_uid()),
+    ];
+    let (said, files) = getscu(addr.port(), "STRANGER", &study, &[], 0).await;
+    assert!(files.is_empty());
+    assert!(said.contains("0x0124") || said.contains("0x124"), "{said}");
+}
+
+/// pynetdicom retrieves a study with C-GET, taking the SCP role for CT; without the role
+/// nothing can be sent to it and the retrieval fails; under an AE title pacs-rs does not
+/// answer it is refused.
+#[tokio::test]
+#[ignore = "needs pynetdicom"]
+async fn pynetdicom_gets_a_study_from_pacs_rs() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let addr = start(answering(&["PYNETDICOM"]), archive).await;
+    let script = r#"
+import sys
+from pydicom.dataset import Dataset
+from pydicom.uid import ImplicitVRLittleEndian
+from pynetdicom import AE, evt, build_role
+from pynetdicom.sop_class import CTImageStorage
+from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelGet as GET
+port, study = int(sys.argv[1]), sys.argv[2]
+
+stored = {}
+def on_store(event):
+    assert event.context.transfer_syntax == ImplicitVRLittleEndian
+    ds = event.dataset
+    raw = ds.PixelData
+    stored[ds.SOPInstanceUID] = (
+        str(ds.PatientName),
+        [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)],
+    )
+    return 0x0000
+
+def get(assoc, uid):
+    ds = Dataset()
+    ds.QueryRetrieveLevel = "STUDY"
+    ds.StudyInstanceUID = uid
+    return [(s.Status, s) for s, _ in assoc.send_c_get(ds, GET)]
+
+def associate(title, roles):
+    ae = AE(ae_title=title)
+    ae.add_requested_context(GET)
+    ae.add_requested_context(CTImageStorage, ImplicitVRLittleEndian)
+    assoc = ae.associate("127.0.0.1", port, ae_title="PACSRS", ext_neg=roles,
+                         evt_handlers=[(evt.EVT_C_STORE, on_store)])
+    assert assoc.is_established, "no association"
+    return assoc
+
+assoc = associate("PYNETDICOM", [build_role(CTImageStorage, scp_role=True)])
+responses = get(assoc, study)
+pending = [s for status, s in responses if status == 0xFF00]
+assert [s.NumberOfRemainingSuboperations for s in pending] == [4, 3, 2, 1], responses
+status, last = responses[-1]
+assert status == 0x0000, hex(status)
+assert (last.NumberOfCompletedSuboperations, last.NumberOfFailedSuboperations,
+        last.NumberOfWarningSuboperations) == (5, 0, 0), last
+assert len(stored) == 5, stored.keys()
+for uid, (name, pixels) in sorted(stored.items()):
+    assert name == "Doe^Jane", name
+    print(uid, " ".join(str(v) for v in pixels))
+# a study that is not there: nothing to send, no failure
+status, last = get(assoc, "2.25.404")[-1]
+assert status == 0x0000 and last.NumberOfCompletedSuboperations == 0, last
+assoc.release()
+
+# without the SCP role nothing can be sent: every sub-operation fails
+stored.clear()
+assoc = associate("PYNETDICOM", [])
+status, last = get(assoc, study)[-1]
+assert status == 0xA702, hex(status)
+assert last.NumberOfFailedSuboperations == 5 and not stored, last
+assoc.release()
+
+assoc = associate("STRANGER", [build_role(CTImageStorage, scp_role=True)])
+responses = get(assoc, study)
+assert [status for status, _ in responses] == [0x0124], responses
+assoc.release()
+"#;
+    let mut py = python();
+    py.args([
+        "-c",
+        script,
+        &addr.port().to_string(),
         &series[0].study_uid(),
     ]);
     let output = run(py).await;
