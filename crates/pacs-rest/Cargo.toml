@@ -26,6 +26,6 @@ zip.workspace = true
 bytes.workspace = true
 dicom-dictionary-std.workspace = true
 http-body-util.workspace = true
-pacs-core = { workspace = true, features = ["synthetic"] }
+pacs-core = { workspace = true, features = ["synthetic", "real"] }
 tower.workspace = true
 zip.workspace = true
