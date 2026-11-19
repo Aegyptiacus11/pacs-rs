@@ -16,6 +16,10 @@ use pacs_dimse::command::{field, tag};
 use pacs_dimse::message::Incoming;
 use pacs_dimse::{AeTitle, RemoteAe, Status, VERIFICATION};
 
+/// Modality Worklist Information Model - FIND (PS3.4 K.5): a SOP class pacs-rs does not
+/// provide, the worklist staying with the system that schedules.
+const MODALITY_WORKLIST_FIND: &str = "1.2.840.10008.5.1.4.31";
+
 fn rejection(result: Result<Client, UlError>) -> AssociationRJ {
     match result {
         Err(UlError::Rejected { association_rj, .. }) => association_rj,
@@ -209,14 +213,14 @@ async fn over_the_limit_an_association_is_rejected_transient() {
 /// PS3.8 9.3.3.2: an abstract syntax pacs-rs does not provide is refused in its
 /// presentation context, the others accepted (dicom-ul lists the accepted ones only).
 #[tokio::test]
-async fn only_verification_and_storage_contexts_are_accepted() {
+async fn only_the_sop_classes_pacs_rs_provides_are_accepted() {
     let addr = start(config(), archive().await).await;
     let study_root_find = "1.2.840.10008.5.1.4.1.2.2.1";
     let client = Client::connect(
         addr,
         "A",
         "PACSRS",
-        &[VERIFICATION, CT, study_root_find],
+        &[VERIFICATION, CT, MODALITY_WORKLIST_FIND, study_root_find],
         &[IMPLICIT_VR_LE],
     )
     .await
@@ -232,7 +236,8 @@ async fn only_verification_and_storage_contexts_are_accepted() {
         reasons,
         [
             (VERIFICATION.to_owned(), Acceptance),
-            (CT.to_owned(), Acceptance)
+            (CT.to_owned(), Acceptance),
+            (study_root_find.to_owned(), Acceptance)
         ]
     );
     client.release().await;
@@ -522,7 +527,7 @@ async fn a_sop_class_not_agreed_for_the_context_is_0212() {
 }
 
 /// PS3.7 9.1.5.1.4: a C-ECHO for a SOP class that has no C-ECHO is Unrecognized operation
-/// (0211H); so is any request pacs-rs does not provide, such as a C-FIND.
+/// (0211H); so is a C-FIND on it, and a C-MOVE on a SOP class that has only C-FIND.
 #[tokio::test]
 async fn an_operation_the_sop_class_lacks_is_0211() {
     let addr = start(config(), archive().await).await;
@@ -552,7 +557,7 @@ async fn a_message_on_a_refused_context_aborts() {
         addr,
         "A",
         "PACSRS",
-        &[VERIFICATION, "1.2.840.10008.5.1.4.1.2.2.1"],
+        &[VERIFICATION, MODALITY_WORKLIST_FIND],
         &[IMPLICIT_VR_LE],
     )
     .await

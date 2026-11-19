@@ -25,7 +25,7 @@ pub mod status;
 pub use ae::{AeError, AeTitle, ClientTls, RemoteAe};
 pub use project::{Project, ProjectError, Received};
 pub use query::{DateRange, QueryError, StudyQuery};
-pub use scp::{Destination, Observer, Peer, Scp};
+pub use scp::{Destination, Observer, Peer, Queried, Scp};
 pub use scu::ConnectError;
 pub use scu::echo::{EchoError, echo};
 pub use scu::find::{FindError, FindOutcome, find_studies};

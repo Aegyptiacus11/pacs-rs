@@ -183,3 +183,159 @@ pub fn c_store_rq(message_id: u16, sop_class: &str, sop_instance: &str) -> Comma
 pub fn no_data(command: Command) -> Command {
     command.with_us(tag::COMMAND_DATA_SET_TYPE, NO_DATA_SET)
 }
+
+/// How a C-FIND went: the Identifier and status of each Pending response, and the final
+/// response.
+pub struct Answer {
+    pub matches: Vec<dicom_object::InMemDicomObject>,
+    pub pending: Vec<pacs_dimse::Status>,
+    pub last: Command,
+}
+
+impl Answer {
+    pub fn status(&self) -> pacs_dimse::Status {
+        self.last.status().unwrap()
+    }
+
+    /// The value of `tag` in each match, in order; `None` where a match lacks it.
+    pub fn values(&self, tag: dicom_core::Tag) -> Vec<Option<String>> {
+        self.matches.iter().map(|found| value(found, tag)).collect()
+    }
+}
+
+/// An element's value as text, unpadded; `None` when the object lacks it.
+pub fn value(object: &dicom_object::InMemDicomObject, tag: dicom_core::Tag) -> Option<String> {
+    let element = object.get(tag)?;
+    Some(
+        element
+            .to_str()
+            .unwrap()
+            .trim_end_matches([' ', '\0'])
+            .to_owned(),
+    )
+}
+
+/// An Identifier of `level` with these keys, each a tag, a VR and its value.
+pub fn identifier(
+    level: &str,
+    keys: &[(dicom_core::Tag, dicom_core::VR, &str)],
+) -> dicom_object::InMemDicomObject {
+    use dicom_core::{DataElement, PrimitiveValue, VR};
+    let mut identifier = dicom_object::InMemDicomObject::new_empty();
+    identifier.put(DataElement::new(
+        dicom_dictionary_std::tags::QUERY_RETRIEVE_LEVEL,
+        VR::CS,
+        PrimitiveValue::from(level),
+    ));
+    for (tag, vr, value) in keys {
+        identifier.put(DataElement::new(*tag, *vr, PrimitiveValue::from(*value)));
+    }
+    identifier
+}
+
+pub fn c_find_rq(message_id: u16, sop_class: &str) -> Command {
+    Command::new()
+        .with_ui(tag::AFFECTED_SOP_CLASS_UID, sop_class)
+        .with_us(tag::COMMAND_FIELD, field::C_FIND_RQ)
+        .with_us(tag::MESSAGE_ID, message_id)
+        .with_us(tag::PRIORITY, PRIORITY_MEDIUM)
+        .with_us(tag::COMMAND_DATA_SET_TYPE, 0x0102)
+}
+
+impl Client {
+    /// The transfer syntax agreed for `abstract_syntax`.
+    pub fn transfer_syntax(
+        &self,
+        abstract_syntax: &str,
+    ) -> &'static dicom_encoding::TransferSyntax {
+        use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+        let uid = self
+            .association
+            .presentation_contexts()
+            .iter()
+            .find(|pc| pc.abstract_syntax == abstract_syntax)
+            .unwrap()
+            .transfer_syntax
+            .clone();
+        dicom_transfer_syntax_registry::TransferSyntaxRegistry
+            .get(uid.trim_end_matches('\0'))
+            .unwrap()
+    }
+
+    /// The responses to a request already sent, to the final one.
+    pub async fn answer(&mut self, sop_class: &str) -> Answer {
+        let ts = self.transfer_syntax(sop_class);
+        let mut answer = Answer {
+            matches: Vec::new(),
+            pending: Vec::new(),
+            last: Command::new(),
+        };
+        loop {
+            let message = match message::receive(&mut self.association, 1 << 20)
+                .await
+                .unwrap()
+            {
+                Incoming::Message(message) => message,
+                other => panic!("expected a response, got {other:?}"),
+            };
+            let status = message.command.status().unwrap();
+            match message.data {
+                DataSet::Received(bytes) => {
+                    assert_eq!(
+                        status.class(),
+                        pacs_dimse::StatusClass::Pending,
+                        "only a Pending response has an Identifier"
+                    );
+                    answer.pending.push(status);
+                    answer.matches.push(
+                        dicom_object::InMemDicomObject::read_dataset_with_ts(&*bytes, ts).unwrap(),
+                    );
+                }
+                DataSet::None => {
+                    assert_ne!(status.class(), pacs_dimse::StatusClass::Pending);
+                    answer.last = message.command;
+                    return answer;
+                }
+                DataSet::Dropped { size } => panic!("an Identifier of {size} bytes"),
+            }
+        }
+    }
+
+    /// A C-FIND of `identifier` on `sop_class`, to its final response.
+    pub async fn find(
+        &mut self,
+        sop_class: &str,
+        identifier: &dicom_object::InMemDicomObject,
+    ) -> Answer {
+        let mut bytes = Vec::new();
+        identifier
+            .write_dataset_with_ts(&mut bytes, self.transfer_syntax(sop_class))
+            .unwrap();
+        self.find_bytes(sop_class, &bytes).await
+    }
+
+    /// A C-FIND whose Identifier is these bytes, whatever they say.
+    pub async fn find_bytes(&mut self, sop_class: &str, identifier: &[u8]) -> Answer {
+        let id = self.message_id();
+        let context = self.context(sop_class);
+        message::send(
+            &mut self.association,
+            context,
+            &c_find_rq(id, sop_class),
+            Some(identifier),
+        )
+        .await
+        .unwrap();
+        let answer = self.answer(sop_class).await;
+        assert_eq!(answer.last.command_field(), Ok(field::C_FIND_RSP));
+        assert_eq!(answer.last.us(tag::MESSAGE_ID_BEING_RESPONDED_TO), Ok(id));
+        answer
+    }
+}
+
+/// Store every slice of `series` in `archive`, as an upload would.
+pub async fn ingest(archive: &Archive, series: &pacs_core::synthetic::SyntheticSeries) {
+    for bytes in series.all_bytes() {
+        archive.ingest(bytes.into()).await.unwrap();
+    }
+}

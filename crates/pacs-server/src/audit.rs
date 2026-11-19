@@ -37,6 +37,8 @@
 //! |---|---|
 //! | DICOM Instances Transferred | an association is over: one line per study stored through it by C-STORE, from the calling AE title to the called one |
 //! | Security Alert, Node Authentication | a connection that did not become an association: an AE title not recognized, the limit reached |
+//! | Query, of this server | a C-FIND it answered: the calling AE asks, with the Information Model as the SOP Class queried, the Identifier as sent and its transfer syntax |
+//! | Security Alert, Access Control Decision | a C-FIND from an AE this server does not answer the queries of |
 //! | Query | a remote AE searched by C-FIND (`GET /modalities/{id}/studies`): this server asks, the remote AE answers, the caller is the requestor |
 //! | Begin Transferring DICOM Instances | a remote AE asked by C-MOVE to send studies here (`POST /modalities/{id}/move`), one line per study; their arrival is the first event of this table |
 //!
@@ -296,6 +298,69 @@ impl std::fmt::Debug for Audit {
 
 /// What DIMSE associations did: see the module's second table.
 impl pacs_dimse::Observer for Audit {
+    fn queried(&self, peer: &pacs_dimse::Peer, query: &pacs_dimse::Queried<'_>) {
+        let Some(trail) = &self.0 else { return };
+        let now = SystemTime::now();
+        let node = peer.address.ip().to_string();
+        let mut asker = application(&peer.calling, Some(AccessPoint::Ip(node.clone())));
+        if query.status == pacs_dimse::Status::NOT_AUTHORIZED {
+            // an access violation is an alert, not a query (A.5.3.10, note); a caller
+            // that keeps asking is one line a window
+            let again = format!("query refused|{node}|{}", peer.calling);
+            if !trail.repeated(again, Instant::now()) {
+                self.record(events::security_alert(
+                    &trail.source,
+                    now,
+                    ACCESS_CONTROL_DECISION,
+                    Outcome::MinorFailure,
+                    &trail.process,
+                    Some(asker),
+                    &format!("urn:oid:{}", query.sop_class),
+                    &format!(
+                        "C-FIND refused: {} is not an AE this server answers the queries of",
+                        peer.calling
+                    ),
+                ));
+            }
+            return;
+        }
+        use pacs_dimse::{Status, StatusClass};
+        let outcome = match query.status.class() {
+            StatusClass::Success | StatusClass::Cancel => Outcome::Success,
+            // the server's own failure, not a query it could not accept
+            _ if matches!(
+                query.status,
+                Status::UNABLE_TO_PROCESS_INDEX | Status::FIND_OUT_OF_RESOURCES
+            ) =>
+            {
+                Outcome::SeriousFailure
+            }
+            _ => Outcome::MinorFailure,
+        };
+        // the same search by the same caller again is not a second line
+        let mut again = format!(
+            "query|{node}|{}|{}|{}|",
+            peer.calling, peer.called, query.sop_class
+        );
+        again.extend(query.identifier.iter().map(|byte| format!("{byte:02x}")));
+        if outcome == Outcome::Success && trail.repeated(again, Instant::now()) {
+            return;
+        }
+        asker.is_requestor = true;
+        let answerer = Participant::new(&trail.process, false)
+            .alternative(format!("AETITLES={}", peer.called));
+        self.record(events::dicom_query(
+            &trail.source,
+            now,
+            outcome,
+            asker,
+            answerer,
+            query.sop_class,
+            query.transfer_syntax,
+            query.identifier,
+        ));
+    }
+
     fn received(&self, peer: &pacs_dimse::Peer, stored: Vec<Stored>) {
         let Some(trail) = &self.0 else { return };
         let now = SystemTime::now();

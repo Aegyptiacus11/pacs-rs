@@ -1,10 +1,13 @@
-//! pacs-rs as an association acceptor: Verification SCP (PS3.4 Annex A) and Storage SCP
-//! (PS3.4 Annex B) for the SOP classes of [`crate::sop_classes::STORAGE`].
+//! pacs-rs as an association acceptor: Verification SCP (PS3.4 Annex A), Storage SCP
+//! (PS3.4 Annex B) for the SOP classes of [`crate::sop_classes::STORAGE`], and Query SCP
+//! (PS3.4 Annex C) on the Study Root model.
 //!
 //! Every accepted AE title shares one set of presentation contexts; once an association is
-//! up, its called AE title picks where received instances go ([`Scp::destination`]). The
-//! association loop and the Verification SCP are here, the Storage SCP in [`store`].
+//! up, its called AE title picks where received instances go and which studies a query
+//! sees ([`Scp::destination`]). The association loop and the Verification SCP are here,
+//! the Storage SCP in [`store`], the Query SCP in [`find`].
 
+mod find;
 mod store;
 
 pub use store::{Destination, part10};
@@ -40,9 +43,26 @@ pub struct Peer {
     pub called: String,
 }
 
+/// A C-FIND that was answered, or refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Queried<'a> {
+    /// The Query/Retrieve Information Model asked: the C-FIND's SOP Class UID.
+    pub sop_class: &'a str,
+    /// The transfer syntax the Identifier is written in.
+    pub transfer_syntax: &'a str,
+    /// The Request Identifier as received; empty when the request had none.
+    pub identifier: &'a [u8],
+    /// The final status: Success, Cancel, or the Failure it was refused with.
+    pub status: Status,
+    /// How many matches were sent.
+    pub matches: usize,
+}
+
 /// Told what associations did, for the server's audit trail. Called on the association's
 /// own task, after the fact: it must not block for long.
 pub trait Observer: Send + Sync + std::fmt::Debug {
+    /// A C-FIND is over.
+    fn queried(&self, peer: &Peer, query: &Queried<'_>);
     /// The association is over, and these instances were stored through it, in order.
     /// Never called with none.
     fn received(&self, peer: &Peer, stored: Vec<Stored>);
@@ -120,7 +140,8 @@ impl Scp {
             .ae_title(self.config.ae_title.as_str().to_owned())
             .read_timeout(self.config.timeout)
             .write_timeout(self.config.timeout)
-            .with_abstract_syntax(VERIFICATION);
+            .with_abstract_syntax(VERIFICATION)
+            .with_abstract_syntax(crate::query::STUDY_ROOT_FIND);
         for (uid, _) in crate::sop_classes::STORAGE {
             options = options.with_abstract_syntax(*uid);
         }
@@ -229,6 +250,16 @@ impl Scp {
         }
     }
 
+    /// Whether `calling` may query: it is one of the AEs this server is configured with.
+    /// An AE title is a claim, not a proof; who may connect at all is the listener's
+    /// business (TLS, known callers).
+    fn answers_queries_of(&self, calling: &str) -> bool {
+        self.config
+            .remotes
+            .iter()
+            .any(|remote| remote.ae_title.matches(calling))
+    }
+
     /// Serve the messages of an established association until it ends.
     async fn messages<A, S>(
         &self,
@@ -266,16 +297,67 @@ impl Scp {
                         calling,
                         called,
                     };
-                    let response =
-                        match handle(&request, &message.command, message.data, destination).await {
-                            Handled::Respond(response) => response,
-                            Handled::Nothing => continue,
-                            Handled::Abort(reason) => {
-                                tracing::warn!(%peer, calling, reason, "association aborted");
-                                let _ = association.abort().await;
-                                break;
+                    let response = match handle(
+                        &request,
+                        &message.command,
+                        message.data,
+                        destination,
+                    )
+                    .await
+                    {
+                        Handled::Respond(response) => response,
+                        Handled::Nothing => continue,
+                        Handled::Find(identifier) => {
+                            let after = find::find(
+                                &mut association,
+                                &request,
+                                &message.command,
+                                identifier,
+                                &destination.index(),
+                                self.answers_queries_of(calling),
+                            )
+                            .await;
+                            let (found, open) = match after {
+                                Ok(find::After::Open(found)) => (found, true),
+                                Ok(find::After::Released(found) | find::After::Aborted(found)) => {
+                                    (found, false)
+                                }
+                                Err(e) => {
+                                    tracing::warn!(%peer, calling, error = %e, "association aborted during a C-FIND");
+                                    let _ = association.abort().await;
+                                    break;
+                                }
+                            };
+                            tracing::info!(%peer, calling, called, status = %found.status, matches = found.matches, "C-FIND");
+                            served.found += 1;
+                            if let Some(observer) = &self.observer {
+                                observer.queried(
+                                    &Peer {
+                                        address: peer,
+                                        calling: calling.to_owned(),
+                                        called: called.to_owned(),
+                                    },
+                                    &Queried {
+                                        sop_class: request.abstract_syntax,
+                                        transfer_syntax: request.transfer_syntax,
+                                        identifier: &found.identifier,
+                                        status: found.status,
+                                        matches: found.matches,
+                                    },
+                                );
                             }
-                        };
+                            if open {
+                                continue;
+                            }
+                            tracing::info!(%peer, calling, "association ended by the peer during a C-FIND");
+                            break;
+                        }
+                        Handled::Abort(reason) => {
+                            tracing::warn!(%peer, calling, reason, "association aborted");
+                            let _ = association.abort().await;
+                            break;
+                        }
+                    };
                     served.count(&message.command, &response);
                     if let Err(e) =
                         message::send(&mut association, request.context_id, &response, None).await
@@ -285,7 +367,7 @@ impl Scp {
                     }
                 }
                 Ok(Incoming::Released) => {
-                    tracing::info!(%peer, calling, echoes = served.echoes, stored = served.stored, failed = served.failed, "association released");
+                    tracing::info!(%peer, calling, echoes = served.echoes, stored = served.stored, found = served.found, failed = served.failed, "association released");
                     break;
                 }
                 Ok(Incoming::Aborted) => {
@@ -378,6 +460,9 @@ enum Handled {
     Respond(Command),
     /// No response is due (a C-CANCEL-RQ with nothing to cancel).
     Nothing,
+    /// A C-FIND-RQ with this Identifier, which the Query SCP answers with as many
+    /// responses as it has matches.
+    Find(DataSet),
     Abort(&'static str),
 }
 
@@ -422,10 +507,11 @@ async fn handle(
     }
     match field {
         field::C_ECHO_RQ if affected == VERIFICATION => respond(Status::SUCCESS, None),
-        field::C_STORE_RQ if affected != VERIFICATION => {
+        field::C_STORE_RQ if affected != VERIFICATION && !find::is_find(affected) => {
             let (status, comment) = store::store(request, command, data, destination).await;
             respond(status, comment.as_deref())
         }
+        field::C_FIND_RQ if find::is_find(affected) => Handled::Find(data),
         // PS3.7 9.1.5.1.4, 9.1.1.1.9: an operation the SOP class does not have, or one
         // pacs-rs does not provide.
         _ => respond(Status::UNRECOGNIZED_OPERATION, None),
@@ -434,6 +520,7 @@ async fn handle(
 
 fn is_supported(sop_class: &str) -> bool {
     sop_class == VERIFICATION
+        || find::is_find(sop_class)
         || crate::sop_classes::STORAGE
             .iter()
             .any(|(uid, _)| *uid == sop_class)
@@ -443,6 +530,7 @@ fn is_supported(sop_class: &str) -> bool {
 struct Counts {
     echoes: usize,
     stored: usize,
+    found: usize,
     failed: usize,
 }
 

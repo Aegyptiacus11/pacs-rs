@@ -1014,6 +1014,122 @@ async fn what_an_association_stored_and_one_that_was_refused_are_in_the_audit_tr
     audit_lines(dir.path(), 4).await;
 }
 
+/// A C-FIND of this server's studies by `calling`, with pacs-rs's own SCU: how many
+/// studies came back, or the error.
+async fn query_as(
+    addr: SocketAddr,
+    calling: &str,
+    patient_id: &str,
+) -> Result<usize, pacs_dimse::FindError> {
+    let remote: pacs_dimse::RemoteAe = format!("here=PACSRS@127.0.0.1:{}", addr.port())
+        .parse()
+        .unwrap();
+    let query = pacs_dimse::StudyQuery {
+        patient_id: Some(patient_id.to_owned()),
+        ..pacs_dimse::StudyQuery::default()
+    };
+    let mut found = 0;
+    pacs_dimse::find_studies(
+        &remote,
+        &pacs_dimse::AeTitle::new(calling).unwrap(),
+        &query,
+        std::time::Duration::from_secs(5),
+        |_| {
+            found += 1;
+            std::ops::ControlFlow::Continue(())
+        },
+    )
+    .await?;
+    Ok(found)
+}
+
+/// pacs-rs queried over DIMSE: its own C-FIND SCU finds a study in its SCP, and the trail
+/// has the query as a DICOM one (PS3.15 A.5.3.10), a caller that is not answered as an
+/// alert, and neither twice.
+#[tokio::test]
+async fn a_query_over_dimse_and_one_that_is_refused_are_in_the_audit_trail() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = audited_settings(
+        dir.path(),
+        &["--dimse-remotes", "viewer=VIEWER@127.0.0.1:11112"],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let series = SyntheticSeries::new(71, 1).with_patient("DOE^JANE", None);
+    archive.ingest(series.slice_bytes(0).into()).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(pacs_server::serve_dimse_audited(
+        listener,
+        archive,
+        dimse_config(&settings).unwrap(),
+        Vec::new(),
+        pacs_server::audit::open_audit(&settings).unwrap(),
+        std::future::pending(),
+    ));
+
+    assert_eq!(query_as(addr, "VIEWER", "SYN71").await.unwrap(), 1);
+    let lines = audit_lines(dir.path(), 1).await;
+    has(
+        &lines[0],
+        &[
+            "<EventID csd-code=\"110112\"",
+            "EventActionCode=\"E\"",
+            "EventOutcomeIndicator=\"0\"",
+            "<ActiveParticipant UserID=\"VIEWER\" AlternativeUserID=\"AETITLES=VIEWER\" UserIsRequestor=\"true\" NetworkAccessPointID=\"127.0.0.1\" NetworkAccessPointTypeCode=\"2\"><RoleIDCode csd-code=\"110153\"",
+            "AlternativeUserID=\"AETITLES=PACSRS\" UserIsRequestor=\"false\"><RoleIDCode csd-code=\"110152\"",
+            "ParticipantObjectID=\"1.2.840.10008.5.1.4.1.2.2.1\" ParticipantObjectTypeCode=\"2\" ParticipantObjectTypeCodeRole=\"3\"",
+            "originalText=\"SOP Class UID\"",
+            "<ParticipantObjectQuery>",
+            // 1.2.840.10008.1.2.1, the transfer syntax the SCU proposes first
+            "<ParticipantObjectDetail type=\"TransferSyntax\" value=\"MS4yLjg0MC4xMDAwOC4xLjIuMQ==\"/>",
+        ],
+    );
+    // the Identifier is there as it was sent: the Patient ID asked for is in it
+    let query = lines[0]
+        .split_once("<ParticipantObjectQuery>")
+        .and_then(|(_, rest)| rest.split_once("</ParticipantObjectQuery>"))
+        .unwrap()
+        .0;
+    use base64::Engine;
+    let identifier = base64::engine::general_purpose::STANDARD
+        .decode(query)
+        .unwrap();
+    assert!(identifier.windows(5).any(|bytes| bytes == b"SYN71"));
+
+    // the same search again leaves no second line; another search does
+    assert_eq!(query_as(addr, "VIEWER", "SYN71").await.unwrap(), 1);
+    assert_eq!(query_as(addr, "VIEWER", "NOBODY").await.unwrap(), 0);
+    let lines = audit_lines(dir.path(), 2).await;
+    has(&lines[1], &["<EventID csd-code=\"110112\""]);
+
+    // a caller this server does not answer: refused, and an alert, once however often
+    for _ in 0..2 {
+        let refused = query_as(addr, "STRANGER", "SYN71").await.unwrap_err();
+        assert!(
+            matches!(
+                &refused,
+                pacs_dimse::FindError::Failed { status, .. }
+                    if *status == pacs_dimse::Status::NOT_AUTHORIZED
+            ),
+            "{refused}"
+        );
+    }
+    let lines = audit_lines(dir.path(), 3).await;
+    has(
+        &lines[2],
+        &[
+            "<EventID csd-code=\"110113\"",
+            "originalText=\"Access Control Decision\"",
+            "EventOutcomeIndicator=\"4\"",
+            "UserID=\"STRANGER\" AlternativeUserID=\"AETITLES=STRANGER\" UserIsRequestor=\"false\"",
+            "ParticipantObjectID=\"urn:oid:1.2.840.10008.5.1.4.1.2.2.1\"",
+            "type=\"Alert Description\"",
+        ],
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    audit_lines(dir.path(), 3).await;
+}
+
 #[tokio::test]
 async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
     use pacs_server::app_with_audit;
