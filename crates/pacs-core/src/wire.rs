@@ -112,6 +112,49 @@ pub fn checked(bytes: &[u8]) -> Result<Cow<'_, [u8]>, Error> {
     Ok(Cow::Owned(copy.out.unwrap_or_default()))
 }
 
+/// Where the Pixel Data element of a Part 10 file is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelDataAt {
+    /// Where its header starts. The file cut here reads as an instance without pixel data.
+    pub element: usize,
+    /// Where its value starts.
+    pub value: usize,
+    /// The length of a native value; `None` for encapsulated pixel data, whose length is
+    /// undefined.
+    pub len: Option<u32>,
+    /// Whether the data set is big endian.
+    pub big_endian: bool,
+}
+
+/// What the first bytes of a file tell of where its pixel data is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelDataSearch {
+    Found(PixelDataAt),
+    /// Not in these bytes: they end before it, they are the whole of a file without pixel
+    /// data, or they cannot be walked up to it.
+    NotIn,
+    /// Not to be looked for: not a Part 10 file, or a deflated data set.
+    Unreadable,
+}
+
+/// Where the Pixel Data element of the data set itself is (one inside a sequence, an icon
+/// for instance, is not it), from `start`, the first bytes of a Part 10 file. Nothing past
+/// the element's header is looked at, so `start` may end anywhere after it.
+pub fn pixel_data_at(start: &[u8]) -> PixelDataSearch {
+    let Ok(Some((data_set, encoding))) = data_set_start(start) else {
+        // A File Meta group that does not fit in `start` is not one to wait for more of.
+        return PixelDataSearch::Unreadable;
+    };
+    let mut scan = Walk::new(start, encoding.big, None);
+    scan.stop_at_pixel_data = true;
+    // An error is where `start` was cut, or what reading the whole file will report.
+    let _ = scan.data_set(data_set, Some(start.len()), encoding, 0);
+    match scan.pixel_data {
+        Some(at) => PixelDataSearch::Found(at),
+        None => PixelDataSearch::NotIn,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Encoding {
     explicit: bool,
@@ -207,6 +250,9 @@ struct Walk<'a> {
     signed: bool,
     /// The estimate of [`read_cost`] so far.
     cost: u64,
+    /// For [`pixel_data_at`]: end the walk at the data set's own Pixel Data element.
+    stop_at_pixel_data: bool,
+    pixel_data: Option<PixelDataAt>,
 }
 
 impl<'a> Walk<'a> {
@@ -218,6 +264,8 @@ impl<'a> Walk<'a> {
             rewrite: false,
             signed: false,
             cost: 0,
+            stop_at_pixel_data: false,
+            pixel_data: None,
         }
     }
 
@@ -316,6 +364,15 @@ impl<'a> Walk<'a> {
                 break;
             }
             let header = self.header(pos, encoding)?;
+            if self.stop_at_pixel_data && depth == 0 && header.tag == PIXEL_DATA {
+                self.pixel_data = Some(PixelDataAt {
+                    element: pos,
+                    value: pos + header.size,
+                    len: (header.len != UNDEFINED).then_some(header.len),
+                    big_endian: encoding.big,
+                });
+                return Ok(pos);
+            }
             pos += header.size;
             if header.tag == ITEM_END {
                 if depth > 0 {
