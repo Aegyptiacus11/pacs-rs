@@ -240,7 +240,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 #[tokio::test]
 async fn native_file_with_elements_in_un_is_compressed_with_them_reverted() {
     let archive = archive().await;
-    let bytes = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    let bytes = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(95, b"UN")
         .short((0x0028, 0x0002), b"US", &1u16.to_le_bytes())
         .short((0x0028, 0x0004), b"CS", b"MONOCHROME2 ")
@@ -266,7 +266,7 @@ async fn native_file_with_elements_in_un_is_compressed_with_them_reverted() {
 }
 
 fn costly_file(seed: u32, values: usize) -> Vec<u8> {
-    pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(seed, b"UI")
         .long((0x0043, 0x1001), b"UC", &vec![b'\\'; values])
         .bytes()
@@ -291,7 +291,7 @@ async fn a_file_over_the_read_limit_is_refused() {
 /// A file of lengths that lie is still reported as unreadable, not as costly.
 #[tokio::test]
 async fn admitting_a_lying_file_says_it_is_invalid() {
-    let lying = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    let lying = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(97, b"UI")
         .long_declared((0x0043, 0x1001), b"OB", 0xC000_0000, b"short")
         .bytes();
@@ -322,7 +322,7 @@ async fn the_read_limit_makes_files_wait_not_fail() {
         .unwrap()
         .unwrap();
 
-    let native_over_the_limit = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    let native_over_the_limit = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(100, b"UI")
         .long((0x7FE0, 0x0010), b"OW", &vec![0; 8 << 20])
         .bytes();

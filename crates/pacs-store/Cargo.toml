@@ -15,6 +15,6 @@ pacs-core.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-pacs-core = { workspace = true, features = ["synthetic", "real"] }
+pacs-core = { workspace = true, features = ["real"] }
 tempfile.workspace = true
 tokio.workspace = true

@@ -953,14 +953,14 @@ async fn overwritten_instances_are_asked_about() {
 #[tokio::test]
 async fn stow_reads_un_and_refuses_a_lying_length() {
     let app = app().await;
-    let lying = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+    let lying = pacs_core::real::AlteredFile::new("1.2.840.10008.1.2.1")
         .identifiers(68, b"UI")
         .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
         .bytes();
     let reply = stow(
         &app,
         "/studies",
-        vec![pacs_core::synthetic::un_sequence_file(67), lying],
+        vec![pacs_core::real::un_sequence_file(67), lying],
     )
     .await;
     assert_eq!(reply.status, StatusCode::ACCEPTED);

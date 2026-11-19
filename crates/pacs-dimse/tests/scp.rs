@@ -652,12 +652,12 @@ async fn c_store_takes_un_and_refuses_a_lying_length() {
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
-    let file = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE).identifiers(62, b"UN");
+    let file = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE).identifiers(62, b"UN");
     let rsp = client
         .store_as(CT, CT, "2.25.623", &data_set(&file.bytes()))
         .await;
     assert_eq!(rsp.status(), Ok(Status::SUCCESS));
-    let lying = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    let lying = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(63, b"UI")
         .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short");
     let rsp = client

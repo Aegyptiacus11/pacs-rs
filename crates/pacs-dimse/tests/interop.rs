@@ -50,7 +50,7 @@ fn text(output: &Output) -> String {
     )
 }
 
-/// Synthetic CT slices written as files, for storescu.
+/// Slices of the scanner's CT written as files, for storescu.
 fn files(seed: u32, slices: u32) -> (tempfile::TempDir, Vec<PathBuf>, RealSeries) {
     let dir = tempfile::tempdir().unwrap();
     let series = RealSeries::new(seed, slices);
@@ -302,7 +302,7 @@ ae.start_server(("127.0.0.1", int(sys.argv[1])), block=True)
     .unwrap();
 }
 
-/// A study as a file: one synthetic slice with this patient and study date.
+/// A study as a file: one slice of the scanner's CT with this patient and study date.
 fn study_file(seed: u32, patient_id: &str, name: &str, date: &str) -> (Vec<u8>, String) {
     use dicom_core::{DataElement, PrimitiveValue, VR};
     use dicom_dictionary_std::tags;

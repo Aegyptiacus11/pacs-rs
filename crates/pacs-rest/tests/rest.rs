@@ -760,8 +760,8 @@ async fn create_archive_takes_resources_at_any_level_each_file_once() {
 async fn standard_elements_in_un_are_read_and_kept_as_received() {
     let app = app().await;
     for (bytes, study) in [
-        (pacs_core::synthetic::un_sequence_file(92), "2.25.921"),
-        (pacs_core::synthetic::un_study_uid_file(93), "2.25.931"),
+        (pacs_core::real::un_sequence_file(92), "2.25.921"),
+        (pacs_core::real::un_study_uid_file(93), "2.25.931"),
     ] {
         let answer = json(&app, "POST", "/instances", bytes.clone().into()).await;
         assert_eq!(answer["Status"], "Success");
@@ -774,7 +774,7 @@ async fn standard_elements_in_un_are_read_and_kept_as_received() {
         assert_eq!(file, bytes);
     }
 
-    let lying = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+    let lying = pacs_core::real::AlteredFile::new("1.2.840.10008.1.2.1")
         .identifiers(94, b"UI")
         .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
         .bytes();
@@ -790,7 +790,7 @@ async fn a_file_too_costly_to_read_is_413() {
         .with_compression(Compression::Off)
         .with_read_limit(1 << 20);
     let app = pacs_rest::router(archive, 1 << 30);
-    let costly = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+    let costly = pacs_core::real::AlteredFile::new("1.2.840.10008.1.2.1")
         .identifiers(103, b"UI")
         .long((0x0043, 0x1001), b"UC", &vec![b'\\'; 100_000])
         .bytes();

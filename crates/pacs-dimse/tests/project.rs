@@ -261,7 +261,7 @@ async fn a_quarantined_instance_goes_to_the_quarantine_store() {
 #[tokio::test]
 async fn a_name_in_un_is_de_identified() {
     let (addr, archive) = with_project(None).await;
-    let file = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    let file = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(102, b"UI")
         .long((0x0010, 0x0010), b"UN", b"REAL^NAME ");
     let mut client = Client::connect(addr, "HOSPITAL", "LIVER_2026", &[CT], &[EXPLICIT_VR_LE])
