@@ -1,10 +1,11 @@
 //! pacs-rs as an association requestor: the association every operation opens, here, and
 //! the operations, one module each: [`echo`] (C-ECHO), [`find`] (C-FIND), [`retrieve`]
-//! (C-MOVE).
+//! (C-MOVE), [`store`] (C-STORE).
 
 pub mod echo;
 pub mod find;
 pub mod retrieve;
+pub mod store;
 
 use std::time::Duration;
 
@@ -116,13 +117,46 @@ pub(crate) async fn connect(
     timeout: Duration,
     response_timeout: Duration,
 ) -> Result<Connected, ConnectError> {
-    let options = ClientAssociationOptions::new()
+    let context = (
+        abstract_syntax.to_owned(),
+        transfer_syntaxes
+            .iter()
+            .map(|ts| (*ts).to_owned())
+            .collect(),
+    );
+    let (association, accepted) =
+        associate(remote, calling, &[context], timeout, response_timeout).await?;
+    let Some(context) = accepted.into_iter().next() else {
+        association.abort().await;
+        return Err(ConnectError::NotAccepted(abstract_syntax));
+    };
+    Ok(Connected {
+        association,
+        context: context.id,
+        transfer_syntax: context.transfer_syntax,
+    })
+}
+
+/// Associate with `remote` as `calling`, proposing each of `contexts`, an abstract syntax
+/// with its transfer syntaxes: the association and the contexts the peer accepted, which
+/// may be none. Timeouts as for [`connect`].
+pub(crate) async fn associate(
+    remote: &RemoteAe,
+    calling: &AeTitle,
+    contexts: &[(String, Vec<String>)],
+    timeout: Duration,
+    response_timeout: Duration,
+) -> Result<(Link, Vec<store::Accepted>), ConnectError> {
+    let mut options = ClientAssociationOptions::new()
         .calling_ae_title(calling.as_str().to_owned())
         .called_ae_title(remote.ae_title.as_str().to_owned())
-        .with_presentation_context(abstract_syntax, transfer_syntaxes.to_vec())
         .connection_timeout(timeout)
         .read_timeout(response_timeout)
         .write_timeout(timeout);
+    for (abstract_syntax, transfer_syntaxes) in contexts {
+        options =
+            options.with_presentation_context(abstract_syntax.clone(), transfer_syntaxes.clone());
+    }
     let refused = |source| ConnectError::Association {
         ae: remote.ae_title.to_string(),
         host: remote.host.clone(),
@@ -130,7 +164,7 @@ pub(crate) async fn connect(
         source: Box::new(source),
     };
     let address = (remote.host.as_str(), remote.port);
-    let (association, contexts) = if remote.secure {
+    let (association, negotiated) = if remote.secure {
         let Some(ClientTls(config)) = &remote.tls else {
             return Err(ConnectError::NoTls(remote.id.clone()));
         };
@@ -148,17 +182,14 @@ pub(crate) async fn connect(
         let contexts = association.presentation_contexts().to_vec();
         (Link::Plain(Box::new(association)), contexts)
     };
-    let Some((context, transfer_syntax)) = contexts
+    let accepted = negotiated
         .iter()
-        .find(|pc| pc.reason == PresentationContextResultReason::Acceptance)
-        .map(|pc| (pc.id, pc.transfer_syntax.trim_end_matches('\0').to_owned()))
-    else {
-        association.abort().await;
-        return Err(ConnectError::NotAccepted(abstract_syntax));
-    };
-    Ok(Connected {
-        association,
-        context,
-        transfer_syntax,
-    })
+        .filter(|pc| pc.reason == PresentationContextResultReason::Acceptance)
+        .map(|pc| store::Accepted {
+            id: pc.id,
+            abstract_syntax: pc.abstract_syntax.trim_end_matches('\0').to_owned(),
+            transfer_syntax: pc.transfer_syntax.trim_end_matches('\0').to_owned(),
+        })
+        .collect();
+    Ok((association, accepted))
 }
