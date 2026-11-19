@@ -2,7 +2,7 @@ use bytes::Bytes;
 use pacs_archive::{Archive, Compression, IngestError, Outcome};
 use pacs_core::Instance;
 use pacs_core::codec::{EXPLICIT_VR_LE, JPEG_LS_LOSSLESS};
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_index::{Index, Level};
 use pacs_store::Store;
 
@@ -18,7 +18,7 @@ async fn uncompressed() -> Archive {
 #[tokio::test]
 async fn ingest_then_read_the_same_bytes_back() {
     let archive = uncompressed().await;
-    let series = SyntheticSeries::new(51, 2);
+    let series = RealSeries::new(51, 2);
     for bytes in series.all_bytes() {
         let ingested = archive.ingest(Bytes::from(bytes)).await.unwrap();
         assert_eq!(ingested.outcome, Outcome::Added);
@@ -40,9 +40,8 @@ async fn ingest_then_read_the_same_bytes_back() {
 #[tokio::test]
 async fn native_pixels_are_stored_as_jpeg_ls_and_decode_back_exactly() {
     let archive = archive().await;
-    let mut series = SyntheticSeries::new(57, 1);
-    (series.rows, series.columns) = (64, 64);
-    let sent = series.multiframe_bytes(0, 2);
+    let series = RealSeries::new(57, 1);
+    let sent = series.multiframe_bytes(0);
     archive.ingest(Bytes::from(sent.clone())).await.unwrap();
     let entry = archive
         .index()
@@ -65,7 +64,7 @@ async fn native_pixels_are_stored_as_jpeg_ls_and_decode_back_exactly() {
     );
     assert_eq!(stored.key.transfer_syntax_uid, JPEG_LS_LOSSLESS);
     let shape = sent.shape().unwrap();
-    for frame in 1..=2 {
+    for frame in 1..=RealSeries::FRAMES {
         assert_eq!(
             stored.native_frame(frame, shape).unwrap(),
             sent.native_frame(frame, shape).unwrap()
@@ -80,15 +79,9 @@ async fn native_pixels_are_stored_as_jpeg_ls_and_decode_back_exactly() {
 #[tokio::test]
 async fn what_the_codecs_do_not_handle_is_stored_as_received() {
     let archive = archive().await;
-    let series = SyntheticSeries::new(58, 1);
-    // already compressed (opaque JPEG baseline bytes)
-    let jpeg = series.encapsulated_bytes(
-        0,
-        "1.2.840.10008.1.2.4.50",
-        1,
-        vec![],
-        vec![vec![0xFF, 0xD8, 0xFF, 0xD9]],
-    );
+    let series = RealSeries::new(58, 1);
+    // already compressed, in a syntax there is no codec for: a real image in lossy JPEG
+    let jpeg = series.jpeg_lossy_bytes(0);
     archive.ingest(Bytes::from(jpeg.clone())).await.unwrap();
     let entry = archive
         .index()
@@ -119,11 +112,11 @@ async fn garbage_is_invalid_and_leaves_nothing() {
 async fn a_refused_instance_leaves_no_file_behind() {
     let store = Store::memory();
     let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap());
-    let first = SyntheticSeries::new(52, 1);
+    let first = RealSeries::new(52, 1);
     archive.ingest(first.slice_bytes(0).into()).await.unwrap();
 
     // same series UID, another study: a conflict
-    let mut clash = SyntheticSeries::new(52, 1).in_study(53, 1);
+    let mut clash = RealSeries::new(52, 1).in_study(53, 1);
     clash.seed = 52;
     let bytes = clash.slice_bytes(0);
     let err = archive
@@ -147,8 +140,8 @@ async fn a_refused_instance_leaves_no_file_behind() {
 #[tokio::test]
 async fn an_instance_sent_to_another_study_is_refused() {
     let archive = archive().await;
-    let series = SyntheticSeries::new(54, 1);
-    let other = SyntheticSeries::new(55, 1).study_uid();
+    let series = RealSeries::new(54, 1);
+    let other = RealSeries::new(55, 1).study_uid();
     let err = archive
         .ingest_in_study(series.slice_bytes(0).into(), &other)
         .await
@@ -164,7 +157,7 @@ async fn an_instance_sent_to_another_study_is_refused() {
 #[tokio::test]
 async fn the_first_copy_is_kept_unless_overwriting() {
     let store = Store::memory();
-    let series = SyntheticSeries::new(56, 1);
+    let series = RealSeries::new(56, 1);
     let first = series.slice_bytes(0);
     // the same instance, different bytes: another patient name
     let second = series
@@ -197,7 +190,7 @@ async fn deleting_removes_files_and_entries() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::local(dir.path(), "").unwrap();
     let archive = Archive::new(store, Index::in_memory().await.unwrap());
-    let series = SyntheticSeries::new(55, 3);
+    let series = RealSeries::new(55, 3);
     for bytes in series.all_bytes() {
         archive.ingest(Bytes::from(bytes)).await.unwrap();
     }
@@ -209,7 +202,7 @@ async fn deleting_removes_files_and_entries() {
     };
     assert_eq!(files(), 3);
 
-    let study = pacs_core::public_ids::study("SYN55", &series.study_uid());
+    let study = pacs_core::public_ids::study("NEMA-55", &series.study_uid());
     let deleted = archive.delete(Level::Study, &study).await.unwrap().unwrap();
     assert_eq!(deleted.object_keys.len(), 3);
     assert_eq!(deleted.remaining_ancestor, None);
@@ -349,7 +342,7 @@ async fn the_read_limit_makes_files_wait_not_fail() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_read_limit_and_deletions_do_not_wait_on_each_other() {
     let archive = uncompressed().await.with_read_limit(2 << 20);
-    let series = SyntheticSeries::new(102, 1);
+    let series = RealSeries::new(102, 1);
     archive
         .ingest(Bytes::from(series.slice_bytes(0)))
         .await
@@ -386,13 +379,13 @@ async fn the_read_limit_and_deletions_do_not_wait_on_each_other() {
 async fn what_a_request_stored_is_handed_to_who_asks() {
     use pacs_archive::observed::{Stored, stored_during};
     let archive = archive().await;
-    let series = SyntheticSeries::new(31, 2).for_patient(3);
-    let other = SyntheticSeries::new(32, 1);
-    let noted = |series: &SyntheticSeries, outcome| Stored {
+    let series = RealSeries::new(31, 2).for_patient(3);
+    let other = RealSeries::new(32, 1);
+    let noted = |series: &RealSeries, outcome| Stored {
         study_instance_uid: series.study_uid(),
         sop_class_uid: "1.2.840.10008.5.1.4.1.1.2".into(),
         patient_id: Some(series.patient_id()),
-        patient_name: Some("SYNTHETIC^SERIES".into()),
+        patient_name: Some("CompressedSamples^CT1".into()),
         outcome,
     };
 
@@ -421,10 +414,7 @@ async fn what_a_request_stored_is_handed_to_who_asks() {
         let again = archive.ingest(Bytes::from(series.slice_bytes(0))).await;
         let garbage = archive.ingest(Bytes::from_static(b"not DICOM")).await;
         let elsewhere = archive
-            .ingest_in_study(
-                Bytes::from(SyntheticSeries::new(33, 1).slice_bytes(0)),
-                "1.2.3",
-            )
+            .ingest_in_study(Bytes::from(RealSeries::new(33, 1).slice_bytes(0)), "1.2.3")
             .await;
         (again.is_ok(), garbage.is_err(), elsewhere.is_err())
     })
@@ -436,13 +426,13 @@ async fn what_a_request_stored_is_handed_to_who_asks() {
     let ((), stored) = stored_during(async {}).await;
     assert_eq!(stored, []);
     let alone = archive
-        .ingest(Bytes::from(SyntheticSeries::new(34, 1).slice_bytes(0)))
+        .ingest(Bytes::from(RealSeries::new(34, 1).slice_bytes(0)))
         .await;
     assert_eq!(alone.unwrap().outcome, Outcome::Added);
     // two requests at once keep their own
     let (first, second) = tokio::join!(
-        stored_during(archive.ingest(Bytes::from(SyntheticSeries::new(35, 1).slice_bytes(0)))),
-        stored_during(archive.ingest(Bytes::from(SyntheticSeries::new(36, 1).slice_bytes(0)))),
+        stored_during(archive.ingest(Bytes::from(RealSeries::new(35, 1).slice_bytes(0)))),
+        stored_during(archive.ingest(Bytes::from(RealSeries::new(36, 1).slice_bytes(0)))),
     );
     assert_eq!(first.1.len(), 1);
     assert_eq!(second.1.len(), 1);
@@ -456,7 +446,7 @@ async fn what_a_request_stored_is_handed_to_who_asks() {
 async fn a_project_s_archive_records_its_studies_and_takes_no_other_s() {
     let archive = uncompressed().await;
     let liver = archive.clone().for_project("liver");
-    let series = SyntheticSeries::new(71, 2);
+    let series = RealSeries::new(71, 2);
     let study = series.study_uid();
 
     liver
@@ -487,7 +477,7 @@ async fn a_project_s_archive_records_its_studies_and_takes_no_other_s() {
     assert_eq!(
         archive
             .index()
-            .study_statistics(&pacs_core::public_ids::study("SYN71", &study))
+            .study_statistics(&pacs_core::public_ids::study("NEMA-71", &study))
             .await
             .unwrap()
             .unwrap()
@@ -507,7 +497,7 @@ async fn a_project_s_archive_records_its_studies_and_takes_no_other_s() {
     );
 
     // once the study is deleted, it can come in the other way
-    let id = pacs_core::public_ids::study("SYN71", &study);
+    let id = pacs_core::public_ids::study("NEMA-71", &study);
     archive.delete(Level::Study, &id).await.unwrap().unwrap();
     archive
         .ingest(Bytes::from(series.slice_bytes(1)))
