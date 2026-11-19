@@ -3,6 +3,10 @@
 `scripts/bench.sh` against pacs-rs and the reference server (see [Comparing with a
 reference server](building.md#comparing-with-a-reference-server)), with the same client and the same files.
 
+The measurements below were made on a generated CT series and on files written byte by byte.
+That generator is gone: tests and scripts now run on real DICOM files and on alterations of
+them ([Building and testing](building.md)), and these figures are to be measured again on them.
+
 ## 2026-11-04: well-formed files that cost far more to read than their size
 
 At the allocator, the peak of reading an 8 MB file and making its metadata JSON
