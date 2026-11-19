@@ -1,14 +1,16 @@
-//! The Retrieve SCP (PS3.4 C.4.2.3): a C-MOVE on the Study Root Query/Retrieve Information
-//! Model (C.6.2), whose instances go to the Move Destination by C-STORE sub-operations on
-//! another association, which pacs-rs opens as a Storage SCU ([`crate::scu::store`]).
+//! The Retrieve SCP (PS3.4 C.4.2.3, C.4.3.3) on the Study Root Query/Retrieve Information
+//! Model (C.6.2). A C-MOVE's instances go to the Move Destination by C-STORE sub-operations
+//! on another association, which pacs-rs opens as a Storage SCU ([`crate::scu::store`]); a
+//! C-GET's go to the requester on the association of the C-GET itself, on the presentation
+//! contexts for which it took the SCP role (PS3.7 D.3.3.4, PS3.4 C.5.3).
 //!
 //! - **What is sent**: every instance under the Unique Keys of the Identifier
 //!   (C.4.2.1.4.1, C.6.2.1.5): studies, the series of one study, or the instances of one
 //!   series, a list of UID at the level of the retrieval and one value above it.
-//! - **Where**: to a destination of the configuration, by its AE title; any other is
-//!   Refused: Move Destination unknown (A801).
+//! - **Where**: for a C-MOVE, to a destination of the configuration, by its AE title; any
+//!   other is Refused: Move Destination unknown (A801).
 //! - **Responses**: a Pending one after each sub-operation with the Remaining, Completed,
-//!   Failed and Warning counts, then Success, Warning or Failure; a C-CANCEL-MOVE-RQ, looked
+//!   Failed and Warning counts, then Success, Warning or Failure; a C-CANCEL-RQ, looked
 //!   for between two sub-operations, ends with Cancel. Warning, Failure and Cancel name the
 //!   instances that failed (C.4.2.1.4.2).
 
@@ -17,7 +19,8 @@ use dicom_dictionary_std::tags;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::InMemDicomObject;
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::association::AsyncAssociation;
+use dicom_ul::association::{Association, AsyncAssociation};
+use dicom_ul::pdu::PresentationContextResultReason;
 use pacs_index::{Index, InstanceEntry, Kind, Match};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -25,16 +28,22 @@ use super::find::Level;
 use super::operation::{After, Interruption, Refusal, interruption, refusal};
 use super::{Destination, Request};
 use crate::ae::AeTitle;
-use crate::command::{self, Command, DATA_SET_PRESENT, tag};
-use crate::message::{self, DataSet, MessageError};
+use crate::command::{self, Command, DATA_SET_PRESENT, field, tag};
+use crate::message::{self, DataSet, Incoming, MessageError};
+use crate::query::STUDY_ROOT_GET;
 use crate::scu::retrieve::STUDY_ROOT_MOVE;
-use crate::scu::store::{Originator, Sender};
+use crate::scu::store::{Accepted, Originator, SendError, Sender, c_store_rq, encoded, stored};
 use crate::status::{Status, StatusClass};
 use crate::{Config, RemoteAe};
 
 /// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-MOVE on.
 pub(super) fn is_move(sop_class: &str) -> bool {
     sop_class == STUDY_ROOT_MOVE
+}
+
+/// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-GET on.
+pub(super) fn is_get(sop_class: &str) -> bool {
+    sop_class == STUDY_ROOT_GET
 }
 
 /// What a retrieval asks for: the Unique Keys of its Identifier (PS3.4 C.4.2.1.4.1).
@@ -296,19 +305,17 @@ where
     .await
 }
 
-/// What a C-MOVE needs before its first sub-operation, or why it has none: the instances
-/// to send and where.
-async fn prepare<'c>(
+/// The Unique Keys of the retrieval `operation` (its name, for an error) asks for, or why
+/// it is refused: a caller that may not retrieve, an Identifier that cannot be read or is
+/// not one of the model.
+fn selection(
     request: &Request<'_>,
-    command: &Command,
     data: DataSet,
-    index: &Index,
-    config: &'c Config,
     authorized: bool,
-    retrieved: &mut Retrieved,
-) -> Result<(Vec<InstanceEntry>, &'c RemoteAe), Refusal> {
+    operation: &str,
+) -> Result<Selection, Refusal> {
     if !authorized {
-        // PS3.7 9.1.4.1.7: the peer was not authorized to invoke the operation
+        // PS3.7 9.1.3.1.6, 9.1.4.1.7: the peer was not authorized to invoke the operation
         return Err(refusal(
             Status::NOT_AUTHORIZED,
             format!(
@@ -323,7 +330,7 @@ async fn prepare<'c>(
         DataSet::None => {
             return Err(refusal(
                 Status::IDENTIFIER_DOES_NOT_MATCH_SOP_CLASS,
-                "C-MOVE-RQ without an Identifier",
+                format!("{operation}-RQ without an Identifier"),
                 None,
             ));
         }
@@ -346,7 +353,38 @@ async fn prepare<'c>(
         .get(request.transfer_syntax)
         .ok_or_else(|| unreadable(format!("transfer syntax {}", request.transfer_syntax)))?;
     let identifier = crate::scu::read_identifier(&bytes, ts).map_err(unreadable)?;
-    let selection = Selection::parse(&identifier)?;
+    Selection::parse(&identifier)
+}
+
+/// The instances a retrieval sends, as `index` shows them; an index that fails is Refused:
+/// Out of resources, unable to calculate number of matches (PS3.4 Tables C.4-2, C.4-3).
+async fn selected(
+    selection: &Selection,
+    index: &Index,
+    operation: &str,
+) -> Result<Vec<InstanceEntry>, Refusal> {
+    selection.instances(index).await.map_err(|e| {
+        tracing::error!(error = %e, operation, "the index failed");
+        refusal(
+            Status::UNABLE_TO_CALCULATE_MATCHES,
+            "the index could not be read",
+            None,
+        )
+    })
+}
+
+/// What a C-MOVE needs before its first sub-operation, or why it has none: the instances
+/// to send and where.
+async fn prepare<'c>(
+    request: &Request<'_>,
+    command: &Command,
+    data: DataSet,
+    index: &Index,
+    config: &'c Config,
+    authorized: bool,
+    retrieved: &mut Retrieved,
+) -> Result<(Vec<InstanceEntry>, &'c RemoteAe), Refusal> {
+    let selection = selection(request, data, authorized, "C-MOVE")?;
     retrieved.destination = command
         .text(tag::MOVE_DESTINATION)
         .unwrap_or_default()
@@ -363,15 +401,26 @@ async fn prepare<'c>(
         ));
     };
     retrieved.destination_host = Some(destination.host.clone());
-    let instances = selection.instances(index).await.map_err(|e| {
-        tracing::error!(error = %e, "C-MOVE: the index failed");
-        refusal(
-            Status::UNABLE_TO_CALCULATE_MATCHES,
-            "the index could not be read",
-            None,
-        )
-    })?;
+    let instances = selected(&selection, index, "C-MOVE").await?;
     Ok((instances, destination))
+}
+
+/// Answer a request that is refused: its Failure status, with what is wrong and where.
+async fn refuse<A, S>(
+    association: &mut A,
+    request: &Request<'_>,
+    command: &Command,
+    refusal: &Refusal,
+) -> Result<(), MessageError>
+where
+    A: AsyncAssociation<S> + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let mut response = command::response(command, refusal.status, Some(&refusal.comment));
+    if let Some(tag) = refusal.offending {
+        response = response.with_tags(tag::OFFENDING_ELEMENT, &[tag]);
+    }
+    message::send(association, request.context_id, &response, None).await
 }
 
 /// Answer a C-MOVE-RQ on `association`: the sub-operations on an association of their own,
@@ -416,11 +465,7 @@ where
         Ok(prepared) => prepared,
         Err(refusal) => {
             retrieved.status = refusal.status;
-            let mut response = command::response(command, refusal.status, Some(&refusal.comment));
-            if let Some(tag) = refusal.offending {
-                response = response.with_tags(tag::OFFENDING_ELEMENT, &[tag]);
-            }
-            message::send(association, request.context_id, &response, None).await?;
+            refuse(association, request, command, &refusal).await?;
             return Ok(After::Open(retrieved));
         }
     };
@@ -549,6 +594,219 @@ where
         sender.abort().await;
     }
     retrieved.status = if cancelled {
+        Status::CANCEL
+    } else {
+        retrieved.counts.final_status()
+    };
+    finish(
+        association,
+        request,
+        command,
+        retrieved.status,
+        &retrieved.counts,
+        None,
+    )
+    .await?;
+    Ok(After::Open(retrieved))
+}
+
+/// What the requester of a C-GET did with one instance: stored it, with this status, or
+/// not; or it ended the association instead of answering.
+enum SubOperation {
+    Done(Result<Status, String>),
+    Released,
+    Aborted,
+}
+
+/// Send one instance to the requester of a C-GET on its own association, and wait for its
+/// C-STORE-RSP. A C-CANCEL-GET-RQ that comes meanwhile sets `cancelled`: the instance on
+/// its way is finished all the same.
+async fn sub_operation<A, S>(
+    association: &mut A,
+    accepted: &[Accepted],
+    file: bytes::Bytes,
+    entry: &InstanceEntry,
+    message_id: u16,
+    get_id: u16,
+    cancelled: &mut bool,
+) -> Result<SubOperation, MessageError>
+where
+    A: AsyncAssociation<S> + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let contexts = accepted.to_vec();
+    let (sop_class, stored_in) = (
+        entry.sop_class_uid.clone(),
+        entry.transfer_syntax_uid.clone(),
+    );
+    // decoding pixel data is work for another thread than the one that serves
+    let prepared =
+        tokio::task::spawn_blocking(move || encoded(&contexts, &file, &sop_class, &stored_in))
+            .await
+            .map_err(|e| MessageError::Protocol(e.to_string()))?;
+    let (context, data_set) = match prepared {
+        Ok(prepared) => prepared,
+        // PS3.4 C.4.3.3.1: no presentation context for it is a failed sub-operation
+        Err(e) => return Ok(SubOperation::Done(Err(e.to_string()))),
+    };
+    let request = c_store_rq(
+        message_id,
+        &entry.sop_class_uid,
+        &entry.sop_instance_uid,
+        None,
+    );
+    message::send(association, context, &request, Some(&data_set)).await?;
+    loop {
+        let message = match message::receive(association, 0).await? {
+            Incoming::Message(message) => message,
+            Incoming::Released => return Ok(SubOperation::Released),
+            Incoming::Aborted => return Ok(SubOperation::Aborted),
+        };
+        if message.command.command_field()? == field::C_CANCEL_RQ {
+            // a cancel of another operation has nothing to cancel
+            *cancelled |= message.command.us(tag::MESSAGE_ID_BEING_RESPONDED_TO)? == get_id;
+            continue;
+        }
+        return match stored(&message.command, message_id) {
+            Ok(status) => Ok(SubOperation::Done(Ok(status))),
+            Err(e @ SendError::Refused { .. }) => Ok(SubOperation::Done(Err(e.to_string()))),
+            Err(e) => Err(MessageError::Protocol(format!(
+                "{e} while a C-GET is being answered"
+            ))),
+        };
+    }
+}
+
+/// Answer a C-GET-RQ on `association`: the sub-operations on this same association, every
+/// Pending response and the final one (PS3.4 C.4.3.3.1).
+///
+/// `asked` and `authorized` are as for [`c_move`]. An instance goes on a presentation
+/// context of its SOP class for which the requester took the SCP role; with none, it is a
+/// failed sub-operation.
+pub(super) async fn c_get<A, S>(
+    association: &mut A,
+    request: &Request<'_>,
+    command: &Command,
+    data: DataSet,
+    asked: &Destination,
+    authorized: bool,
+) -> Result<After<Retrieved>, MessageError>
+where
+    A: AsyncAssociation<S> + Association + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let get_id = command.message_id()?;
+    let (archive, index) = (asked.archive(), asked.index());
+    let mut retrieved = Retrieved {
+        status: Status::SUCCESS,
+        counts: Counts::default(),
+        // what is retrieved goes to who asks
+        destination: request.calling.to_owned(),
+        destination_host: None,
+        sent: Vec::new(),
+    };
+    let instances = match selection(request, data, authorized, "C-GET") {
+        Ok(selection) => selected(&selection, &index, "C-GET").await,
+        Err(refusal) => Err(refusal),
+    };
+    let instances = match instances {
+        Ok(instances) => instances,
+        Err(refusal) => {
+            retrieved.status = refusal.status;
+            refuse(association, request, command, &refusal).await?;
+            return Ok(After::Open(retrieved));
+        }
+    };
+    retrieved.counts = Counts::of(instances.len());
+    // PS3.7 D.3.3.4: the contexts on which the requester is the Storage SCP
+    let accepted: Vec<Accepted> = association
+        .presentation_contexts()
+        .iter()
+        .filter(|pc| pc.reason == PresentationContextResultReason::Acceptance)
+        .map(|pc| Accepted {
+            id: pc.id,
+            abstract_syntax: pc.abstract_syntax.trim_end_matches('\0').to_owned(),
+            transfer_syntax: pc.transfer_syntax.trim_end_matches('\0').to_owned(),
+        })
+        .filter(|context| {
+            super::is_storage(&context.abstract_syntax)
+                && association
+                    .requestor_roles_for(&context.abstract_syntax)
+                    .scp
+        })
+        .collect();
+    let mut cancelled = false;
+    // the Message IDs of the sub-operations are not the C-GET's
+    let mut message_id = get_id;
+    for entry in &instances {
+        if !cancelled {
+            match interruption(association, get_id, "C-GET").await? {
+                Interruption::Nothing => {}
+                Interruption::Cancel => cancelled = true,
+                Interruption::Released => {
+                    retrieved.status = Status::CANCEL;
+                    return Ok(After::Released(retrieved));
+                }
+                Interruption::Aborted => {
+                    retrieved.status = Status::CANCEL;
+                    return Ok(After::Aborted(retrieved));
+                }
+            }
+        }
+        if cancelled {
+            break;
+        }
+        message_id = message_id.checked_add(1).unwrap_or(1);
+        if message_id == get_id {
+            message_id = message_id.checked_add(1).unwrap_or(1);
+        }
+        let outcome = match archive.file(entry).await {
+            Ok(file) => {
+                let done = sub_operation(
+                    association,
+                    &accepted,
+                    file,
+                    entry,
+                    message_id,
+                    get_id,
+                    &mut cancelled,
+                )
+                .await?;
+                match done {
+                    SubOperation::Done(outcome) => outcome,
+                    SubOperation::Released => {
+                        retrieved.status = Status::CANCEL;
+                        return Ok(After::Released(retrieved));
+                    }
+                    SubOperation::Aborted => {
+                        retrieved.status = Status::CANCEL;
+                        return Ok(After::Aborted(retrieved));
+                    }
+                }
+            }
+            Err(e) => Err(format!("its file cannot be read: {e}")),
+        };
+        match outcome {
+            Ok(status) => {
+                retrieved
+                    .counts
+                    .count(&entry.sop_instance_uid, Some(status));
+                retrieved.sent.push(Sent {
+                    study_instance_uid: entry.study_instance_uid.clone(),
+                    sop_class_uid: entry.sop_class_uid.clone(),
+                });
+            }
+            Err(reason) => {
+                tracing::warn!(instance = %entry.sop_instance_uid, reason, "C-GET: a sub-operation failed");
+                retrieved.counts.count(&entry.sop_instance_uid, None);
+            }
+        }
+        if retrieved.counts.remaining > 0 {
+            let pending = retrieved.counts.response(command, Status::PENDING, None);
+            message::send(association, request.context_id, &pending, None).await?;
+        }
+    }
+    retrieved.status = if cancelled && retrieved.counts.remaining > 0 {
         Status::CANCEL
     } else {
         retrieved.counts.final_status()

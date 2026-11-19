@@ -38,8 +38,8 @@
 //! | DICOM Instances Transferred | an association is over: one line per study stored through it by C-STORE, from the calling AE title to the called one |
 //! | Security Alert, Node Authentication | a connection that did not become an association: an AE title not recognized, the limit reached |
 //! | Query, of this server | a C-FIND it answered: the calling AE asks, with the Information Model as the SOP Class queried, the Identifier as sent and its transfer syntax |
-//! | DICOM Instances Transferred, from this server | a C-MOVE it answered: one line per study of what the destination stored, from the called AE title to the Move Destination, the calling AE as the requestor |
-//! | Security Alert, Access Control Decision | a C-FIND or a C-MOVE from an AE this server does not answer |
+//! | DICOM Instances Transferred, from this server | a C-MOVE or a C-GET it answered: one line per study of what the destination stored, from the called AE title to the Move Destination, the calling AE as the requestor; for a C-GET the calling AE is the destination |
+//! | Security Alert, Access Control Decision | a C-FIND, a C-MOVE or a C-GET from an AE this server does not answer |
 //! | Query | a remote AE searched by C-FIND (`GET /modalities/{id}/studies`): this server asks, the remote AE answers, the caller is the requestor |
 //! | Begin Transferring DICOM Instances | a remote AE asked by C-MOVE to send studies here (`POST /modalities/{id}/move`), one line per study; their arrival is the first event of this table |
 //!
@@ -383,20 +383,26 @@ impl pacs_dimse::Observer for Audit {
         let node = peer.address.ip().to_string();
         let mut asker = application(&peer.calling, Some(AccessPoint::Ip(node)));
         if retrieval.status == pacs_dimse::Status::NOT_AUTHORIZED {
-            self.not_answered(trail, peer, asker, "C-MOVE", retrieval.sop_class);
+            self.not_answered(trail, peer, asker, retrieval.operation, retrieval.sop_class);
             return;
         }
         asker.is_requestor = true;
+        // a C-GET sends to who asks, on its own association; a C-MOVE to a third AE
+        let to_the_asker = retrieval.destination_host.is_none();
         // what the destination stored: this server sent it, for the AE that asked
         for study in retrieval.studies {
             let sender = Participant::new(&trail.process, false)
                 .alternative(format!("AETITLES={}", peer.called));
-            let receiver = application(
-                retrieval.destination,
-                retrieval
-                    .destination_host
-                    .map(|host| AccessPoint::Machine(host.to_owned())),
-            );
+            let receiver = if to_the_asker {
+                asker.clone()
+            } else {
+                application(
+                    retrieval.destination,
+                    retrieval
+                        .destination_host
+                        .map(|host| AccessPoint::Machine(host.to_owned())),
+                )
+            };
             let mut message = events::instances_transferred(
                 &trail.source,
                 now,
@@ -418,9 +424,11 @@ impl pacs_dimse::Observer for Audit {
                         .collect(),
                 },
             );
-            // "other participants that are known, especially third parties that are the
-            // requestor" (A.5.3.7): the AE that asked for the move
-            message.participants.push(asker.clone());
+            if !to_the_asker {
+                // "other participants that are known, especially third parties that are
+                // the requestor" (A.5.3.7): the AE that asked for the move
+                message.participants.push(asker.clone());
+            }
             self.record(message);
         }
     }
