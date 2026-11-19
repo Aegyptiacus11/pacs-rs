@@ -9,13 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bytes::Bytes;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dicomweb::media::MediaType;
 use pacs_dicomweb::multipart;
 use pacs_server::{Settings, app, open_archive, serve};
 use serde_json::Value;
 
-const JPEG_LS: &str = "1.2.840.10008.1.2.4.80";
 const FRAMES_ACCEPT: &str = "multipart/related; type=application/octet-stream; transfer-syntax=*";
 const JSON: &str = "application/dicom+json";
 
@@ -438,10 +437,10 @@ async fn same_rest_answers_as_the_reference_server() {
         .as_secs()
         % 100_000) as u32
         + 100_000;
-    let big = SyntheticSeries::new(run * 10 + 6, 3);
-    let small = SyntheticSeries::new(run * 10 + 7, 2).in_study(run * 10 + 6, 2);
+    let big = RealSeries::new(run * 10 + 6, 3);
+    let small = RealSeries::new(run * 10 + 7, 2).in_study(run * 10 + 6, 2);
     // a second study of the same patient
-    let other = SyntheticSeries::new(run * 10 + 8, 1).for_patient(run * 10 + 6);
+    let other = RealSeries::new(run * 10 + 8, 1).for_patient(run * 10 + 6);
     let files: Vec<Vec<u8>> = big
         .all_bytes()
         .into_iter()
@@ -723,16 +722,16 @@ async fn same_answers_as_the_reference_server() {
     let seed = |n: u32| run * 10 + n;
     // a study of two series, a native multi-frame instance, an encapsulated one, and a
     // patient name in ISO 8859-1
-    let big = SyntheticSeries::new(seed(1), 3);
-    let small = SyntheticSeries::new(seed(2), 2).in_study(seed(1), 2);
-    let multiframe = SyntheticSeries::new(seed(3), 1);
-    let jls = SyntheticSeries::new(seed(4), 1);
-    let latin1 = SyntheticSeries::new(seed(5), 2).with_patient("MÜLLER^RENÉ", Some("ISO_IR 100"));
+    let big = RealSeries::new(seed(1), 3);
+    let small = RealSeries::new(seed(2), 2).in_study(seed(1), 2);
+    let multiframe = RealSeries::new(seed(3), 1);
+    let jls = RealSeries::new(seed(4), 1);
+    let latin1 = RealSeries::new(seed(5), 2).with_patient("MÜLLER^RENÉ", Some("ISO_IR 100"));
     let mut files = big.all_bytes();
     files.extend(small.all_bytes());
     files.extend(latin1.all_bytes());
-    files.push(multiframe.multiframe_bytes(0, 3));
-    files.push(jls.encapsulated_bytes(0, JPEG_LS, 2, vec![], vec![vec![7u8; 6], vec![9u8; 10]]));
+    files.push(multiframe.multiframe_bytes(0));
+    files.push(jls.jpeg_ls_multiframe_bytes(0));
 
     let (r, p) = (reference.stow(&files).await, pacs.stow(&files).await);
     if report.status("STOW", &r, &p) {
@@ -833,7 +832,7 @@ async fn same_answers_as_the_reference_server() {
         }
     }
 
-    let frames = |s: &SyntheticSeries, list: &str| {
+    let frames = |s: &RealSeries, list: &str| {
         format!(
             "/studies/{}/series/{}/instances/{}/frames/{list}",
             s.study_uid(),

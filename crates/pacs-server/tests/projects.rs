@@ -6,7 +6,7 @@ use std::path::Path;
 
 use clap::Parser;
 use dicom_ul::ClientAssociationOptions;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dimse::command::{Command, PRIORITY_MEDIUM, field, tag};
 use pacs_dimse::message::{self, Incoming};
 use pacs_server::projects::{open_projects, project_configs, secret_variable};
@@ -156,7 +156,7 @@ async fn an_instance_sent_to_a_project_is_served_de_identified() {
         std::future::pending(),
     ));
 
-    let series = SyntheticSeries::new(111, 1);
+    let series = RealSeries::new(111, 1);
     let file = series.slice_bytes(0);
     let meta = u32::from_le_bytes(file[140..144].try_into().unwrap()) as usize;
     let mut association = ClientAssociationOptions::new()
@@ -234,7 +234,7 @@ async fn an_instance_sent_to_a_project_is_served_de_identified() {
     for identified in [
         series.study_uid(),
         series.patient_id(),
-        "SYNTHETIC".to_owned(),
+        "CompressedSamples".to_owned(),
     ] {
         assert!(
             !audited.contains(&identified),
