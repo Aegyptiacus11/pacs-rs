@@ -527,3 +527,192 @@ impl Client {
         retrieval
     }
 }
+
+/// One instance a client was sent by a C-GET.
+pub struct Got {
+    /// The C-STORE-RQ it came in.
+    pub command: Command,
+    pub transfer_syntax: String,
+    pub data_set: Vec<u8>,
+}
+
+impl Got {
+    pub fn object(&self) -> dicom_object::InMemDicomObject {
+        use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+        let ts = dicom_transfer_syntax_registry::TransferSyntaxRegistry
+            .get(&self.transfer_syntax)
+            .unwrap();
+        dicom_object::InMemDicomObject::read_dataset_with_ts(&*self.data_set, ts).unwrap()
+    }
+}
+
+/// What a client answers the instances a C-GET sends it with.
+pub enum Answering {
+    /// The next of these statuses for each, Success once they are used up.
+    With(&'static [u16]),
+    /// Success; and before answering instance number this (from 1), a C-CANCEL-GET-RQ.
+    CancellingAt(usize),
+    /// Instead of answering the first instance, a C-ECHO-RQ.
+    AskingSomethingElse,
+}
+
+pub fn c_get_rq(message_id: u16, sop_class: &str) -> Command {
+    Command::new()
+        .with_ui(tag::AFFECTED_SOP_CLASS_UID, sop_class)
+        .with_us(tag::COMMAND_FIELD, field::C_GET_RQ)
+        .with_us(tag::MESSAGE_ID, message_id)
+        .with_us(tag::PRIORITY, PRIORITY_MEDIUM)
+        .with_us(tag::COMMAND_DATA_SET_TYPE, 0x0102)
+}
+
+impl Client {
+    /// As [`Client::connect`], and for each of `storage` a presentation context on which
+    /// this client proposes to be the SCP as well (PS3.7 D.3.3.4), to be sent instances.
+    pub async fn connect_receiving(
+        addr: SocketAddr,
+        calling: &str,
+        called: &str,
+        abstract_syntaxes: &[&str],
+        storage: &[&str],
+        transfer_syntaxes: &[&str],
+    ) -> Result<Client, dicom_ul::association::Error> {
+        let mut options = ClientAssociationOptions::new()
+            .calling_ae_title(calling.to_owned())
+            .called_ae_title(called.to_owned())
+            .read_timeout(Duration::from_secs(10));
+        for syntax in abstract_syntaxes.iter().chain(storage) {
+            options = options.with_presentation_context(
+                syntax.to_string(),
+                transfer_syntaxes.iter().map(|t| t.to_string()).collect(),
+            );
+        }
+        for sop_class in storage {
+            options = options.with_role_selection(sop_class.to_string(), true, true);
+        }
+        let association = options.establish_async(addr).await?;
+        Ok(Client {
+            association,
+            next_id: 1,
+        })
+    }
+
+    /// A C-GET of `identifier` on `sop_class`, to its final response: the retrieval's
+    /// responses and the instances that came with it, each answered as `answering` says.
+    /// `None` when the association ended instead.
+    pub async fn c_get(
+        &mut self,
+        sop_class: &str,
+        identifier: &dicom_object::InMemDicomObject,
+        answering: Answering,
+    ) -> Option<(Retrieval, Vec<Got>)> {
+        let ts = self.transfer_syntax(sop_class);
+        let mut bytes = Vec::new();
+        identifier.write_dataset_with_ts(&mut bytes, ts).unwrap();
+        let id = self.message_id();
+        let context = self.context(sop_class);
+        message::send(
+            &mut self.association,
+            context,
+            &c_get_rq(id, sop_class),
+            Some(&bytes),
+        )
+        .await
+        .unwrap();
+        let mut statuses = match &answering {
+            Answering::With(statuses) => statuses.iter(),
+            _ => [].iter(),
+        };
+        let (mut pending, mut got) = (Vec::new(), Vec::new());
+        loop {
+            let message = match message::receive(&mut self.association, 1 << 24).await {
+                Ok(Incoming::Message(message)) => message,
+                _ => return None,
+            };
+            if message.command.command_field() == Ok(field::C_STORE_RQ) {
+                let DataSet::Received(data_set) = message.data else {
+                    panic!("a C-STORE-RQ without a data set");
+                };
+                let transfer_syntax = self
+                    .association
+                    .presentation_contexts()
+                    .iter()
+                    .find(|pc| pc.id == message.context_id)
+                    .expect("a C-STORE-RQ on a context that was accepted")
+                    .transfer_syntax
+                    .clone();
+                let status = statuses.next().copied().unwrap_or(0x0000);
+                let response = pacs_dimse::command::response(
+                    &message.command,
+                    pacs_dimse::Status(status),
+                    None,
+                );
+                got.push(Got {
+                    command: message.command,
+                    transfer_syntax,
+                    data_set,
+                });
+                match answering {
+                    Answering::CancellingAt(n) if n == got.len() => {
+                        let cancel = Command::new()
+                            .with_us(tag::COMMAND_FIELD, field::C_CANCEL_RQ)
+                            .with_us(tag::MESSAGE_ID_BEING_RESPONDED_TO, id)
+                            .with_us(tag::COMMAND_DATA_SET_TYPE, NO_DATA_SET);
+                        message::send(&mut self.association, context, &cancel, None)
+                            .await
+                            .unwrap();
+                    }
+                    Answering::AskingSomethingElse => {
+                        let echo = self.context(pacs_dimse::VERIFICATION);
+                        message::send(
+                            &mut self.association,
+                            echo,
+                            &pacs_dimse::command::c_echo_rq(999),
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                        continue;
+                    }
+                    _ => {}
+                }
+                message::send(&mut self.association, message.context_id, &response, None)
+                    .await
+                    .unwrap();
+                continue;
+            }
+            assert_eq!(message.command.command_field(), Ok(field::C_GET_RSP));
+            assert_eq!(
+                message.command.us(tag::MESSAGE_ID_BEING_RESPONDED_TO),
+                Ok(id)
+            );
+            let status = message.command.status().unwrap();
+            if status.class() == pacs_dimse::StatusClass::Pending {
+                assert_eq!(message.data, DataSet::None);
+                pending.push(message.command);
+                continue;
+            }
+            let failed = match message.data {
+                DataSet::Received(bytes) => {
+                    dicom_object::InMemDicomObject::read_dataset_with_ts(&*bytes, ts)
+                        .unwrap()
+                        .get(dicom_dictionary_std::tags::FAILED_SOP_INSTANCE_UID_LIST)
+                        .unwrap()
+                        .to_multi_str()
+                        .unwrap()
+                        .iter()
+                        .map(|uid| uid.trim_end_matches(['\0', ' ']).to_owned())
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            return Some((
+                Retrieval {
+                    pending,
+                    last: message.command,
+                    failed,
+                },
+                got,
+            ));
+        }
+    }
+}
