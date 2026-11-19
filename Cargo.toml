@@ -86,3 +86,11 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 lto = true
 codegen-units = 1
 strip = true
+
+# Keep target/ small: our crates get file and line numbers in backtraces, dependencies get no
+# debug info. Full debug info for 400+ crates filled target/ with over 100 GB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
