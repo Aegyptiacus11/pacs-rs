@@ -66,11 +66,15 @@ pub struct Queried<'a> {
 /// A retrieval that was answered, or refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Retrieved<'a> {
-    /// The Query/Retrieve Information Model asked: the C-MOVE's SOP Class UID.
+    /// `C-MOVE` or `C-GET`.
+    pub operation: &'static str,
+    /// The Query/Retrieve Information Model asked: the request's SOP Class UID.
     pub sop_class: &'a str,
-    /// The AE title the instances were to go to: the Move Destination, as it was named.
+    /// The AE title the instances were to go to: the Move Destination as it was named,
+    /// or for a C-GET the AE that asked.
     pub destination: &'a str,
-    /// Its host, when it is a destination this server sends to.
+    /// Its host, when it is a destination this server sends to; none for a C-GET, whose
+    /// destination is the peer itself.
     pub destination_host: Option<&'a str>,
     /// The final status.
     pub status: Status,
@@ -93,7 +97,7 @@ pub struct SentStudy {
 pub trait Observer: Send + Sync + std::fmt::Debug {
     /// A C-FIND is over.
     fn queried(&self, peer: &Peer, query: &Queried<'_>);
-    /// A C-MOVE is over.
+    /// A C-MOVE or a C-GET is over.
     fn retrieved(&self, peer: &Peer, retrieval: &Retrieved<'_>);
     /// The association is over, and these instances were stored through it, in order.
     /// Never called with none.
@@ -153,10 +157,7 @@ impl Scp {
             .unwrap_or(&self.destination)
     }
 
-    fn options(
-        &self,
-    ) -> ServerAssociationOptions<'static, Titles, dicom_ul::association::server::DefaultNegotiation>
-    {
+    fn options(&self) -> ServerAssociationOptions<'static, Titles, Roles> {
         let mut accepted = vec![self.config.ae_title.clone()];
         accepted.extend(self.config.extra_ae_titles.iter().cloned());
         accepted.extend(self.routes.iter().map(|(title, _)| title.clone()));
@@ -174,7 +175,9 @@ impl Scp {
             .write_timeout(self.config.timeout)
             .with_abstract_syntax(VERIFICATION)
             .with_abstract_syntax(crate::query::STUDY_ROOT_FIND)
-            .with_abstract_syntax(crate::scu::retrieve::STUDY_ROOT_MOVE);
+            .with_abstract_syntax(crate::scu::retrieve::STUDY_ROOT_MOVE)
+            .with_abstract_syntax(crate::query::STUDY_ROOT_GET)
+            .with_negotiation(Roles);
         for (uid, _) in crate::sop_classes::STORAGE {
             options = options.with_abstract_syntax(*uid);
         }
@@ -226,11 +229,7 @@ impl Scp {
 
     async fn association(
         &self,
-        options: &ServerAssociationOptions<
-            'static,
-            Titles,
-            dicom_ul::association::server::DefaultNegotiation,
-        >,
+        options: &ServerAssociationOptions<'static, Titles, Roles>,
         socket: TcpStream,
         peer: std::net::SocketAddr,
     ) {
@@ -349,7 +348,7 @@ impl Scp {
         open
     }
 
-    /// Answer a C-MOVE and tell the observer. Whether the association goes on.
+    /// Answer a C-MOVE or a C-GET and tell the observer. Whether the association goes on.
     async fn retrieve<A, S>(
         &self,
         association: &mut A,
@@ -365,27 +364,42 @@ impl Scp {
     {
         let calling = request.calling;
         let index = destination.index();
-        let after = retrieve::c_move(
-            association,
-            request,
-            command,
-            identifier,
-            destination,
-            &self.config,
-            self.answers_queries_of(calling),
-        )
-        .await;
+        let authorized = self.answers_queries_of(calling);
+        let get = retrieve::is_get(request.abstract_syntax);
+        let operation = if get { "C-GET" } else { "C-MOVE" };
+        let after = if get {
+            retrieve::c_get(
+                association,
+                request,
+                command,
+                identifier,
+                destination,
+                authorized,
+            )
+            .await
+        } else {
+            retrieve::c_move(
+                association,
+                request,
+                command,
+                identifier,
+                destination,
+                &self.config,
+                authorized,
+            )
+            .await
+        };
         let (retrieved, open) = match after {
             Ok(After::Open(retrieved)) => (retrieved, true),
             Ok(After::Released(retrieved) | After::Aborted(retrieved)) => (retrieved, false),
             Err(e) => {
-                tracing::warn!(%peer, calling, error = %e, "association aborted during a C-MOVE");
+                tracing::warn!(%peer, calling, operation, error = %e, "association aborted during a retrieval");
                 let _ = association.abort().await;
                 return false;
             }
         };
         let counts = &retrieved.counts;
-        tracing::info!(%peer, calling, called = request.called, destination = %retrieved.destination, status = %retrieved.status, completed = counts.completed, failed = counts.failed, warning = counts.warning, remaining = counts.remaining, "C-MOVE");
+        tracing::info!(%peer, calling, called = request.called, destination = %retrieved.destination, status = %retrieved.status, completed = counts.completed, failed = counts.failed, warning = counts.warning, remaining = counts.remaining, "{operation}");
         if let Some(observer) = &self.observer {
             let studies = sent_studies(&index, &retrieved.sent).await;
             observer.retrieved(
@@ -395,6 +409,7 @@ impl Scp {
                     called: request.called.to_owned(),
                 },
                 &Retrieved {
+                    operation,
                     sop_class: request.abstract_syntax,
                     destination: &retrieved.destination,
                     destination_host: retrieved.destination_host.as_deref(),
@@ -404,7 +419,7 @@ impl Scp {
             );
         }
         if !open {
-            tracing::info!(%peer, calling, "association ended by the peer during a C-MOVE");
+            tracing::info!(%peer, calling, operation, "association ended by the peer during a retrieval");
         }
         open
     }
@@ -467,7 +482,7 @@ impl Scp {
                                 }
                                 break;
                             }
-                            Handled::Move(identifier) => {
+                            Handled::Retrieve(identifier) => {
                                 let open = self
                                     .retrieve(
                                         &mut association,
@@ -560,6 +575,27 @@ async fn sent_studies(index: &pacs_index::Index, sent: &[retrieve::Sent]) -> Vec
     studies
 }
 
+/// SCP/SCU Role Selection (PS3.7 D.3.3.4): for a Storage SOP class the requester may be
+/// the SCP as well as, or instead of, the SCU, which is how it receives what a C-GET sends
+/// (PS3.4 C.5.3). Whatever it proposes for one is accepted; for any other SOP class no item
+/// is returned, and the default roles hold.
+#[derive(Debug, Clone, Copy)]
+pub struct Roles;
+
+impl dicom_ul::association::server::Negotiation for Roles {
+    fn negotiate_roles(
+        &self,
+        sop_class_uid: &str,
+        scu_role: bool,
+        scp_role: bool,
+    ) -> Option<dicom_ul::pdu::RequestorRoles> {
+        is_storage(sop_class_uid.trim_end_matches('\0')).then_some(dicom_ul::pdu::RequestorRoles {
+            scu: scu_role,
+            scp: scp_role,
+        })
+    }
+}
+
 /// Accepted when the called AE title is one of pacs-rs's and, with `callers` set, the
 /// calling AE title is one of those (PS3.8 Table 9-21, reasons 7 and 3).
 #[derive(Debug, Clone)]
@@ -633,9 +669,9 @@ enum Handled {
     /// A C-FIND-RQ with this Identifier, which the Query SCP answers with as many
     /// responses as it has matches.
     Find(DataSet),
-    /// A C-MOVE-RQ with this Identifier, which the Retrieve SCP answers as its
-    /// sub-operations go.
-    Move(DataSet),
+    /// A C-MOVE-RQ or a C-GET-RQ with this Identifier, which the Retrieve SCP answers as
+    /// its sub-operations go.
+    Retrieve(DataSet),
     Abort(&'static str),
 }
 
@@ -685,14 +721,15 @@ async fn handle(
             respond(status, comment.as_deref())
         }
         field::C_FIND_RQ if find::is_find(affected) => Handled::Find(data),
-        field::C_MOVE_RQ if retrieve::is_move(affected) => Handled::Move(data),
+        field::C_MOVE_RQ if retrieve::is_move(affected) => Handled::Retrieve(data),
+        field::C_GET_RQ if retrieve::is_get(affected) => Handled::Retrieve(data),
         // PS3.7 9.1.5.1.4, 9.1.1.1.9: an operation the SOP class does not have, or one
         // pacs-rs does not provide.
         _ => respond(Status::UNRECOGNIZED_OPERATION, None),
     }
 }
 
-fn is_storage(sop_class: &str) -> bool {
+pub(crate) fn is_storage(sop_class: &str) -> bool {
     crate::sop_classes::STORAGE
         .iter()
         .any(|(uid, _)| *uid == sop_class)
@@ -702,6 +739,7 @@ fn is_supported(sop_class: &str) -> bool {
     sop_class == VERIFICATION
         || find::is_find(sop_class)
         || retrieve::is_move(sop_class)
+        || retrieve::is_get(sop_class)
         || is_storage(sop_class)
 }
 

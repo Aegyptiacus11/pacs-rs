@@ -1287,6 +1287,100 @@ async fn a_move_asked_over_dimse_is_in_the_audit_trail() {
     audit_lines(dir.path(), 2).await;
 }
 
+/// A study retrieved by C-GET, on the association that asks: the trail has what the
+/// requester stored, sent to it by this server, the requester being the destination.
+#[tokio::test]
+async fn a_get_asked_over_dimse_is_in_the_audit_trail() {
+    const GET: &str = "1.2.840.10008.5.1.4.1.2.2.3";
+    let dir = tempfile::tempdir().unwrap();
+    let settings = audited_settings(
+        dir.path(),
+        &["--dimse-remotes", "viewer=VIEWER@127.0.0.1:11112"],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let series = SyntheticSeries::new(73, 2).with_patient("DOE^JANE", None);
+    for bytes in series.all_bytes() {
+        archive.ingest(bytes.into()).await.unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(pacs_server::serve_dimse_audited(
+        listener,
+        archive,
+        dimse_config(&settings).unwrap(),
+        Vec::new(),
+        pacs_server::audit::open_audit(&settings).unwrap(),
+        std::future::pending(),
+    ));
+
+    // the requester proposes to be the Storage SCP of CT (PS3.7 D.3.3.4)
+    let mut association = ClientAssociationOptions::new()
+        .calling_ae_title("VIEWER")
+        .called_ae_title("PACSRS")
+        .with_presentation_context(GET, vec!["1.2.840.10008.1.2.1"])
+        .with_presentation_context(CT, vec!["1.2.840.10008.1.2.1"])
+        .with_role_selection(CT, true, true)
+        .establish_async(addr)
+        .await
+        .unwrap();
+    let context = association.presentation_contexts()[0].id;
+    // (0008,0052) CS "STUDY " and (0020,000D) UI, in Explicit VR Little Endian
+    let mut uid = series.study_uid().into_bytes();
+    if uid.len() % 2 == 1 {
+        uid.push(0);
+    }
+    let mut identifier = vec![0x08, 0x00, 0x52, 0x00, b'C', b'S', 6, 0];
+    identifier.extend_from_slice(b"STUDY ");
+    identifier.extend_from_slice(&[0x20, 0x00, 0x0D, 0x00, b'U', b'I', uid.len() as u8, 0]);
+    identifier.extend_from_slice(&uid);
+    let rq = Command::new()
+        .with_ui(tag::AFFECTED_SOP_CLASS_UID, GET)
+        .with_us(tag::COMMAND_FIELD, field::C_GET_RQ)
+        .with_us(tag::MESSAGE_ID, 1)
+        .with_us(tag::PRIORITY, PRIORITY_MEDIUM)
+        .with_us(tag::COMMAND_DATA_SET_TYPE, 0x0102);
+    message::send(&mut association, context, &rq, Some(&identifier))
+        .await
+        .unwrap();
+    let mut stored = 0;
+    let last = loop {
+        let Incoming::Message(got) = message::receive(&mut association, 1 << 20).await.unwrap()
+        else {
+            panic!("the association ended");
+        };
+        if got.command.command_field() == Ok(field::C_STORE_RQ) {
+            stored += 1;
+            let rsp =
+                pacs_dimse::command::response(&got.command, pacs_dimse::Status::SUCCESS, None);
+            message::send(&mut association, got.context_id, &rsp, None)
+                .await
+                .unwrap();
+        } else if got.command.status().unwrap().class() != pacs_dimse::StatusClass::Pending {
+            break got.command;
+        }
+    };
+    assert_eq!(last.status(), Ok(pacs_dimse::Status::SUCCESS));
+    assert_eq!(stored, 2);
+    association.release().await.unwrap();
+
+    let lines = audit_lines(dir.path(), 1).await;
+    has(
+        &lines[0],
+        &[
+            "<EventID csd-code=\"110104\"",
+            "EventActionCode=\"R\"",
+            "AlternativeUserID=\"AETITLES=PACSRS\" UserIsRequestor=\"false\"><RoleIDCode csd-code=\"110153\"",
+            // the AE that asked is the one that received
+            "<ActiveParticipant UserID=\"VIEWER\" AlternativeUserID=\"AETITLES=VIEWER\" UserIsRequestor=\"true\" NetworkAccessPointID=\"127.0.0.1\" NetworkAccessPointTypeCode=\"2\"><RoleIDCode csd-code=\"110152\"",
+            &format!("ParticipantObjectID=\"{}\"", series.study_uid()),
+            &format!("<SOPClass UID=\"{CT}\" NumberOfInstances=\"2\"/>"),
+            "<ParticipantObjectName>DOE^JANE</ParticipantObjectName>",
+        ],
+    );
+    // two participants, no third
+    assert_eq!(lines[0].matches("<ActiveParticipant ").count(), 2);
+}
+
 #[tokio::test]
 async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
     use pacs_server::app_with_audit;

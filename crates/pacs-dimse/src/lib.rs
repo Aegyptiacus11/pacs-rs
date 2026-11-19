@@ -1,5 +1,5 @@
 //! DIMSE for pacs-rs, on dicom-ul's associations: C-ECHO, C-STORE, C-FIND and C-MOVE, each
-//! as SCP and as SCU.
+//! as SCP and as SCU, and C-GET as SCP.
 //!
 //! Behaviour follows DICOM 2026d: messages and statuses from PS3.7 (6.3, 9.1, 9.3, Annexes
 //! C and E), the Verification, Storage and Query/Retrieve Service Classes from PS3.4 (Annexes

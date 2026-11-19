@@ -12,6 +12,9 @@ use dicom_object::InMemDicomObject;
 /// Study Root Query/Retrieve Information Model - FIND (PS3.4 C.6.2.3).
 pub const STUDY_ROOT_FIND: &str = "1.2.840.10008.5.1.4.1.2.2.1";
 
+/// Study Root Query/Retrieve Information Model - GET (PS3.4 C.6.2.3).
+pub const STUDY_ROOT_GET: &str = "1.2.840.10008.5.1.4.1.2.2.3";
+
 /// What to search a remote archive's studies by. Every key left out matches anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StudyQuery {
