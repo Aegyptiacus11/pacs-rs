@@ -976,3 +976,148 @@ async fn stow_reads_un_and_refuses_a_lying_length() {
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(reply.json()[0]["00081110"]["vr"], "SQ");
 }
+
+/// The same answer in what a client reads of it: the boundary of a multipart body is new
+/// at each answer, its parts are not.
+fn assert_same_answer(alone: &Reply, whole: &Reply, what: &str) {
+    assert_eq!(alone.status, whole.status, "{what}");
+    // (the validator is not compared: it holds when each archive received the file)
+    assert_eq!(
+        alone.header("cache-control"),
+        whole.header("cache-control"),
+        "{what}"
+    );
+    if whole.status != StatusCode::OK {
+        assert_eq!(alone.json(), whole.json(), "{what}");
+    } else if whole.content_type.starts_with("multipart/") {
+        assert_eq!(alone.parts(), whole.parts(), "{what}");
+        assert!(!whole.parts().is_empty(), "{what}");
+    } else {
+        assert_eq!(alone.content_type, whole.content_type, "{what}");
+        assert_eq!(alone.body, whole.body, "{what}");
+    }
+}
+
+#[tokio::test]
+async fn frames_read_alone_are_answered_as_frames_cut_from_the_file() {
+    // one archive cuts every frame from the whole file, as for the small files of the other
+    // tests; the other reads frames alone, as for large files
+    let whole = app().await;
+    let alone = router(
+        Archive::new(Store::memory(), Index::in_memory().await.unwrap())
+            .with_compression(Compression::Off)
+            .with_frames_alone_from(0),
+        Config::default(),
+    );
+    let fragments = RealSeries::jpeg_ls_frames();
+    let (head, tail) = fragments[0].split_at(1000);
+    let three = vec![head.to_vec(), tail.to_vec(), fragments[1].clone()];
+    let offset = (8 + head.len() + 8 + tail.len()) as u32;
+    let unaltered = |seed| RealSeries::new(seed, 1);
+    let altered = |seed, table: Vec<u32>, fragments: &[Vec<u8>]| {
+        let series = RealSeries::new(seed, 1);
+        let file = series.refragmented(0, 2, table, fragments.to_vec());
+        (series, file)
+    };
+    // the first codestream cut short: a frame that does not decode
+    let cut = [fragments[0][..1000].to_vec(), fragments[1].clone()];
+    let (native, jls, single) = (unaltered(91), unaltered(92), unaltered(93));
+    let (tabled, tabled_file) = altered(94, vec![0, offset], &three);
+    let (untabled, untabled_file) = altered(95, vec![], &three);
+    let (mistabled, mistabled_file) = altered(96, vec![0, offset - 4], &three);
+    let (cut, cut_file) = altered(97, vec![], &cut);
+    let files: Vec<(&str, RealSeries, Vec<u8>)> = vec![
+        ("native", native.clone(), native.multiframe_bytes(0)),
+        (
+            "a fragment a frame",
+            jls.clone(),
+            jls.jpeg_ls_multiframe_bytes(0),
+        ),
+        ("one frame", single.clone(), single.slice_bytes(0)),
+        ("an offset table", tabled, tabled_file),
+        ("no table to go by", untabled, untabled_file),
+        ("a wrong offset table", mistabled, mistabled_file),
+        ("a codestream cut short", cut, cut_file),
+    ];
+    for app in [&whole, &alone] {
+        let sent = files.iter().map(|(_, _, file)| file.clone()).collect();
+        assert_eq!(stow(app, "/studies", sent).await.status, StatusCode::OK);
+    }
+
+    let uncompressed = r#"multipart/related; type="application/octet-stream""#;
+    let mut answered = 0;
+    for (name, series, _) in &files {
+        for list in ["1", "2", "2,1", "10", "3,1,3", "11", "0", "1,11", "x"] {
+            for accept in [CORNERSTONE_FRAMES, uncompressed, "application/octet-stream"] {
+                let uri = format!(
+                    "/studies/{}/series/{}/instances/{}/frames/{list}",
+                    series.study_uid(),
+                    series.series_uid(),
+                    series.instance_uid(0)
+                );
+                let what = format!("{name}: frames {list} as {accept}");
+                let from_whole = get(&whole, &uri, accept).await;
+                let from_alone = get(&alone, &uri, accept).await;
+                assert_same_answer(&from_alone, &from_whole, &what);
+                answered += usize::from(from_whole.status == StatusCode::OK);
+                // and again, by the layout the first request left
+                let again = get(&alone, &uri, accept).await;
+                assert_same_answer(&again, &from_whole, &what);
+            }
+        }
+    }
+    assert!(answered > 40, "{answered} requests answered with frames");
+}
+
+#[tokio::test]
+async fn a_frame_of_a_large_file_is_read_without_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router(
+        Archive::new(
+            Store::local(dir.path(), "").unwrap(),
+            Index::in_memory().await.unwrap(),
+        )
+        .with_compression(Compression::Off)
+        .with_frames_alone_from(0),
+        Config::default(),
+    );
+    let series = RealSeries::new(98, 1);
+    let file = series.multiframe_bytes(0);
+    assert_eq!(
+        stow(&app, "/studies", vec![file.clone()]).await.status,
+        StatusCode::OK
+    );
+    // the stored file with nothing left of its pixel data but frame 3
+    let frame_len = le_bytes(&RealSeries::frame_pixels(0)).len();
+    let pixel_data = file.len() - frame_len * RealSeries::FRAMES as usize;
+    let third = pixel_data + 2 * frame_len..pixel_data + 3 * frame_len;
+    let mut holed = file.clone();
+    holed[pixel_data..third.start].fill(0);
+    holed[third.end..].fill(0);
+    let path = dir
+        .path()
+        .join(series.study_uid())
+        .join(series.series_uid())
+        .join(format!("{}.dcm", series.instance_uid(0)));
+    assert_eq!(std::fs::read(&path).unwrap(), file);
+    std::fs::write(&path, &holed).unwrap();
+
+    let frame = |number: u32| {
+        format!(
+            "/studies/{}/series/{}/instances/{}/frames/{number}",
+            series.study_uid(),
+            series.series_uid(),
+            series.instance_uid(0)
+        )
+    };
+    let reply = get(&app, &frame(3), CORNERSTONE_FRAMES).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(
+        reply.parts()[0].content,
+        le_bytes(&RealSeries::frame_pixels(2))
+    );
+    // the file is gone: reading the whole file reports it, as it did before
+    std::fs::remove_file(&path).unwrap();
+    let reply = get(&app, &frame(4), CORNERSTONE_FRAMES).await;
+    assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+}
