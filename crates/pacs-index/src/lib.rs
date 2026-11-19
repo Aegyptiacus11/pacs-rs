@@ -53,7 +53,7 @@ pub use matching::{Kind, Match};
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
 pub use roles::StoredRole;
-pub use search::{Key, StudySearch, first_value};
+pub use search::{Key, StudyCursor, StudySearch, first_value};
 pub use seen::SeenBy;
 pub use users::{StoredUser, UserChange};
 pub use worklist::{
