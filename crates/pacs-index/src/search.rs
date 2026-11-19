@@ -42,12 +42,7 @@ pub const MODALITIES_IN_STUDY: &str = "00080061";
 /// The first value of an attribute in DICOM JSON, as text: a string, a number, or the
 /// alphabetic group of a person name.
 pub fn first_value(attributes: &Value, tag: &str) -> Option<String> {
-    match attributes.get(tag)?.get("Value")?.get(0)? {
-        Value::String(text) => Some(text.clone()),
-        Value::Number(number) => Some(number.to_string()),
-        Value::Object(name) => name.get("Alphabetic")?.as_str().map(str::to_owned),
-        _ => None,
-    }
+    crate::matching::values(attributes, tag).into_iter().next()
 }
 
 /// `text` as a LIKE pattern that matches itself: `%`, `_` and the escape, escaped.
@@ -129,6 +124,8 @@ fn narrowing(key: &Key, sql: &mut Sql) -> Option<String> {
             format!("({})", ends.join(" AND "))
         }
         (Match::Between(..), _) => return None,
+        // no column holds a sequence
+        (Match::Item(_), _) => return None,
     })
 }
 
@@ -182,8 +179,7 @@ fn answers(study: &Study, search: &StudySearch) -> bool {
                 .iter()
                 .any(|modality| key.asked.matches(key.kind, Some(modality)));
         }
-        let stored = first_value(&study.attributes, key.tag);
-        key.asked.matches(key.kind, stored.as_deref())
+        key.asked.answered_by(key.kind, &study.attributes, key.tag)
     })
 }
 
