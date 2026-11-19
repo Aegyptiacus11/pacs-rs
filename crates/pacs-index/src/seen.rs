@@ -5,6 +5,10 @@
 //! the studies of its projects only, and never a study that is in no project. An
 //! [`Index`] value made by [`Index::limited_to`] reads within those bounds: every read of
 //! the hierarchy leaves out what the account may not see, as if it were not in the index.
+//!
+//! A project is an account too, under the key of [`Index::project_account`]: it sees its
+//! own studies and nothing else, with nothing to set. It is who a DICOM application is
+//! when it calls a project's AE title, since DIMSE has no accounts of its own.
 
 use std::sync::Arc;
 
@@ -24,6 +28,12 @@ impl Index {
             account: Some(Arc::from(account)),
             ..self.clone()
         }
+    }
+
+    /// The key of the account that sees the studies of `project` and no other. A user's
+    /// key starts with `user:` and a tool's with `client:`, so it is nobody else's.
+    pub fn project_account(project: &str) -> String {
+        format!("project:{project}")
     }
 
     /// The same index, whole.
@@ -48,7 +58,8 @@ impl Index {
         let seen: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM studies st
               WHERE st.study_instance_uid = $1
-                AND st.project IN (SELECT project FROM account_projects WHERE account = $2)",
+                AND (st.project IN (SELECT project FROM account_projects WHERE account = $2)
+                     OR ('project:' || st.project) = $2)",
         )
         .bind(study_instance_uid)
         .bind(account)

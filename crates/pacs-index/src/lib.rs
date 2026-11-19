@@ -18,8 +18,9 @@ use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
 /// SQL: the study `$alias` is one the account bound as `$n` may see. Always true when that
-/// is NULL (no limit); otherwise the study's project must be one of the account's, so a
-/// study without a project is never seen.
+/// is NULL (no limit); otherwise the study's project must be one of the account's, or the
+/// project the account itself is ([`Index::project_account`]), so a study without a
+/// project is never seen.
 macro_rules! seen {
     ($alias:literal, $n:literal) => {
         concat!(
@@ -29,7 +30,11 @@ macro_rules! seen {
             $alias,
             ".project IN (SELECT project FROM account_projects WHERE account = $",
             $n,
-            ")) "
+            ") OR ('project:' || ",
+            $alias,
+            ".project) = $",
+            $n,
+            ") "
         )
     };
 }

@@ -141,7 +141,8 @@ impl Index {
     fn seen_as(&self, alias: &str, sql: &mut Sql) -> Option<String> {
         let account = sql.text(self.account()?);
         Some(format!(
-            "{alias}.project IN (SELECT project FROM account_projects WHERE account = {account})"
+            "({alias}.project IN (SELECT project FROM account_projects WHERE account = {account})
+              OR ('project:' || {alias}.project) = {account})"
         ))
     }
 
