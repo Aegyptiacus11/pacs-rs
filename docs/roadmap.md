@@ -57,20 +57,21 @@ server can read and delete everything. What remains:
 
 So that workstations, viewers and other archives can use pacs-rs as they use any PACS.
 
-Built: [C-FIND as SCP](dimse.md#being-searched) on the Study Root model, which DCMTK's
-`findscu` and pynetdicom search at its three levels, with sequence matching (PS3.4
+Built: [C-FIND as SCP](dimse.md#being-searched) on the Patient Root and Study Root models
+of PS3.4 C.6, which DCMTK's `findscu` and pynetdicom search at every level, with sequence matching (PS3.4
 C.2.2.2.6) added to the [one matcher](dicomweb.md#searching) it shares with QIDO-RS and
 `/tools/find`. [C-MOVE and C-GET as SCP](dimse.md#being-retrieved-from), which `movescu`,
 `getscu` and pynetdicom retrieve with: a C-MOVE sends to the AEs listed as destinations
 (`PACS_DIMSE_MOVE_DESTINATIONS`) and a move to any other is refused with status A801; a
-C-GET sends on the association that asks, by SCP/SCU role selection. Both send with a
-C-STORE SCU that decodes for a peer that does not take the stored transfer syntax. What
+C-GET sends on the association that asks, by SCP/SCU role selection. Both are on the two
+models, and send with a C-STORE SCU that decodes for a peer that does not take the stored
+transfer syntax. What
 remains:
 
 | Item | Done when |
 |---|---|
 | Sequence matching over HTTP | QIDO-RS takes a key inside a sequence (`RequestAttributesSequence.ScheduledProcedureStepID`), which the matcher already answers |
-| Patient Root | both information models of PS3.4 C.6, as SCU and SCP |
+| Patient Root as SCU | pacs-rs searches and pulls from an archive on the Patient Root model too (as SCP it answers both models) |
 | C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |
 | Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a retrieval makes it send) |
 | Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |

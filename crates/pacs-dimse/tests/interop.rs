@@ -712,9 +712,20 @@ async fn findscu(
     keys: &[&str],
     more: &[&str],
 ) -> (Output, Vec<dicom_object::InMemDicomObject>) {
+    findscu_on("-S", port, calling, keys, more).await
+}
+
+/// findscu on the model `model` names (`-S` Study Root, `-P` Patient Root).
+async fn findscu_on(
+    model: &str,
+    port: u16,
+    calling: &str,
+    keys: &[&str],
+    more: &[&str],
+) -> (Output, Vec<dicom_object::InMemDicomObject>) {
     let dir = tempfile::tempdir().unwrap();
     let mut findscu = dcmtk("findscu");
-    findscu.args(["-v", "-S", "-aet", calling, "-aec", "PACSRS", "-X", "-od"]);
+    findscu.args(["-v", model, "-aet", calling, "-aec", "PACSRS", "-X", "-od"]);
     findscu.arg(dir.path());
     findscu.args(more);
     for key in keys {
@@ -1706,4 +1717,194 @@ assoc.release()
         })
         .collect();
     assert_eq!(printed, expected_pixels(&series));
+}
+
+// ---- the Patient Root model (PS3.4 C.6.1), asked by DCMTK's tools with -P and by pynetdicom ----
+
+/// findscu, movescu and getscu on the Patient Root model: patients, a patient's studies,
+/// a patient moved whole to movescu's receiver, and a study of the patient got.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_tools_query_and_retrieve_on_the_patient_root_model() {
+    use dicom_dictionary_std::tags;
+    let (archive, series) = archive_to_retrieve_from().await;
+    let other = SyntheticSeries::new(93, 1).with_patient("Roe^Richard", None);
+    ingest(&archive, &other).await;
+    let receiving = free_port();
+    let mut config = retrieving("DCMTK", "DCMTK", receiving);
+    config.remotes.extend(answering(&["DCMTK"]).remotes);
+    let addr = start(config, archive).await;
+    let patient = series[0].patient_id();
+
+    let (output, found) = findscu_on(
+        "-P",
+        addr.port(),
+        "DCMTK",
+        &[
+            "QueryRetrieveLevel=PATIENT",
+            "PatientID",
+            "PatientName=DOE*",
+            "NumberOfPatientRelatedInstances",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(values(&found, tags::PATIENT_ID), [patient.as_str()]);
+    assert_eq!(
+        values(&found, tags::NUMBER_OF_PATIENT_RELATED_INSTANCES),
+        ["5"]
+    );
+    let of_patient = format!("PatientID={patient}");
+    let (output, found) = findscu_on(
+        "-P",
+        addr.port(),
+        "DCMTK",
+        &[
+            "QueryRetrieveLevel=STUDY",
+            &of_patient,
+            "StudyInstanceUID",
+            "StudyDate",
+        ],
+        &[],
+    )
+    .await;
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        values(&found, tags::STUDY_INSTANCE_UID),
+        [series[0].study_uid()]
+    );
+    // a study without its patient is not a query of this model
+    let (output, found) = findscu_on(
+        "-P",
+        addr.port(),
+        "DCMTK",
+        &["QueryRetrieveLevel=STUDY", "StudyInstanceUID"],
+        &[],
+    )
+    .await;
+    assert!(found.is_empty());
+    assert!(
+        text(&output).contains("DataSetDoesNotMatchSOPClass"),
+        "{}",
+        text(&output)
+    );
+
+    let out = tempfile::tempdir().unwrap();
+    let mut movescu = dcmtk("movescu");
+    movescu
+        .args([
+            "-v", "-P", "-aet", "DCMTK", "-aec", "PACSRS", "-aem", "DCMTK",
+        ])
+        .args(["+P", &receiving.to_string(), "-od"])
+        .arg(out.path())
+        .args(["-k", "QueryRetrieveLevel=PATIENT", "-k", &of_patient])
+        .args(["127.0.0.1", &addr.port().to_string()]);
+    let output = run(movescu).await;
+    assert!(output.status.success(), "{}", text(&output));
+    let moved: Vec<(String, Vec<u16>)> = written(out.path(), 5)
+        .await
+        .into_iter()
+        .map(|(uid, _, pixels)| (uid, pixels))
+        .collect();
+    assert_eq!(moved, expected_pixels(&series));
+
+    let out = tempfile::tempdir().unwrap();
+    let mut getscu = dcmtk("getscu");
+    getscu
+        .args(["-v", "-P", "-aet", "DCMTK", "-aec", "PACSRS", "-od"])
+        .arg(out.path())
+        .args(["-k", "QueryRetrieveLevel=STUDY", "-k", &of_patient, "-k"])
+        .arg(format!("StudyInstanceUID={}", series[0].study_uid()))
+        .args(["127.0.0.1", &addr.port().to_string()]);
+    let output = run(getscu).await;
+    assert!(output.status.success(), "{}", text(&output));
+    let got: Vec<(String, Vec<u16>)> = written(out.path(), 5)
+        .await
+        .into_iter()
+        .map(|(uid, _, pixels)| (uid, pixels))
+        .collect();
+    assert_eq!(got, expected_pixels(&series));
+}
+
+/// pynetdicom on the Patient Root model: patients, a patient's studies, and a patient
+/// got whole.
+#[tokio::test]
+#[ignore = "needs pynetdicom"]
+async fn pynetdicom_queries_and_retrieves_on_the_patient_root_model() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let other = SyntheticSeries::new(94, 1).with_patient("Roe^Richard", None);
+    ingest(&archive, &other).await;
+    let addr = start(answering(&["PYNETDICOM"]), archive).await;
+    let script = r#"
+import sys
+from pydicom.dataset import Dataset
+from pydicom.uid import ImplicitVRLittleEndian
+from pynetdicom import AE, evt, build_role
+from pynetdicom.sop_class import CTImageStorage
+from pynetdicom.sop_class import PatientRootQueryRetrieveInformationModelFind as FIND
+from pynetdicom.sop_class import PatientRootQueryRetrieveInformationModelGet as GET
+port, patient, study = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+
+stored = []
+def on_store(event):
+    stored.append(event.dataset.SOPInstanceUID)
+    return 0x0000
+
+ae = AE(ae_title="PYNETDICOM")
+ae.add_requested_context(FIND)
+ae.add_requested_context(GET)
+ae.add_requested_context(CTImageStorage, ImplicitVRLittleEndian)
+assoc = ae.associate("127.0.0.1", port, ae_title="PACSRS",
+                     ext_neg=[build_role(CTImageStorage, scp_role=True)],
+                     evt_handlers=[(evt.EVT_C_STORE, on_store)])
+assert assoc.is_established, "no association"
+
+def find(**keys):
+    ds = Dataset()
+    for name, value in keys.items():
+        setattr(ds, name, value)
+    found, last = [], None
+    for status, identifier in assoc.send_c_find(ds, FIND):
+        if status.Status in (0xFF00, 0xFF01):
+            found.append(identifier)
+        else:
+            last = status.Status
+    return found, last
+
+found, last = find(QueryRetrieveLevel="PATIENT", PatientID="", PatientName="",
+                   NumberOfPatientRelatedStudies="")
+assert last == 0x0000, hex(last)
+assert sorted(str(i.PatientName) for i in found) == ["Doe^Jane", "Roe^Richard"], found
+doe = [i for i in found if i.PatientID == patient][0]
+assert doe.NumberOfPatientRelatedStudies == 1, doe
+
+found, last = find(QueryRetrieveLevel="STUDY", PatientID=patient, StudyInstanceUID="",
+                   NumberOfStudyRelatedInstances="")
+assert last == 0x0000 and [i.StudyInstanceUID for i in found] == [study], (found, last)
+assert found[0].PatientID == patient and found[0].NumberOfStudyRelatedInstances == 5, found[0]
+
+# below the PATIENT level a query names its patient
+found, last = find(QueryRetrieveLevel="STUDY", StudyInstanceUID="")
+assert last == 0xA900 and not found, (found, last)
+
+ds = Dataset()
+ds.QueryRetrieveLevel = "PATIENT"
+ds.PatientID = patient
+responses = [s for s, _ in assoc.send_c_get(ds, GET)]
+last = responses[-1]
+assert last.Status == 0x0000 and last.NumberOfCompletedSuboperations == 5, last
+assert len(stored) == 5, stored
+assoc.release()
+"#;
+    let mut py = python();
+    py.args([
+        "-c",
+        script,
+        &addr.port().to_string(),
+        &series[0].patient_id(),
+        &series[0].study_uid(),
+    ]);
+    let output = run(py).await;
+    assert!(output.status.success(), "{}", text(&output));
 }
