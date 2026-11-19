@@ -4,7 +4,7 @@
 #
 # bench.sh <label> <rest root> <dicomweb root> <dir of .dcm>
 # The .dcm files are those of
-#   cargo run --release -p pacs-core --features synthetic --example write_synthetic -- ct 77 200 512
+#   cargo run --release -p pacs-core --features real --example write_real -- ct 77 200
 set -euo pipefail
 label=$1 rest=$2 web=$3 dir=$4
 study=2.25.77100000 series=2.25.77200000

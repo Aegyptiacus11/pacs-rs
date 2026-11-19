@@ -30,3 +30,11 @@ real = ["dep:dicom-transfer-syntax-registry"]
 [dev-dependencies]
 dicom-dictionary-std.workspace = true
 pacs-core = { path = ".", features = ["real"] }
+
+[[example]]
+name = "write_real"
+required-features = ["real"]
+
+[[example]]
+name = "write_altered"
+required-features = ["real"]
