@@ -1160,6 +1160,133 @@ async fn a_query_over_dimse_and_one_that_is_refused_are_in_the_audit_trail() {
     audit_lines(dir.path(), 3).await;
 }
 
+/// pacs-rs asked over DIMSE to send a study on: its own C-MOVE SCU asks one server to
+/// send to a second, which has the study afterwards; the trail of the first has what was
+/// sent, to whom and for whom (PS3.15 A.5.3.7), and a caller that is not answered as an
+/// alert.
+#[tokio::test]
+async fn a_move_asked_over_dimse_is_in_the_audit_trail() {
+    // the second server, ARCHIVE2, which receives
+    let there_dir = tempfile::tempdir().unwrap();
+    let there_settings = settings_in(there_dir.path(), &["--dimse-ae-title", "ARCHIVE2"]);
+    let there = open_archive(&there_settings).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let there_port = listener.local_addr().unwrap().port();
+    tokio::spawn(serve_dimse(
+        listener,
+        there.clone(),
+        dimse_config(&there_settings).unwrap(),
+        Vec::new(),
+        std::future::pending(),
+    ));
+
+    // the first, which is asked: it answers VIEWER and may send to ARCHIVE2
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("viewer=VIEWER@127.0.0.1:11112,second=ARCHIVE2@127.0.0.1:{there_port}");
+    let settings = audited_settings(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-move-destinations",
+            "second",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let series = SyntheticSeries::new(72, 2).with_patient("DOE^JANE", None);
+    for bytes in series.all_bytes() {
+        archive.ingest(bytes.into()).await.unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(pacs_server::serve_dimse_audited(
+        listener,
+        archive,
+        dimse_config(&settings).unwrap(),
+        Vec::new(),
+        pacs_server::audit::open_audit(&settings).unwrap(),
+        std::future::pending(),
+    ));
+    let here: pacs_dimse::RemoteAe = format!("here=PACSRS@127.0.0.1:{}", addr.port())
+        .parse()
+        .unwrap();
+    let ask = async |calling: &str, destination: &str| {
+        pacs_dimse::move_studies(
+            &here,
+            &pacs_dimse::AeTitle::new(calling).unwrap(),
+            &[series.study_uid()],
+            &pacs_dimse::AeTitle::new(destination).unwrap(),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(10),
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .await
+    };
+
+    let moved = ask("VIEWER", "ARCHIVE2").await.unwrap();
+    assert_eq!(moved.status, pacs_dimse::Status::SUCCESS);
+    assert_eq!(moved.progress.completed, Some(2));
+    assert_eq!(moved.progress.failed, Some(0));
+    let arrived = there
+        .index()
+        .instances(&series.study_uid(), &series.series_uid(), None)
+        .await
+        .unwrap();
+    assert_eq!(arrived.len(), 2);
+    let lines = audit_lines(dir.path(), 1).await;
+    has(
+        &lines[0],
+        &[
+            "<EventID csd-code=\"110104\"",
+            "EventActionCode=\"R\"",
+            "EventOutcomeIndicator=\"0\"",
+            // from this server under the title that was called, to the destination
+            "AlternativeUserID=\"AETITLES=PACSRS\" UserIsRequestor=\"false\"><RoleIDCode csd-code=\"110153\"",
+            "<ActiveParticipant UserID=\"ARCHIVE2\" AlternativeUserID=\"AETITLES=ARCHIVE2\" UserIsRequestor=\"false\" NetworkAccessPointID=\"127.0.0.1\" NetworkAccessPointTypeCode=\"1\"><RoleIDCode csd-code=\"110152\"",
+            // for the AE that asked
+            "<ActiveParticipant UserID=\"VIEWER\" AlternativeUserID=\"AETITLES=VIEWER\" UserIsRequestor=\"true\" NetworkAccessPointID=\"127.0.0.1\" NetworkAccessPointTypeCode=\"2\"/>",
+            &format!("ParticipantObjectID=\"{}\"", series.study_uid()),
+            &format!("<SOPClass UID=\"{CT}\" NumberOfInstances=\"2\"/>"),
+            "<ParticipantObjectName>DOE^JANE</ParticipantObjectName>",
+        ],
+    );
+
+    // a destination this server does not send to: refused, nothing sent, no line
+    let refused = ask("VIEWER", "VIEWER").await.unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            pacs_dimse::MoveError::Failed { status, .. }
+                if *status == pacs_dimse::Status::MOVE_DESTINATION_UNKNOWN
+        ),
+        "{refused}"
+    );
+    // a caller this server does not answer: an alert, once
+    for _ in 0..2 {
+        let refused = ask("STRANGER", "ARCHIVE2").await.unwrap_err();
+        assert!(
+            matches!(
+                &refused,
+                pacs_dimse::MoveError::Failed { status, .. }
+                    if *status == pacs_dimse::Status::NOT_AUTHORIZED
+            ),
+            "{refused}"
+        );
+    }
+    let lines = audit_lines(dir.path(), 2).await;
+    has(
+        &lines[1],
+        &[
+            "<EventID csd-code=\"110113\"",
+            "originalText=\"Access Control Decision\"",
+            "UserID=\"STRANGER\"",
+            "ParticipantObjectID=\"urn:oid:1.2.840.10008.5.1.4.1.2.2.2\"",
+        ],
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    audit_lines(dir.path(), 2).await;
+}
+
 #[tokio::test]
 async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
     use pacs_server::app_with_audit;

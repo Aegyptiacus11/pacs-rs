@@ -20,16 +20,15 @@ use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::InMemDicomObject;
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::Pdu;
 use dicom_ul::association::AsyncAssociation;
-use dicom_ul::pdu::{PDataValue, PDataValueType};
 use pacs_index::matching::ItemKey;
 use pacs_index::{Index, Key, Kind, Match, StudyCursor, StudySearch};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::Request;
-use crate::command::{self, Command, DATA_SET_PRESENT, field, tag};
+use super::operation::{After, Interruption, Refusal, interruption, refusal};
+use crate::command::{self, Command, DATA_SET_PRESENT, tag};
 use crate::message::{self, DataSet, MessageError};
 use crate::query::STUDY_ROOT_FIND;
 use crate::status::Status;
@@ -144,7 +143,7 @@ const IMAGE: &[Attribute] = &[
 
 /// A level of the Study Root Query/Retrieve Information Model (PS3.4 C.6.2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Level {
+pub(super) enum Level {
     Study,
     Series,
     Image,
@@ -152,7 +151,7 @@ enum Level {
 
 impl Level {
     /// By the value of Query/Retrieve Level (0008,0052), PS3.4 C.6.2.1.
-    fn named(name: &str) -> Option<Level> {
+    pub(super) fn named(name: &str) -> Option<Level> {
         match name {
             "STUDY" => Some(Level::Study),
             "SERIES" => Some(Level::Series),
@@ -161,7 +160,7 @@ impl Level {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Level::Study => "STUDY",
             Level::Series => "SERIES",
@@ -175,23 +174,6 @@ impl Level {
             Level::Series => SERIES,
             Level::Image => IMAGE,
         }
-    }
-}
-
-/// Why a C-FIND is answered with a Failure and no match.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct Refusal {
-    pub status: Status,
-    pub comment: String,
-    /// Offending Element (0000,0901): where the error is, when it is in one element.
-    pub offending: Option<Tag>,
-}
-
-fn refusal(status: Status, comment: impl Into<String>, offending: Option<Tag>) -> Refusal {
-    Refusal {
-        status,
-        comment: comment.into(),
-        offending,
     }
 }
 
@@ -629,83 +611,6 @@ pub(super) struct Found {
     pub identifier: Vec<u8>,
 }
 
-/// How the association stands after a C-FIND.
-#[derive(Debug)]
-pub(super) enum After {
-    /// The final response is sent: the next message can be read.
-    Open(Found),
-    /// The peer released the association in the middle, which was answered.
-    Released(Found),
-    /// The peer aborted it.
-    Aborted(Found),
-}
-
-/// What the peer sent while matches were going out, if anything.
-enum Interruption {
-    Nothing,
-    Cancel,
-    Released,
-    Aborted,
-}
-
-/// Look, without waiting, at what the peer has sent. Nothing is lost when nothing whole
-/// has arrived: the association keeps what it has read of a PDU.
-async fn interruption<A, S>(
-    association: &mut A,
-    message_id: u16,
-) -> Result<Interruption, MessageError>
-where
-    A: AsyncAssociation<S> + Send,
-    S: AsyncRead + AsyncWrite + Unpin + Send,
-{
-    let waiting = tokio::time::timeout(
-        std::time::Duration::ZERO,
-        AsyncAssociation::receive(association),
-    )
-    .await;
-    let pdu = match waiting {
-        Err(_) => return Ok(Interruption::Nothing),
-        Ok(pdu) => pdu?,
-    };
-    let unexpected =
-        |what: &str| MessageError::Protocol(format!("{what} while a C-FIND is being answered"));
-    match pdu {
-        Pdu::AbortRQ { .. } => Ok(Interruption::Aborted),
-        Pdu::ReleaseRQ => {
-            AsyncAssociation::send(association, &Pdu::ReleaseRP).await?;
-            Ok(Interruption::Released)
-        }
-        Pdu::PData { data } => {
-            // a C-CANCEL-RQ is a command of a few elements, in one fragment (PS3.7 9.3.2.3)
-            let [
-                PDataValue {
-                    value_type: PDataValueType::Command,
-                    is_last: true,
-                    data,
-                    ..
-                },
-            ] = data.as_slice()
-            else {
-                return Err(unexpected("a message that is not one command"));
-            };
-            let command = Command::decode(data)?;
-            if command.command_field()? != field::C_CANCEL_RQ {
-                // no asynchronous operations window is negotiated: one operation at a time
-                return Err(unexpected("another request"));
-            }
-            // a cancel of another operation has nothing to cancel
-            Ok(
-                if command.us(tag::MESSAGE_ID_BEING_RESPONDED_TO)? == message_id {
-                    Interruption::Cancel
-                } else {
-                    Interruption::Nothing
-                },
-            )
-        }
-        _ => Err(unexpected("an association PDU")),
-    }
-}
-
 /// Answer a C-FIND-RQ on `association`: every Pending response and the final one.
 ///
 /// `authorized` is whether the caller may query at all; `index` reads what it may see. An
@@ -717,7 +622,7 @@ pub(super) async fn find<A, S>(
     data: DataSet,
     index: &Index,
     authorized: bool,
-) -> Result<After, MessageError>
+) -> Result<After<Found>, MessageError>
 where
     A: AsyncAssociation<S> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -747,7 +652,7 @@ where
         Status::PENDING
     };
     loop {
-        match interruption(association, message_id).await? {
+        match interruption(association, message_id, "C-FIND").await? {
             Interruption::Nothing => {}
             Interruption::Cancel => {
                 found.status = Status::CANCEL;

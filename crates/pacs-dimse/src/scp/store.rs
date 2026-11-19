@@ -32,7 +32,8 @@ enum Refusal {
 }
 
 impl Destination {
-    fn archive(&self) -> &Archive {
+    /// The archive whose files this destination's instances are in.
+    pub(super) fn archive(&self) -> &Archive {
         match self {
             Destination::Archive(archive) => archive,
             Destination::Project(project) => &project.archive,

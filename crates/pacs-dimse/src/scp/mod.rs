@@ -1,14 +1,19 @@
 //! pacs-rs as an association acceptor: Verification SCP (PS3.4 Annex A), Storage SCP
-//! (PS3.4 Annex B) for the SOP classes of [`crate::sop_classes::STORAGE`], and Query SCP
-//! (PS3.4 Annex C) on the Study Root model.
+//! (PS3.4 Annex B) for the SOP classes of [`crate::sop_classes::STORAGE`], and Query and
+//! Retrieve SCP (PS3.4 Annex C) on the Study Root model.
 //!
 //! Every accepted AE title shares one set of presentation contexts; once an association is
 //! up, its called AE title picks where received instances go and which studies a query
 //! sees ([`Scp::destination`]). The association loop and the Verification SCP are here,
-//! the Storage SCP in [`store`], the Query SCP in [`find`].
+//! the Storage SCP in [`store`], the Query SCP in [`find`], the Retrieve SCP in
+//! [`retrieve`].
 
 mod find;
+mod operation;
+mod retrieve;
 mod store;
+
+use operation::After;
 
 pub use store::{Destination, part10};
 
@@ -58,11 +63,38 @@ pub struct Queried<'a> {
     pub matches: usize,
 }
 
+/// A retrieval that was answered, or refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retrieved<'a> {
+    /// The Query/Retrieve Information Model asked: the C-MOVE's SOP Class UID.
+    pub sop_class: &'a str,
+    /// The AE title the instances were to go to: the Move Destination, as it was named.
+    pub destination: &'a str,
+    /// Its host, when it is a destination this server sends to.
+    pub destination_host: Option<&'a str>,
+    /// The final status.
+    pub status: Status,
+    /// What the destination stored, a study at a time; none when nothing was sent.
+    pub studies: &'a [SentStudy],
+}
+
+/// The instances of one study that a destination stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentStudy {
+    pub study_instance_uid: String,
+    pub patient_id: Option<String>,
+    pub patient_name: Option<String>,
+    /// SOP Class UID and how many instances of it were stored.
+    pub sop_classes: Vec<(String, u32)>,
+}
+
 /// Told what associations did, for the server's audit trail. Called on the association's
 /// own task, after the fact: it must not block for long.
 pub trait Observer: Send + Sync + std::fmt::Debug {
     /// A C-FIND is over.
     fn queried(&self, peer: &Peer, query: &Queried<'_>);
+    /// A C-MOVE is over.
+    fn retrieved(&self, peer: &Peer, retrieval: &Retrieved<'_>);
     /// The association is over, and these instances were stored through it, in order.
     /// Never called with none.
     fn received(&self, peer: &Peer, stored: Vec<Stored>);
@@ -141,7 +173,8 @@ impl Scp {
             .read_timeout(self.config.timeout)
             .write_timeout(self.config.timeout)
             .with_abstract_syntax(VERIFICATION)
-            .with_abstract_syntax(crate::query::STUDY_ROOT_FIND);
+            .with_abstract_syntax(crate::query::STUDY_ROOT_FIND)
+            .with_abstract_syntax(crate::scu::retrieve::STUDY_ROOT_MOVE);
         for (uid, _) in crate::sop_classes::STORAGE {
             options = options.with_abstract_syntax(*uid);
         }
@@ -260,6 +293,122 @@ impl Scp {
             .any(|remote| remote.ae_title.matches(calling))
     }
 
+    /// Answer a C-FIND and tell the observer. Whether the association goes on.
+    async fn find<A, S>(
+        &self,
+        association: &mut A,
+        peer: std::net::SocketAddr,
+        request: &Request<'_>,
+        command: &Command,
+        identifier: DataSet,
+        destination: &Destination,
+    ) -> bool
+    where
+        A: dicom_ul::association::AsyncAssociation<S> + Association + Send,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        let calling = request.calling;
+        let after = find::find(
+            association,
+            request,
+            command,
+            identifier,
+            &destination.index(),
+            self.answers_queries_of(calling),
+        )
+        .await;
+        let (found, open) = match after {
+            Ok(After::Open(found)) => (found, true),
+            Ok(After::Released(found) | After::Aborted(found)) => (found, false),
+            Err(e) => {
+                tracing::warn!(%peer, calling, error = %e, "association aborted during a C-FIND");
+                let _ = association.abort().await;
+                return false;
+            }
+        };
+        tracing::info!(%peer, calling, called = request.called, status = %found.status, matches = found.matches, "C-FIND");
+        if let Some(observer) = &self.observer {
+            observer.queried(
+                &Peer {
+                    address: peer,
+                    calling: calling.to_owned(),
+                    called: request.called.to_owned(),
+                },
+                &Queried {
+                    sop_class: request.abstract_syntax,
+                    transfer_syntax: request.transfer_syntax,
+                    identifier: &found.identifier,
+                    status: found.status,
+                    matches: found.matches,
+                },
+            );
+        }
+        if !open {
+            tracing::info!(%peer, calling, "association ended by the peer during a C-FIND");
+        }
+        open
+    }
+
+    /// Answer a C-MOVE and tell the observer. Whether the association goes on.
+    async fn retrieve<A, S>(
+        &self,
+        association: &mut A,
+        peer: std::net::SocketAddr,
+        request: &Request<'_>,
+        command: &Command,
+        identifier: DataSet,
+        destination: &Destination,
+    ) -> bool
+    where
+        A: dicom_ul::association::AsyncAssociation<S> + Association + Send,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        let calling = request.calling;
+        let index = destination.index();
+        let after = retrieve::c_move(
+            association,
+            request,
+            command,
+            identifier,
+            destination,
+            &self.config,
+            self.answers_queries_of(calling),
+        )
+        .await;
+        let (retrieved, open) = match after {
+            Ok(After::Open(retrieved)) => (retrieved, true),
+            Ok(After::Released(retrieved) | After::Aborted(retrieved)) => (retrieved, false),
+            Err(e) => {
+                tracing::warn!(%peer, calling, error = %e, "association aborted during a C-MOVE");
+                let _ = association.abort().await;
+                return false;
+            }
+        };
+        let counts = &retrieved.counts;
+        tracing::info!(%peer, calling, called = request.called, destination = %retrieved.destination, status = %retrieved.status, completed = counts.completed, failed = counts.failed, warning = counts.warning, remaining = counts.remaining, "C-MOVE");
+        if let Some(observer) = &self.observer {
+            let studies = sent_studies(&index, &retrieved.sent).await;
+            observer.retrieved(
+                &Peer {
+                    address: peer,
+                    calling: calling.to_owned(),
+                    called: request.called.to_owned(),
+                },
+                &Retrieved {
+                    sop_class: request.abstract_syntax,
+                    destination: &retrieved.destination,
+                    destination_host: retrieved.destination_host.as_deref(),
+                    status: retrieved.status,
+                    studies: &studies,
+                },
+            );
+        }
+        if !open {
+            tracing::info!(%peer, calling, "association ended by the peer during a C-MOVE");
+        }
+        open
+    }
+
     /// Serve the messages of an established association until it ends.
     async fn messages<A, S>(
         &self,
@@ -297,67 +446,50 @@ impl Scp {
                         calling,
                         called,
                     };
-                    let response = match handle(
-                        &request,
-                        &message.command,
-                        message.data,
-                        destination,
-                    )
-                    .await
-                    {
-                        Handled::Respond(response) => response,
-                        Handled::Nothing => continue,
-                        Handled::Find(identifier) => {
-                            let after = find::find(
-                                &mut association,
-                                &request,
-                                &message.command,
-                                identifier,
-                                &destination.index(),
-                                self.answers_queries_of(calling),
-                            )
-                            .await;
-                            let (found, open) = match after {
-                                Ok(find::After::Open(found)) => (found, true),
-                                Ok(find::After::Released(found) | find::After::Aborted(found)) => {
-                                    (found, false)
+                    let response =
+                        match handle(&request, &message.command, message.data, destination).await {
+                            Handled::Respond(response) => response,
+                            Handled::Nothing => continue,
+                            Handled::Find(identifier) => {
+                                let open = self
+                                    .find(
+                                        &mut association,
+                                        peer,
+                                        &request,
+                                        &message.command,
+                                        identifier,
+                                        destination,
+                                    )
+                                    .await;
+                                served.found += 1;
+                                if open {
+                                    continue;
                                 }
-                                Err(e) => {
-                                    tracing::warn!(%peer, calling, error = %e, "association aborted during a C-FIND");
-                                    let _ = association.abort().await;
-                                    break;
+                                break;
+                            }
+                            Handled::Move(identifier) => {
+                                let open = self
+                                    .retrieve(
+                                        &mut association,
+                                        peer,
+                                        &request,
+                                        &message.command,
+                                        identifier,
+                                        destination,
+                                    )
+                                    .await;
+                                served.retrieved += 1;
+                                if open {
+                                    continue;
                                 }
-                            };
-                            tracing::info!(%peer, calling, called, status = %found.status, matches = found.matches, "C-FIND");
-                            served.found += 1;
-                            if let Some(observer) = &self.observer {
-                                observer.queried(
-                                    &Peer {
-                                        address: peer,
-                                        calling: calling.to_owned(),
-                                        called: called.to_owned(),
-                                    },
-                                    &Queried {
-                                        sop_class: request.abstract_syntax,
-                                        transfer_syntax: request.transfer_syntax,
-                                        identifier: &found.identifier,
-                                        status: found.status,
-                                        matches: found.matches,
-                                    },
-                                );
+                                break;
                             }
-                            if open {
-                                continue;
+                            Handled::Abort(reason) => {
+                                tracing::warn!(%peer, calling, reason, "association aborted");
+                                let _ = association.abort().await;
+                                break;
                             }
-                            tracing::info!(%peer, calling, "association ended by the peer during a C-FIND");
-                            break;
-                        }
-                        Handled::Abort(reason) => {
-                            tracing::warn!(%peer, calling, reason, "association aborted");
-                            let _ = association.abort().await;
-                            break;
-                        }
-                    };
+                        };
                     served.count(&message.command, &response);
                     if let Err(e) =
                         message::send(&mut association, request.context_id, &response, None).await
@@ -367,7 +499,7 @@ impl Scp {
                     }
                 }
                 Ok(Incoming::Released) => {
-                    tracing::info!(%peer, calling, echoes = served.echoes, stored = served.stored, found = served.found, failed = served.failed, "association released");
+                    tracing::info!(%peer, calling, echoes = served.echoes, stored = served.stored, found = served.found, retrieved = served.retrieved, failed = served.failed, "association released");
                     break;
                 }
                 Ok(Incoming::Aborted) => {
@@ -388,6 +520,44 @@ impl Scp {
             }
         }
     }
+}
+
+/// What was sent, a study at a time in the order the studies were first sent from, each
+/// with whose it is as `index` has it: for the audit trail, which names the patient.
+async fn sent_studies(index: &pacs_index::Index, sent: &[retrieve::Sent]) -> Vec<SentStudy> {
+    let mut studies: Vec<SentStudy> = Vec::new();
+    for instance in sent {
+        let at = match studies
+            .iter()
+            .position(|study| study.study_instance_uid == instance.study_instance_uid)
+        {
+            Some(at) => at,
+            None => {
+                // a study that went while it was being sent has no patient to name
+                let known = index
+                    .audited_study(&instance.study_instance_uid)
+                    .await
+                    .ok()
+                    .flatten();
+                studies.push(SentStudy {
+                    study_instance_uid: instance.study_instance_uid.clone(),
+                    patient_id: known.as_ref().and_then(|study| study.patient_id.clone()),
+                    patient_name: known.and_then(|study| study.patient_name),
+                    sop_classes: Vec::new(),
+                });
+                studies.len() - 1
+            }
+        };
+        let classes = &mut studies[at].sop_classes;
+        match classes
+            .iter_mut()
+            .find(|(sop_class, _)| *sop_class == instance.sop_class_uid)
+        {
+            Some((_, count)) => *count += 1,
+            None => classes.push((instance.sop_class_uid.clone(), 1)),
+        }
+    }
+    studies
 }
 
 /// Accepted when the called AE title is one of pacs-rs's and, with `callers` set, the
@@ -463,6 +633,9 @@ enum Handled {
     /// A C-FIND-RQ with this Identifier, which the Query SCP answers with as many
     /// responses as it has matches.
     Find(DataSet),
+    /// A C-MOVE-RQ with this Identifier, which the Retrieve SCP answers as its
+    /// sub-operations go.
+    Move(DataSet),
     Abort(&'static str),
 }
 
@@ -507,23 +680,29 @@ async fn handle(
     }
     match field {
         field::C_ECHO_RQ if affected == VERIFICATION => respond(Status::SUCCESS, None),
-        field::C_STORE_RQ if affected != VERIFICATION && !find::is_find(affected) => {
+        field::C_STORE_RQ if is_storage(affected) => {
             let (status, comment) = store::store(request, command, data, destination).await;
             respond(status, comment.as_deref())
         }
         field::C_FIND_RQ if find::is_find(affected) => Handled::Find(data),
+        field::C_MOVE_RQ if retrieve::is_move(affected) => Handled::Move(data),
         // PS3.7 9.1.5.1.4, 9.1.1.1.9: an operation the SOP class does not have, or one
         // pacs-rs does not provide.
         _ => respond(Status::UNRECOGNIZED_OPERATION, None),
     }
 }
 
+fn is_storage(sop_class: &str) -> bool {
+    crate::sop_classes::STORAGE
+        .iter()
+        .any(|(uid, _)| *uid == sop_class)
+}
+
 fn is_supported(sop_class: &str) -> bool {
     sop_class == VERIFICATION
         || find::is_find(sop_class)
-        || crate::sop_classes::STORAGE
-            .iter()
-            .any(|(uid, _)| *uid == sop_class)
+        || retrieve::is_move(sop_class)
+        || is_storage(sop_class)
 }
 
 #[derive(Default)]
@@ -531,6 +710,7 @@ struct Counts {
     echoes: usize,
     stored: usize,
     found: usize,
+    retrieved: usize,
     failed: usize,
 }
 
