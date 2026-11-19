@@ -115,12 +115,19 @@ impl Instance {
                 }
                 fragments.push(pad_even(encoded));
             }
-            // One fragment per frame, so the empty Basic Offset Table is enough to find
-            // each (PS3.5 A.4).
+            // One fragment per frame, so an empty Basic Offset Table would be enough to find
+            // each (PS3.5 A.4), but only by passing over every fragment before it: with the
+            // table, a frame of a stored file is found without reading the others
+            // (`FrameLayout`). A table that cannot hold the offsets is left empty.
+            let table = if frames > 1 {
+                basic_offsets(fragments.iter().map(|f| f.len() as u64)).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             object.put(DataElement::new(
                 tags::PIXEL_DATA,
                 VR::OB,
-                PixelFragmentSequence::new(Vec::<u32>::new(), fragments),
+                PixelFragmentSequence::new(table, fragments),
             ));
         }
         object.remove_element(tags::EXTENDED_OFFSET_TABLE);
@@ -134,6 +141,20 @@ impl Instance {
     }
 }
 
+/// The Basic Offset Table of frames of one fragment each, of these lengths: for each
+/// frame, the bytes from the first fragment's item to its own, an item being its 8-byte
+/// head and its fragment (PS3.5 A.4). `None` when an offset does not fit its 32 bits.
+fn basic_offsets(fragment_lens: impl Iterator<Item = u64>) -> Option<Vec<u32>> {
+    let mut at = 0u64;
+    fragment_lens
+        .map(|len| {
+            let offset = u32::try_from(at).ok();
+            at = at.saturating_add(8).saturating_add(len);
+            offset
+        })
+        .collect()
+}
+
 /// Fragments have an even length; a codestream of odd length gets a trailing zero, which
 /// JPEG-LS and JPEG XL decoders ignore.
 fn pad_even(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -145,6 +166,7 @@ fn pad_even(mut bytes: Vec<u8>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use dicom_core::DicomValue;
     use dicom_dictionary_std::uids;
 
     use super::*;
@@ -184,6 +206,95 @@ mod tests {
         let frame = jls.frame(2).unwrap();
         assert_eq!(frame.media_type, "image/jls");
         assert_eq!(frame.transfer_syntax_uid, JPEG_LS_LOSSLESS);
+    }
+
+    #[test]
+    fn compressed_frames_are_found_by_the_offset_table() {
+        use crate::frames::{FrameLayout, FramePlan};
+        use crate::wire::{PixelDataSearch, pixel_data_at};
+
+        let original = Instance::from_bytes(&series().multiframe_bytes(0)).unwrap();
+        for ts in [JPEG_LS_LOSSLESS, JPEG_XL_LOSSLESS] {
+            let file = original.transcoded(ts, true).unwrap();
+            let whole = Instance::from_bytes(&file).unwrap();
+            let DicomValue::PixelSequence(sequence) =
+                whole.object.element(tags::PIXEL_DATA).unwrap().value()
+            else {
+                panic!("{ts}: encapsulated pixel data");
+            };
+            // an entry a frame: where its item starts, from the first
+            let mut at = 0;
+            let expected: Vec<u32> = sequence
+                .fragments()
+                .iter()
+                .map(|fragment| {
+                    let offset = at;
+                    at += 8 + fragment.len() as u32;
+                    offset
+                })
+                .collect();
+            assert_eq!(sequence.offset_table(), expected.as_slice(), "{ts}");
+            assert_eq!(expected.len(), RealSeries::FRAMES as usize);
+
+            // so the layout takes two reads, the table's head and the table, however many
+            // frames there are, and each frame by it is the frame of the whole file
+            let PixelDataSearch::Found(found) = pixel_data_at(&file) else {
+                panic!("{ts}: pixel data");
+            };
+            let header = Instance::from_bytes(&file[..found.element]).unwrap();
+            let mut plan = FrameLayout::plan(&header, found, file.len() as u64).unwrap();
+            let mut reads = 0;
+            let layout = loop {
+                match plan {
+                    FramePlan::Ready(layout) => break layout,
+                    FramePlan::Read(search) => {
+                        reads += 1;
+                        let wanted = search.wants();
+                        let part = &file[wanted.start as usize..wanted.end as usize];
+                        plan = search.give(part).unwrap();
+                    }
+                }
+            };
+            assert_eq!(reads, 2, "{ts}");
+            for number in 1..=RealSeries::FRAMES {
+                let range = layout.range(number).unwrap();
+                let part = &file[range.start as usize..range.end as usize];
+                assert_eq!(
+                    layout.frame(number, part),
+                    whole.frame(number).ok(),
+                    "{ts}: frame {number}"
+                );
+            }
+        }
+
+        // one frame is the file: no table to find it by
+        let single = Instance::from_bytes(&series().slice_bytes(0)).unwrap();
+        let file = single.transcoded(JPEG_LS_LOSSLESS, true).unwrap();
+        let whole = Instance::from_bytes(&file).unwrap();
+        let DicomValue::PixelSequence(sequence) =
+            whole.object.element(tags::PIXEL_DATA).unwrap().value()
+        else {
+            panic!("encapsulated pixel data");
+        };
+        assert!(sequence.offset_table().is_empty());
+    }
+
+    #[test]
+    fn offsets_past_32_bits_leave_the_table_empty() {
+        assert_eq!(basic_offsets([].into_iter()), Some(vec![]));
+        assert_eq!(
+            basic_offsets([10, 20, 4].into_iter()),
+            Some(vec![0, 18, 46])
+        );
+        // the last frame may start at the last offset there is, and end past it
+        let most = u64::from(u32::MAX) - 8;
+        assert_eq!(
+            basic_offsets([most, 1 << 40].into_iter()),
+            Some(vec![0, u32::MAX])
+        );
+        assert_eq!(basic_offsets([most + 1, 2].into_iter()), None);
+        assert_eq!(basic_offsets([2, most, 2].into_iter()), None);
+        assert_eq!(basic_offsets([u64::MAX, u64::MAX, 2].into_iter()), None);
     }
 
     #[test]
