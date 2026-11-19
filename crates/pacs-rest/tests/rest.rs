@@ -173,7 +173,7 @@ async fn what_a_client_reads_back() {
     let mut file = archive.by_index(0).unwrap();
     assert_eq!(
         file.name(),
-        "NEMA-92 - CompressedSamples^CT1/ACC92 - e_1/1 - CT/CT000001.dcm"
+        "NEMA-92 - CompressedSamples^CT1/ACC92 - e+1/1 - CT/CT000001.dcm"
     );
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();

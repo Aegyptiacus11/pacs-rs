@@ -27,8 +27,14 @@ fn tag<'a>(tags: &'a Value, name: &str) -> &'a str {
     tags[name].as_str().unwrap_or("")
 }
 
-/// A folder or file name from DICOM values: nothing that would make a path or upset a
-/// file system, "Unknown" when nothing is left.
+/// A folder or file name from DICOM values, by the rule the reference server (26.9.1) was
+/// seen to apply: a character no file system forbids is kept (`e+1` stays `e+1`), each of
+/// `/ \ : * ? " < > |` becomes a space, control characters go, and spaces that follow one
+/// another become one.
+///
+/// Two deliberate differences from it. Letters outside ASCII are kept, where the reference
+/// drops them. A name never begins or ends with a dot, so it is never `..`; "Unknown" when
+/// nothing is left.
 fn name(parts: &[&str]) -> String {
     let joined = parts
         .iter()
@@ -36,21 +42,22 @@ fn name(parts: &[&str]) -> String {
         .copied()
         .collect::<Vec<_>>()
         .join(" - ");
-    let clean: String = joined
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || " -_^.".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let clean = clean.trim().trim_matches('.').to_owned();
+    let mut clean = String::with_capacity(joined.len());
+    for c in joined.chars() {
+        let c = match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            c if c.is_control() => continue,
+            c => c,
+        };
+        if !(c == ' ' && clean.ends_with(' ')) {
+            clean.push(c);
+        }
+    }
+    let clean = clean.trim_matches(['.', ' ']);
     if clean.is_empty() {
         "Unknown".into()
     } else {
-        clean
+        clean.to_owned()
     }
 }
 
@@ -385,9 +392,32 @@ mod tests {
     fn names_are_safe() {
         assert_eq!(name(&["SYN1", "DOE^JOHN"]), "SYN1 - DOE^JOHN");
         // no `/`, and never `..` as a whole path component
-        assert_eq!(name(&["../..", "a/b"]), "_.. - a_b");
+        assert_eq!(name(&["../..", "a/b"]), "- a b");
+        assert_eq!(name(&["..", "x"]), "- x");
         assert_eq!(name(&[".."]), "Unknown");
         assert_eq!(name(&["", ""]), "Unknown");
+        assert_eq!(name(&["a\\b"]), "a b");
         assert_eq!(name(&["CT", ""]), "CT");
+    }
+
+    /// What the reference server (26.9.1) answered for the same values, 19 November 2026.
+    #[test]
+    fn names_keep_what_a_file_system_takes() {
+        // the Study Description of the scanner's file: CI failed on `e_1`
+        assert_eq!(name(&["ACC1984096", "e+1"]), "ACC1984096 - e+1");
+        assert_eq!(
+            name(&[r#"a!b"c#d$e%f&g'h(i)j*k+l,m-n.o/p:q;r<s=t>u?v@w[x]z^0_1`2{3|4}5~6"#]),
+            "a!b c#d$e%f&g'h(i)j k+l,m-n.o p q;r s=t u v@w[x]z^0_1`2{3 4}5~6"
+        );
+        assert_eq!(name(&["a/:b"]), "a b");
+        assert_eq!(name(&[" a  b "]), "a b");
+        assert_eq!(name(&["a  -  b"]), "a - b");
+        assert_eq!(name(&["a\tb"]), "ab");
+    }
+
+    /// Where pacs-rs differs from it on purpose.
+    #[test]
+    fn names_keep_letters_outside_ascii() {
+        assert_eq!(name(&["café Müller"]), "café Müller");
     }
 }
