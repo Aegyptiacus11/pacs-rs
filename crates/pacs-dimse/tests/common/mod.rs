@@ -339,3 +339,73 @@ pub async fn ingest(archive: &Archive, series: &pacs_core::synthetic::SyntheticS
         archive.ingest(bytes.into()).await.unwrap();
     }
 }
+
+/// Between a client and the server, to hold the server in the middle of an answer: what
+/// the server sends goes through up to `first` bytes, then waits until the client has
+/// sent its command number `open_at` (2: a cancel, or a second request, after the first
+/// request). What the client sends always goes through. The socket to the server takes little in, so a server that
+/// is not read from soon cannot write, however fast it is.
+pub async fn gate(server: SocketAddr, first: usize, open_at: usize) -> SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (client, _) = listener.accept().await.unwrap();
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(4096).unwrap();
+        let upstream = socket.connect(server).await.unwrap();
+        let (mut from_client, mut to_client) = client.into_split();
+        let (mut from_server, mut to_server) = upstream.into_split();
+        // a permit waits for whoever asks later: the command may come before the wait
+        let open = Arc::new(tokio::sync::Notify::new());
+        let command_seen = open.clone();
+        tokio::spawn(async move {
+            let mut commands = 0;
+            loop {
+                // a PDU: its type, a reserved byte, its length, its body (PS3.8 9.3.1)
+                let mut header = [0u8; 6];
+                if from_client.read_exact(&mut header).await.is_err() {
+                    let _ = to_server.shutdown().await;
+                    return;
+                }
+                let length = u32::from_be_bytes([header[2], header[3], header[4], header[5]]);
+                let mut body = vec![0u8; length as usize];
+                if from_client.read_exact(&mut body).await.is_err()
+                    || to_server.write_all(&header).await.is_err()
+                    || to_server.write_all(&body).await.is_err()
+                {
+                    return;
+                }
+                // P-DATA-TF: values of a length, a context and a header whose first bit
+                // says command and second says last fragment (PS3.8 9.3.5, E.2)
+                let mut values = &body[..];
+                while header[0] == 0x04 && values.len() >= 6 {
+                    let length =
+                        u32::from_be_bytes([values[0], values[1], values[2], values[3]]) as usize;
+                    if values[5] & 0b11 == 0b11 {
+                        commands += 1;
+                        if commands == open_at {
+                            command_seen.notify_one();
+                        }
+                    }
+                    values = &values[4 + length..];
+                }
+            }
+        });
+        let mut passed = 0;
+        let mut buffer = vec![0u8; 2048];
+        while passed < first {
+            let room = buffer.len().min(first - passed);
+            let n = from_server.read(&mut buffer[..room]).await.unwrap();
+            if n == 0 {
+                return;
+            }
+            to_client.write_all(&buffer[..n]).await.unwrap();
+            passed += n;
+        }
+        open.notified().await;
+        // from here on, everything
+        let _ = tokio::io::copy(&mut from_server, &mut to_client).await;
+    });
+    addr
+}

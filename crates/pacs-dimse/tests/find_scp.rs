@@ -914,52 +914,9 @@ fn c_cancel_rq(message_id: u16) -> Command {
         .with_us(tag::COMMAND_DATA_SET_TYPE, NO_DATA_SET)
 }
 
-/// Between a client and the server: what the client sends goes through at once; what the
-/// server sends goes through up to `first` bytes, then waits for `open`. The socket to the
-/// server takes little in, so a server that is not read from soon cannot write.
-async fn gate(
-    server: std::net::SocketAddr,
-    first: usize,
-    open: Arc<tokio::sync::Notify>,
-) -> std::net::SocketAddr {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let (client, _) = listener.accept().await.unwrap();
-        let socket = tokio::net::TcpSocket::new_v4().unwrap();
-        socket.set_recv_buffer_size(4096).unwrap();
-        let upstream = socket.connect(server).await.unwrap();
-        let (mut from_client, mut to_client) = client.into_split();
-        let (mut from_server, mut to_server) = upstream.into_split();
-        tokio::spawn(async move {
-            let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
-            let _ = to_server.shutdown().await;
-        });
-        let mut passed = 0;
-        let mut buffer = vec![0u8; 2048];
-        loop {
-            if passed >= first {
-                open.notified().await;
-                // from here on, everything
-                let _ = tokio::io::copy(&mut from_server, &mut to_client).await;
-                return;
-            }
-            let room = buffer.len().min(first - passed);
-            let n = from_server.read(&mut buffer[..room]).await.unwrap();
-            if n == 0 {
-                return;
-            }
-            to_client.write_all(&buffer[..n]).await.unwrap();
-            passed += n;
-        }
-    });
-    addr
-}
-
 /// PS3.4 C.4.1.3.1: a C-CANCEL-FIND-RQ interrupts the matching, which ends with status
 /// Cancel and without the rest of the matches. The server is held in the middle of its
-/// answer until the cancel is sent, so this does not depend on who is faster.
+/// answer until the cancel is sent ([`gate`]), so this does not depend on who is faster.
 #[tokio::test]
 async fn a_cancel_in_the_middle_ends_with_status_cancel() {
     const STUDIES: u32 = 2500;
@@ -968,9 +925,9 @@ async fn a_cancel_in_the_middle_ends_with_status_cancel() {
         ingest(&archive, &SyntheticSeries::new(10_000 + seed, 1)).await;
     }
     let server = start(answering(), archive).await;
-    let open = Arc::new(tokio::sync::Notify::new());
-    // the association's acceptance and a few matches pass; the rest waits
-    let addr = gate(server, 2048, open.clone()).await;
+    // the association's acceptance and a few matches pass; the rest waits for the second
+    // of the two cancels below
+    let addr = gate(server, 2048, 3).await;
     let mut client = viewer(addr, "PACSRS").await;
     let id = client.message_id();
     let context = client.context(STUDY_ROOT_FIND);
@@ -1005,7 +962,6 @@ async fn a_cancel_in_the_middle_ends_with_status_cancel() {
         .await
         .unwrap();
     }
-    open.notify_one();
     let answer = client.answer(STUDY_ROOT_FIND).await;
     assert_eq!(answer.status(), Status::CANCEL);
     assert_eq!(answer.last.command_field(), Ok(field::C_FIND_RSP));
@@ -1053,8 +1009,7 @@ async fn a_second_request_during_a_find_aborts() {
         ingest(&archive, &SyntheticSeries::new(20_000 + seed, 1)).await;
     }
     let server = start(answering(), archive).await;
-    let open = Arc::new(tokio::sync::Notify::new());
-    let addr = gate(server, 2048, open.clone()).await;
+    let addr = gate(server, 2048, 2).await;
     let mut client = viewer(addr, "PACSRS").await;
     let context = client.context(STUDY_ROOT_FIND);
     let mut query = Vec::new();
@@ -1071,7 +1026,6 @@ async fn a_second_request_during_a_find_aborts() {
         .await
         .unwrap();
     }
-    open.notify_one();
     loop {
         match message::receive(&mut client.association, 1 << 20).await {
             Ok(Incoming::Message(message)) => {
