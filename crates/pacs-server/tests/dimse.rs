@@ -95,9 +95,14 @@ fn dimse_settings_are_read_and_checked() {
             "--dimse-remotes",
             "hospital=HOSP_PACS@10.0.0.5:104,ws=WS1@[::1]:11112",
             "--dimse-known-callers-only",
+            "--dimse-move-destinations",
+            "ws",
         ],
     );
     let config = dimse_config(&settings).unwrap();
+    // only what is named may be sent to: not the archive that is read from
+    assert_eq!(config.move_destination("WS1").unwrap().id, "ws");
+    assert!(config.move_destination("HOSP_PACS").is_none());
     assert_eq!(config.ae_title.as_str(), "RESEARCH_PACS");
     assert_eq!(config.extra_ae_titles.len(), 2);
     assert_eq!(config.remote("ws").unwrap().host, "::1");
@@ -115,6 +120,31 @@ fn dimse_settings_are_read_and_checked() {
     assert!(parse(&["--dimse-remotes", "no-id@host:104"]).is_err());
     let twice = parse(&["--dimse-remotes", "a=A@h:1,a=B@h:2"]).unwrap();
     assert!(dimse_config(&twice).is_err());
+    // without the setting nothing is a destination
+    let unnamed = parse(&["--dimse-remotes", "ws=WS1@h:104"]).unwrap();
+    let config = dimse_config(&unnamed).unwrap();
+    assert!(config.move_destination("WS1").is_none());
+    // a destination must be a remote AE, and its AE title that of no other destination
+    for (remotes, destinations, why) in [
+        ("ws=WS1@h:104", "viewer", "is not a remote AE"),
+        ("ws=WS1@h:104", "WS1", "is not a remote AE"),
+        (
+            "a=WS1@h:104,b=WS1@other:104",
+            "a,b",
+            "the same AE title WS1",
+        ),
+        ("a=WS1@h:104", "a,a", "the same AE title WS1"),
+    ] {
+        let settings = parse(&[
+            "--dimse-remotes",
+            remotes,
+            "--dimse-move-destinations",
+            destinations,
+        ])
+        .unwrap();
+        let error = dimse_config(&settings).unwrap_err().to_string();
+        assert!(error.contains(why), "{destinations}: {error}");
+    }
     let none = parse(&["--dimse-max-associations", "0"]).unwrap();
     assert!(dimse_config(&none).is_err());
 }
