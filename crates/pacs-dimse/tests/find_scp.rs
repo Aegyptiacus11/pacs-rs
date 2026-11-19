@@ -12,7 +12,7 @@ use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::InMemDicomObject;
 use pacs_archive::Archive;
-use pacs_core::sample::SampleSeries;
+use pacs_core::real::RealSeries;
 use pacs_deid::{Keys, Profile};
 use pacs_dimse::command::{Command, NO_DATA_SET, field, tag};
 use pacs_dimse::message::{self, Incoming};
@@ -39,19 +39,19 @@ async fn viewer(addr: std::net::SocketAddr, called: &str) -> Client {
 }
 
 /// Three studies: Doe's CT of two series (seeds 301 and 304), Roe's MR, Smith's CT.
-async fn three_studies(archive: &Archive) -> [SampleSeries; 4] {
+async fn three_studies(archive: &Archive) -> [RealSeries; 4] {
     let series = [
-        SampleSeries::new(301, 2)
+        RealSeries::new(301, 2)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SampleSeries::new(302, 1)
+        RealSeries::new(302, 1)
             .with_patient("Roe^Richard", None)
             .at("20260106", "120000")
             .of_modality("MR"),
-        SampleSeries::new(303, 1)
+        RealSeries::new(303, 1)
             .with_patient("Smith^Al", None)
             .at("20260201", "235959"),
-        SampleSeries::new(304, 3)
+        RealSeries::new(304, 3)
             .in_study(301, 2)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000")
@@ -121,7 +121,7 @@ async fn a_study_query_answers_one_pending_response_per_study() {
         (tags::STUDY_DATE, "20260105"),
         (tags::STUDY_TIME, "100000"),
         (tags::ACCESSION_NUMBER, "ACC301"),
-        (tags::PATIENT_ID, "LITS-301"),
+        (tags::PATIENT_ID, "NEMA-301"),
         (tags::STUDY_ID, "S301"),
         (tags::MODALITIES_IN_STUDY, "CT\\SR"),
         (tags::NUMBER_OF_STUDY_RELATED_SERIES, "2"),
@@ -158,12 +158,12 @@ async fn study_keys_are_matched_by_their_kind() {
     let uids = format!("{}\\{}", roe.study_uid(), smith.study_uid());
     for (keys, expected, why) in [
         (
-            vec![(tags::PATIENT_ID, VR::LO, "LITS-302")],
+            vec![(tags::PATIENT_ID, VR::LO, "NEMA-302")],
             vec![&roe],
             "single value",
         ),
         (
-            vec![(tags::PATIENT_ID, VR::LO, "lits-302")],
+            vec![(tags::PATIENT_ID, VR::LO, "nema-302")],
             vec![],
             "text is case-sensitive",
         ),
@@ -329,7 +329,7 @@ async fn series_and_instances_are_found_under_their_unique_keys() {
             report_series
         );
         assert_eq!(value(found, tags::SOP_CLASS_UID).unwrap(), CT);
-        assert_eq!(found.get(tags::ROWS).unwrap().to_int::<u16>().unwrap(), 512);
+        assert_eq!(found.get(tags::ROWS).unwrap().to_int::<u16>().unwrap(), 128);
     }
     let one = client
         .find(
@@ -382,7 +382,7 @@ fn sequence(tag: Tag, items: Vec<Vec<(Tag, VR, &str)>>) -> DataElement<InMemDico
 
 /// A slice of `series` with these requests in its Request Attributes Sequence, as
 /// (Scheduled Procedure Step ID, Requested Procedure ID).
-fn with_requests(series: &SampleSeries, requests: &[(&str, &str)]) -> Vec<u8> {
+fn with_requests(series: &RealSeries, requests: &[(&str, &str)]) -> Vec<u8> {
     let mut object = dicom_object::from_reader(&*series.slice_bytes(0)).unwrap();
     object.put(sequence(
         tags::REQUEST_ATTRIBUTES_SEQUENCE,
@@ -407,9 +407,9 @@ fn with_requests(series: &SampleSeries, requests: &[(&str, &str)]) -> Vec<u8> {
 #[tokio::test]
 async fn a_sequence_is_matched_by_the_keys_of_one_item() {
     let archive = archive().await;
-    let first = SampleSeries::new(311, 1);
-    let second = SampleSeries::new(312, 1).in_study(311, 2);
-    let bare = SampleSeries::new(313, 1).in_study(311, 3);
+    let first = RealSeries::new(311, 1);
+    let second = RealSeries::new(312, 1).in_study(311, 2);
+    let bare = RealSeries::new(313, 1).in_study(311, 3);
     for file in [
         with_requests(&first, &[("STEP1", "REQ1"), ("STEP2", "REQ2")]),
         with_requests(&second, &[("STEP3", "REQ1")]),
@@ -550,7 +550,7 @@ async fn a_key_that_is_not_supported_is_left_out_and_said() {
         .find(
             STUDY_ROOT_FIND,
             &study_query(&[
-                (tags::PATIENT_ID, VR::LO, "LITS-302"),
+                (tags::PATIENT_ID, VR::LO, "NEMA-302"),
                 // an Optional Key of the level that pacs-rs does not keep
                 (tags::ADMITTING_DIAGNOSES_DESCRIPTION, VR::LO, ""),
                 // a key of a lower level
@@ -563,7 +563,7 @@ async fn a_key_that_is_not_supported_is_left_out_and_said() {
     assert_eq!(answer.status(), Status::SUCCESS);
     assert_eq!(answer.pending, [Status::PENDING_OPTIONAL_KEYS]);
     let found = &answer.matches[0];
-    assert_eq!(value(found, tags::PATIENT_ID).unwrap(), "LITS-302");
+    assert_eq!(value(found, tags::PATIENT_ID).unwrap(), "NEMA-302");
     assert!(found.get(tags::ADMITTING_DIAGNOSES_DESCRIPTION).is_none());
     assert!(found.get(tags::MODALITY).is_none());
     assert!(found.get(Tag(0x0009, 0x0010)).is_none());
@@ -574,7 +574,7 @@ async fn a_key_that_is_not_supported_is_left_out_and_said() {
 #[tokio::test]
 async fn a_key_without_a_value_comes_back_empty() {
     let archive = archive().await;
-    let series = SampleSeries::new(321, 1);
+    let series = RealSeries::new(321, 1);
     let mut object = dicom_object::from_reader(&*series.slice_bytes(0)).unwrap();
     object.remove_element(tags::ACCESSION_NUMBER);
     let mut bytes = Vec::new();
@@ -605,7 +605,7 @@ async fn a_name_outside_ascii_is_answered_in_utf_8() {
     let archive = archive().await;
     ingest(
         &archive,
-        &SampleSeries::new(331, 1).with_patient("Müller^Jürgen", Some("ISO_IR 100")),
+        &RealSeries::new(331, 1).with_patient("Müller^Jürgen", Some("ISO_IR 100")),
     )
     .await;
     let addr = start(answering(), archive).await;
@@ -786,7 +786,7 @@ async fn a_caller_that_is_not_configured_is_not_answered() {
 
 async fn archive_with_a_study() -> Archive {
     let archive = archive().await;
-    ingest(&archive, &SampleSeries::new(341, 1)).await;
+    ingest(&archive, &RealSeries::new(341, 1)).await;
     archive
 }
 
@@ -795,15 +795,15 @@ async fn archive_with_a_study() -> Archive {
 #[tokio::test]
 async fn a_project_ae_title_shows_only_its_project() {
     let archive = archive().await;
-    let received = SampleSeries::new(351, 1).with_patient("Identified^Ida", None);
+    let received = RealSeries::new(351, 1).with_patient("Identified^Ida", None);
     ingest(&archive, &received).await;
     let liver = archive.clone().for_project("liver-2026");
-    let in_liver = SampleSeries::new(352, 1).with_patient("PSEUDO-1", None);
+    let in_liver = RealSeries::new(352, 1).with_patient("PSEUDO-1", None);
     ingest(&liver, &in_liver).await;
     let lung = archive.clone().for_project("lung-2026");
     ingest(
         &lung,
-        &SampleSeries::new(353, 1).with_patient("PSEUDO-2", None),
+        &RealSeries::new(353, 1).with_patient("PSEUDO-2", None),
     )
     .await;
     let project = |ae_title: &str, name: &str, archive: &Archive| {
@@ -840,7 +840,7 @@ async fn a_project_ae_title_shows_only_its_project() {
         [Some("LIVER_2026".to_owned())]
     );
     // a study outside the project is not there, asked for by name or looked into
-    for outside in [&received, &SampleSeries::new(353, 1)] {
+    for outside in [&received, &RealSeries::new(353, 1)] {
         let study = outside.study_uid();
         let by_uid = client
             .find(
@@ -922,7 +922,7 @@ async fn a_cancel_in_the_middle_ends_with_status_cancel() {
     const STUDIES: u32 = 2500;
     let archive = archive().await;
     for seed in 0..STUDIES {
-        index_only(&archive, &SampleSeries::new(10_000 + seed, 1)).await;
+        index_only(&archive, &RealSeries::new(10_000 + seed, 1)).await;
     }
     let server = start(answering(), archive).await;
     // the association's acceptance and a few matches pass; the rest waits for the second
@@ -975,7 +975,7 @@ async fn a_cancel_in_the_middle_ends_with_status_cancel() {
     let one = client
         .find(
             STUDY_ROOT_FIND,
-            &study_query(&[(tags::PATIENT_ID, VR::LO, "LITS-10007")]),
+            &study_query(&[(tags::PATIENT_ID, VR::LO, "NEMA-10007")]),
         )
         .await;
     assert_eq!(one.status(), Status::SUCCESS);
@@ -1006,7 +1006,7 @@ async fn a_cancel_after_the_final_response_is_ignored() {
 async fn a_second_request_during_a_find_aborts() {
     let archive = archive().await;
     for seed in 0..2500 {
-        index_only(&archive, &SampleSeries::new(20_000 + seed, 1)).await;
+        index_only(&archive, &RealSeries::new(20_000 + seed, 1)).await;
     }
     let server = start(answering(), archive).await;
     let addr = gate(server, 2048, 2).await;

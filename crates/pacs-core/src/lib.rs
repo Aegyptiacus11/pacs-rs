@@ -17,8 +17,8 @@ pub mod json;
 pub mod levels;
 pub mod main_tags;
 pub mod public_ids;
-#[cfg(feature = "sample")]
-pub mod sample;
+#[cfg(feature = "real")]
+pub mod real;
 #[cfg(feature = "synthetic")]
 pub mod synthetic;
 pub mod transcode;

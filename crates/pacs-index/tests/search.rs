@@ -3,7 +3,7 @@
 mod common;
 
 use pacs_core::Instance;
-use pacs_core::sample::SampleSeries;
+use pacs_core::real::RealSeries;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::{Index, Key, Kind, Match, NewInstance, StudySearch};
 
@@ -371,9 +371,9 @@ async fn a_cursor_gives_every_match_once_and_no_other() {
     for index in common::indexes().await {
         for seed in 1000..1450 {
             let name = if seed % 3 == 0 { "Doe^Jane" } else { "Roe^Al" };
-            // the real sample's first slice, as a study of its own: its header is what
+            // a scanner's CT, as a study of its own: its header is what
             // an index keeps
-            let series = SampleSeries::new(seed, 1).with_patient(name, None);
+            let series = RealSeries::new(seed, 1).with_patient(name, None);
             let bytes = series.header_bytes(0);
             let instance = Instance::from_bytes(&bytes).unwrap();
             let new = NewInstance::new(&instance, format!("dicom/{seed}.dcm"), bytes.len());

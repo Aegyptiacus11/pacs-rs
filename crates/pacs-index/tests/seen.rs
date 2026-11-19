@@ -4,7 +4,7 @@ mod common;
 
 use pacs_core::Instance;
 use pacs_core::public_ids;
-use pacs_core::sample::SampleSeries;
+use pacs_core::real::RealSeries;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::{Index, Level, NewInstance, PatientQuery, StudyFilter, WorklistQuery};
 
@@ -85,11 +85,11 @@ macro_rules! named {
     };
 }
 named!(SyntheticSeries);
-named!(SampleSeries);
+named!(RealSeries);
 
-/// Index the real sample's slices under `series`' identifiers, in `project`: their
+/// Index a scanner's file under `series`' identifiers, in `project`: its
 /// headers, since nothing is stored here.
-async fn record_sample(index: &Index, series: &SampleSeries, project: Option<&str>) {
+async fn record_real(index: &Index, series: &RealSeries, project: Option<&str>) {
     for slice in 0..series.slices {
         let bytes = series.header_bytes(slice);
         let instance = Instance::from_bytes(&bytes).unwrap();
@@ -344,12 +344,12 @@ async fn a_project_sees_its_own_studies_and_no_other() {
     for index in common::indexes().await {
         // one patient with a study in each of two projects, and another patient whose
         // study is in none
-        let liver = SampleSeries::new(81, 2).for_patient(80);
-        let lung = SampleSeries::new(82, 2).for_patient(80);
-        let received = SampleSeries::new(83, 2);
-        record_sample(&index, &liver, Some("liver")).await;
-        record_sample(&index, &lung, Some("lung")).await;
-        record_sample(&index, &received, None).await;
+        let liver = RealSeries::new(81, 2).for_patient(80);
+        let lung = RealSeries::new(82, 2).for_patient(80);
+        let received = RealSeries::new(83, 2);
+        record_real(&index, &liver, Some("liver")).await;
+        record_real(&index, &lung, Some("lung")).await;
+        record_real(&index, &received, None).await;
         for s in [&liver, &lung, &received] {
             index
                 .put_annotations(&s.study_uid(), Some("[0]"))

@@ -12,7 +12,7 @@ use axum::http::{Request, StatusCode};
 use clap::Parser;
 use dicom_ul::ClientAssociationOptions;
 use http_body_util::BodyExt;
-use pacs_core::sample::SampleSeries;
+use pacs_core::real::RealSeries;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::command::{Command, PRIORITY_MEDIUM, field, tag};
 use pacs_dimse::message::{self, Incoming};
@@ -1085,7 +1085,7 @@ async fn a_query_over_dimse_and_one_that_is_refused_are_in_the_audit_trail() {
         &["--dimse-remotes", "viewer=VIEWER@127.0.0.1:11112"],
     );
     let archive = open_archive(&settings).await.unwrap();
-    let series = SampleSeries::new(71, 1).with_patient("DOE^JANE", None);
+    let series = RealSeries::new(71, 1).with_patient("DOE^JANE", None);
     archive.ingest(series.slice_bytes(0).into()).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1098,7 +1098,7 @@ async fn a_query_over_dimse_and_one_that_is_refused_are_in_the_audit_trail() {
         std::future::pending(),
     ));
 
-    assert_eq!(query_as(addr, "VIEWER", "LITS-71").await.unwrap(), 1);
+    assert_eq!(query_as(addr, "VIEWER", "NEMA-71").await.unwrap(), 1);
     let lines = audit_lines(dir.path(), 1).await;
     has(
         &lines[0],
@@ -1125,17 +1125,17 @@ async fn a_query_over_dimse_and_one_that_is_refused_are_in_the_audit_trail() {
     let identifier = base64::engine::general_purpose::STANDARD
         .decode(query)
         .unwrap();
-    assert!(identifier.windows(7).any(|bytes| bytes == b"LITS-71"));
+    assert!(identifier.windows(7).any(|bytes| bytes == b"NEMA-71"));
 
     // the same search again leaves no second line; another search does
-    assert_eq!(query_as(addr, "VIEWER", "LITS-71").await.unwrap(), 1);
+    assert_eq!(query_as(addr, "VIEWER", "NEMA-71").await.unwrap(), 1);
     assert_eq!(query_as(addr, "VIEWER", "NOBODY").await.unwrap(), 0);
     let lines = audit_lines(dir.path(), 2).await;
     has(&lines[1], &["<EventID csd-code=\"110112\""]);
 
     // a caller this server does not answer: refused, and an alert, once however often
     for _ in 0..2 {
-        let refused = query_as(addr, "STRANGER", "LITS-71").await.unwrap_err();
+        let refused = query_as(addr, "STRANGER", "NEMA-71").await.unwrap_err();
         assert!(
             matches!(
                 &refused,
@@ -1194,7 +1194,7 @@ async fn a_move_asked_over_dimse_is_in_the_audit_trail() {
         ],
     );
     let archive = open_archive(&settings).await.unwrap();
-    let series = SampleSeries::new(72, 2).with_patient("DOE^JANE", None);
+    let series = RealSeries::new(72, 2).with_patient("DOE^JANE", None);
     for bytes in series.all_bytes() {
         archive.ingest(bytes.into()).await.unwrap();
     }
@@ -1299,7 +1299,7 @@ async fn a_get_asked_over_dimse_is_in_the_audit_trail() {
         &["--dimse-remotes", "viewer=VIEWER@127.0.0.1:11112"],
     );
     let archive = open_archive(&settings).await.unwrap();
-    let series = SampleSeries::new(73, 2).with_patient("DOE^JANE", None);
+    let series = RealSeries::new(73, 2).with_patient("DOE^JANE", None);
     for bytes in series.all_bytes() {
         archive.ingest(bytes.into()).await.unwrap();
     }

@@ -1,14 +1,16 @@
-//! The sample study as test data: the three slices of a real CT in `docs/sample` (LiTS
-//! volume 0, see `docs/sample-study.md`), under other identifiers, for the tests that need
-//! several patients, studies and series.
+//! Real DICOM as test data: two files made by scanners, a CT and an MR, from pydicom's test
+//! data (`tests/data/pydicom`, with where they come from and under what terms), written
+//! under other identifiers for the tests that need several patients, studies and series.
 //!
-//! What a [`SampleSeries`] writes is the real file but for what tells one entity from
+//! What a [`RealSeries`] writes is the scanner's file but for what tells one entity from
 //! another: the UIDs, the Patient ID, the Accession Number, the Study ID, the series and
 //! instance numbers, and what a test sets by name (a patient's name, a study's date and
-//! time, a modality). The pixel data and every other attribute are the file's own.
+//! time, a modality). The pixel data and every other attribute are the file's own. There
+//! is one image of each kind, so the slices of a series are that image under as many SOP
+//! Instance UIDs.
 //!
 //! The files are read from the checkout, so this is for tests run from it, not for a
-//! published crate. They are shared under CC BY-NC-SA 4.0, not under pacs-rs's licences.
+//! published crate.
 
 use std::sync::OnceLock;
 
@@ -16,45 +18,42 @@ use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
 use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
 
-/// How many slices the sample study has.
-pub const SLICES: u32 = 3;
+/// Which of the two files a series is made of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scanned {
+    /// `CT_small.dcm`: CT Image Storage, 128 x 128.
+    Ct,
+    /// `MR_small.dcm`: MR Image Storage, 64 x 64.
+    Mr,
+}
 
-/// The data sets of the sample's slices, in instance-number order, read once.
-fn slices() -> &'static [InMemDicomObject] {
-    static READ: OnceLock<Vec<InMemDicomObject>> = OnceLock::new();
+/// The data sets of the two files, read once: the CT, then the MR.
+fn files() -> &'static [InMemDicomObject; 2] {
+    static READ: OnceLock<[InMemDicomObject; 2]> = OnceLock::new();
     READ.get_or_init(|| {
-        (1..=SLICES)
-            .map(|number| {
-                let path = format!(
-                    "{}/../../docs/sample/{number:05}.dcm",
-                    env!("CARGO_MANIFEST_DIR")
-                );
-                dicom_object::open_file(&path)
-                    .unwrap_or_else(|e| panic!("the sample study's {path}: {e}"))
-                    .into_inner()
-            })
-            .collect()
+        ["CT_small.dcm", "MR_small.dcm"].map(|name| {
+            let path = format!("{}/tests/data/pydicom/{name}", env!("CARGO_MANIFEST_DIR"));
+            dicom_object::open_file(&path)
+                .unwrap_or_else(|e| panic!("the test file {path}: {e}"))
+                .into_inner()
+        })
     })
 }
 
 /// The same data sets without their pixel data: what an index keeps of an instance.
-fn headers() -> &'static [InMemDicomObject] {
-    static READ: OnceLock<Vec<InMemDicomObject>> = OnceLock::new();
+fn headers() -> &'static [InMemDicomObject; 2] {
+    static READ: OnceLock<[InMemDicomObject; 2]> = OnceLock::new();
     READ.get_or_init(|| {
-        slices()
-            .iter()
-            .map(|slice| {
-                let mut header = slice.clone();
-                header.remove_element(tags::PIXEL_DATA);
-                header
-            })
-            .collect()
+        files().clone().map(|mut header| {
+            header.remove_element(tags::PIXEL_DATA);
+            header
+        })
     })
 }
 
-/// A series made of the sample study's slices: `slices` of them, from the first.
+/// A series of a scanner's image: `slices` instances of it.
 #[derive(Debug, Clone)]
-pub struct SampleSeries {
+pub struct RealSeries {
     /// Distinguishes series made in the same test; goes into the series and instance UIDs.
     pub seed: u32,
     /// Goes into the study UID and the Patient ID; series with the same one share a study.
@@ -63,30 +62,36 @@ pub struct SampleSeries {
     pub patient_seed: Option<u32>,
     pub series_number: u32,
     pub slices: u32,
+    scanned: Scanned,
     /// Patient's Name, and the Specific Character Set it needs; the file's own unless set.
     patient: Option<(String, Option<&'static str>)>,
     /// Study Date and Study Time; the file's own unless set.
     at: Option<(String, String)>,
-    /// The file's own (CT) unless set.
+    /// The file's own unless set.
     modality: Option<String>,
 }
 
-impl SampleSeries {
-    /// `slices` is 3 at most: what the sample study has.
+impl RealSeries {
+    /// A series of the CT image.
     pub fn new(seed: u32, slices: u32) -> Self {
-        assert!(
-            (1..=SLICES).contains(&slices),
-            "the sample study has {SLICES} slices, not {slices}"
-        );
-        SampleSeries {
+        RealSeries {
             seed,
             study_seed: seed,
             patient_seed: None,
             series_number: 1,
             slices,
+            scanned: Scanned::Ct,
             patient: None,
             at: None,
             modality: None,
+        }
+    }
+
+    /// A series of the MR image: another SOP class, MR Image Storage.
+    pub fn mr(seed: u32, slices: u32) -> Self {
+        RealSeries {
+            scanned: Scanned::Mr,
+            ..RealSeries::new(seed, slices)
         }
     }
 
@@ -104,7 +109,7 @@ impl SampleSeries {
     }
 
     pub fn patient_id(&self) -> String {
-        format!("LITS-{}", self.patient_seed.unwrap_or(self.study_seed))
+        format!("NEMA-{}", self.patient_seed.unwrap_or(self.study_seed))
     }
 
     /// The same series, of a study at `date` (YYYYMMDD) and `time` (HHMMSS).
@@ -113,7 +118,8 @@ impl SampleSeries {
         self
     }
 
-    /// The same series, said to be of another modality than CT.
+    /// The same series, with Modality said to be `modality`: the image and its SOP class
+    /// stay what they are. For a real MR, see [`RealSeries::mr`].
     pub fn of_modality(mut self, modality: &str) -> Self {
         self.modality = Some(modality.into());
         self
@@ -139,25 +145,25 @@ impl SampleSeries {
         format!("2.25.{}3{:05}", self.seed, slice + 1)
     }
 
-    /// The pixel data of one slice as it is in the file: 512 x 512 values of 16 bits. The
-    /// sample study has one frame per slice, and `frame` is not read.
-    pub fn pixels(&self, slice: u32, _frame: u32) -> Vec<u16> {
-        slices()[slice as usize]
+    /// The pixel data as it is in the file, values of 16 bits: the same for every slice,
+    /// the file having one image of one frame.
+    pub fn pixels(&self, _slice: u32, _frame: u32) -> Vec<u16> {
+        files()[self.scanned as usize]
             .element(tags::PIXEL_DATA)
-            .expect("the sample study has pixel data")
+            .expect("the file has pixel data")
             .to_bytes()
-            .expect("the sample study's pixel data is native")
+            .expect("the file's pixel data is native")
             .chunks(2)
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect()
     }
 
-    /// One slice as a data set: the sample's, under this series' identifiers.
+    /// One slice as a data set: the file's, under this series' identifiers.
     pub fn slice_object(&self, slice: u32) -> InMemDicomObject {
-        self.renamed(slice, slices()[slice as usize].clone())
+        self.renamed(slice, files()[self.scanned as usize].clone())
     }
 
-    /// `object`, a slice of the sample, under this series' identifiers.
+    /// `object`, the file's data set or its header, under this series' identifiers.
     fn renamed(&self, slice: u32, mut object: InMemDicomObject) -> InMemDicomObject {
         let mut put = |tag, vr, value: String| {
             object.put(DataElement::new(tag, vr, PrimitiveValue::from(value)));
@@ -194,7 +200,7 @@ impl SampleSeries {
         object
     }
 
-    /// One slice as a DICOM Part 10 file in Explicit VR Little Endian, as the sample is.
+    /// One slice as a DICOM Part 10 file in Explicit VR Little Endian, as the file is.
     pub fn slice_bytes(&self, slice: u32) -> Vec<u8> {
         to_file(self.slice_object(slice))
     }
@@ -202,7 +208,7 @@ impl SampleSeries {
     /// One slice's file without its pixel data: enough for an index that is filled
     /// without a store, when a test searches thousands of studies and retrieves none.
     pub fn header_bytes(&self, slice: u32) -> Vec<u8> {
-        to_file(self.renamed(slice, headers()[slice as usize].clone()))
+        to_file(self.renamed(slice, headers()[self.scanned as usize].clone()))
     }
 
     /// Every slice, in instance-number order.
@@ -214,7 +220,7 @@ impl SampleSeries {
 fn to_file(object: InMemDicomObject) -> Vec<u8> {
     let file = object
         .with_meta(FileMetaTableBuilder::new().transfer_syntax("1.2.840.10008.1.2.1"))
-        .expect("the sample study has the SOP class and instance UIDs");
+        .expect("the file has the SOP class and instance UIDs");
     let mut bytes = Vec::new();
     file.write_all(&mut bytes)
         .expect("writing to a Vec does not fail");
@@ -227,19 +233,18 @@ mod tests {
     use crate::Instance;
 
     #[test]
-    fn a_slice_is_the_real_one_under_other_identifiers() {
-        let series = SampleSeries::new(7, 3)
+    fn a_slice_is_the_scanner_s_file_under_other_identifiers() {
+        let series = RealSeries::new(7, 3)
             .in_study(5, 2)
             .for_patient(4)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000");
-        let original = slices();
         for slice in 0..3 {
             let instance = Instance::from_bytes(&series.slice_bytes(slice)).unwrap();
             assert_eq!(instance.key.sop_instance_uid, series.instance_uid(slice));
             assert_eq!(instance.key.study_instance_uid, "2.25.5100000");
             assert_eq!(instance.key.series_instance_uid, "2.25.7200000");
-            assert_eq!(instance.string(tags::PATIENT_ID).unwrap(), "LITS-4");
+            assert_eq!(instance.string(tags::PATIENT_ID).unwrap(), "NEMA-4");
             assert_eq!(instance.string(tags::PATIENT_NAME).unwrap(), "Doe^Jane");
             assert_eq!(instance.string(tags::STUDY_DATE).unwrap(), "20260105");
             assert_eq!(instance.int(tags::SERIES_NUMBER), Some(2));
@@ -247,17 +252,12 @@ mod tests {
                 instance.int(tags::INSTANCE_NUMBER),
                 Some(i64::from(slice) + 1)
             );
-            // what was not named is the file's own: a real CT of 512 by 512
-            assert_eq!(instance.int(tags::ROWS), Some(512));
+            // what was not named is the file's own: a CT of 128 by 128 from a GE scanner
+            assert_eq!(instance.int(tags::ROWS), Some(128));
             assert_eq!(instance.string(tags::MODALITY).unwrap(), "CT");
             assert_eq!(
-                instance.string(tags::STUDY_DESCRIPTION),
-                original[slice as usize]
-                    .element(tags::STUDY_DESCRIPTION)
-                    .unwrap()
-                    .to_str()
-                    .ok()
-                    .map(|s| s.into_owned())
+                instance.string(tags::MANUFACTURER).unwrap(),
+                "GE MEDICAL SYSTEMS"
             );
             let shape = instance.shape().unwrap();
             let native = instance.native_frame(1, shape).unwrap();
@@ -265,27 +265,49 @@ mod tests {
                 .chunks(2)
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .collect();
-            assert_eq!(pixels.len(), 512 * 512);
+            assert_eq!(pixels.len(), 128 * 128);
             assert_eq!(pixels, series.pixels(slice, 0));
         }
-        // the three slices are three images, not one thrice
-        assert_ne!(series.pixels(0, 0), series.pixels(1, 0));
         // the header alone names the same instance, and has no pixels
         let header = Instance::from_bytes(&series.header_bytes(1)).unwrap();
         assert_eq!(header.key.sop_instance_uid, series.instance_uid(1));
         assert_eq!(header.string(tags::PATIENT_NAME).unwrap(), "Doe^Jane");
-        assert_eq!(header.int(tags::ROWS), Some(512));
-        assert!(series.header_bytes(1).len() < 2000);
+        assert_eq!(header.int(tags::ROWS), Some(128));
+        assert!(series.header_bytes(1).len() < series.slice_bytes(1).len() / 4);
         // left as the file has them
-        let plain = Instance::from_bytes(&SampleSeries::new(9, 1).slice_bytes(0)).unwrap();
-        assert_eq!(plain.string(tags::PATIENT_NAME).unwrap(), "VOLUME 0^LITS");
-        assert_eq!(plain.string(tags::PATIENT_ID).unwrap(), "LITS-9");
-        assert_eq!(plain.string(tags::STUDY_DATE).unwrap(), "20261117");
+        let plain = Instance::from_bytes(&RealSeries::new(9, 1).slice_bytes(0)).unwrap();
+        assert_eq!(
+            plain.string(tags::PATIENT_NAME).unwrap(),
+            "CompressedSamples^CT1"
+        );
+        assert_eq!(plain.string(tags::PATIENT_ID).unwrap(), "NEMA-9");
+        assert_eq!(plain.string(tags::STUDY_DATE).unwrap(), "20040119");
     }
 
     #[test]
-    #[should_panic(expected = "the sample study has 3 slices")]
-    fn a_series_has_no_more_slices_than_the_sample() {
-        SampleSeries::new(1, 4);
+    fn the_mr_is_another_image_of_another_sop_class() {
+        let series = RealSeries::mr(8, 1);
+        let instance = Instance::from_bytes(&series.slice_bytes(0)).unwrap();
+        assert_eq!(instance.key.sop_class_uid, "1.2.840.10008.5.1.4.1.1.4");
+        assert_eq!(instance.string(tags::MODALITY).unwrap(), "MR");
+        assert_eq!(instance.int(tags::ROWS), Some(64));
+        assert_eq!(series.pixels(0, 0).len(), 64 * 64);
+        assert_eq!(
+            Instance::from_bytes(&RealSeries::new(8, 1).slice_bytes(0))
+                .unwrap()
+                .key
+                .sop_class_uid,
+            "1.2.840.10008.5.1.4.1.1.2"
+        );
+    }
+
+    /// The files are the ones pydicom ships: `tests/data/pydicom/README.md` has their
+    /// origin and these sizes' files' hashes.
+    #[test]
+    fn the_files_are_the_ones_the_readme_names() {
+        for (name, size) in [("CT_small.dcm", 39206), ("MR_small.dcm", 9830)] {
+            let path = format!("{}/tests/data/pydicom/{name}", env!("CARGO_MANIFEST_DIR"));
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), size, "{name}");
+        }
     }
 }
