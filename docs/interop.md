@@ -1,7 +1,7 @@
 # Hospital interfaces: the plan
 
 Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside, and of
-step 8 the C-FIND, C-MOVE and C-GET SCP on the Study Root model; the rest is not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE
+step 8 the C-FIND, C-MOVE and C-GET SCP on both information models; the rest is not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE
 C-ECHO, C-STORE, C-FIND and C-MOVE today.
 
 It is meant to be both kinds of PACS in one program:
@@ -60,8 +60,8 @@ destination the hospital names.
    UIDs no longer match the hospital's.
 8. **Later**: the SCP side of query/retrieve, so viewers and workstations can query pacs-rs (rules below);
    then the Conformance Statement (PS3.2), kept current from the first DIMSE release. *C-FIND, C-MOVE and C-GET SCP
-   done for Study Root ([being searched](dimse.md#being-searched), [being retrieved
-   from](dimse.md#being-retrieved-from)); Patient Root not yet.*
+   done for Patient Root and Study Root ([being searched](dimse.md#being-searched), [being
+   retrieved from](dimse.md#being-retrieved-from)); the Conformance Statement not yet.*
 
 Patient lists from the hospital's records system (HL7 v2 or FHIR Patient and ImagingStudy) are optional, for
 a site that wants them pushed; a C-FIND by Accession Number or Patient ID covers the usual request.
@@ -100,7 +100,7 @@ Not yet:
 
 - **C-FIND** (PS3.4 C.4.1.3.1): one Pending response per match, each with a single match's values; a
   C-CANCEL interrupts the matching and ends with status Cancel. Matches stream from an index cursor.
-  *Built, for Study Root.*
+  *Built.*
 - **Matching** (PS3.4 C.2.2.2): single value, list of UID, universal, wildcard, range, sequence, empty value
   and multiple value matching. One matcher serves C-FIND, QIDO-RS and `/tools/find`. *Built, but for
   empty value and multiple value matching, which need an extended negotiation (C.5.1.1) that is not made.*
@@ -108,13 +108,14 @@ Not yet:
   `PACS_DIMSE_REMOTES`; the called AE title sets what is seen, a project's showing that project only.
   *Built for the three services.*
 - **Information models** (PS3.4 C.6): Patient Root and Study Root; Patient/Study Only is retired.
+  *Built for the three services.*
 - **Sending**: the C-STORE SCU sends in the stored transfer syntax or decodes for the peer; the
   destinations a C-MOVE may name are a list of their own, empty unless set, since the hospital's
   PACS is among the remote AEs and stays read-only. *Built.*
 - **C-MOVE** (PS3.4 C.4.2.3.1): Pending responses carry the Remaining, Completed, Failed and Warning counts;
-  the final one is Success, Warning or Failure. *Built, for Study Root.*
+  the final one is Success, Warning or Failure. *Built.*
 - **C-GET** (PS3.4 C.4.3.3.1): the C-STORE sub-operations run on the same association; role selection as
-  above. *Built, for Study Root.*
+  above. *Built.*
 
 ## What dicom-ul 0.10 already gives
 

@@ -4,8 +4,8 @@ New to the protocol? [DICOM: the network](dicom-network.md) explains the words u
 
 Off unless `PACS_DIMSE_LISTEN` names an address. What works now is steps 1 to 4 of
 [the plan for hospital interfaces](interop.md), a research PACS that pulls studies from a
-hospital's PACS and de-identifies them on ingest, and step 8 for the Study Root model: other
-applications can search pacs-rs and retrieve from it.
+hospital's PACS and de-identifies them on ingest, and step 8: other applications can search
+pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
 
 - **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the AEs of
   `PACS_DIMSE_REMOTES`, through `POST /modalities/{id}/echo`, to test a hospital link.
@@ -30,10 +30,10 @@ applications can search pacs-rs and retrieve from it.
   `Progress` in percent and the Remaining, Completed, Failed and Warning counts of the latest
   Pending response; `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ with the next one. Jobs are
   kept in memory, the latest hundred finished ones with them; a restart forgets them.
-- **C-FIND SCP**, Study Root, at the STUDY, SERIES and IMAGE levels: [Being
+- **C-FIND SCP**, Patient Root and Study Root, at every level of each: [Being
   searched](#being-searched) below.
-- **C-MOVE SCP** and **C-GET SCP**, Study Root, at the same levels, with the **C-STORE
-  SCU** they send by: [Being retrieved from](#being-retrieved-from) below.
+- **C-MOVE SCP** and **C-GET SCP**, on both models and at the same levels, with the
+  **C-STORE SCU** they send by: [Being retrieved from](#being-retrieved-from) below.
 - **C-STORE SCP** for the 173 Storage SOP Classes of PS3.4 Table B.5-1 (DICOM 2026d), in any
   transfer syntax dicom-rs reads. Each data set is kept in the transfer syntax it came in, with
   file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
@@ -63,13 +63,14 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`, `movescu`, `getscu`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
-into a project shows there de-identified. Not yet: C-GET as SCU, and Patient Root.
-The order is in [the hospital interfaces plan](interop.md).
+into a project shows there de-identified. Not yet: C-GET as SCU, and Patient Root as SCU
+(pacs-rs asks other archives on the Study Root model). The order is in [the hospital
+interfaces plan](interop.md).
 
 ## Being retrieved from
 
-A viewer or a workstation has pacs-rs send it a study in one of two ways, on the Study Root
-model (PS3.4 C.6.2):
+A viewer or a workstation has pacs-rs send it a study in one of two ways, on the Patient
+Root or the Study Root model (PS3.4 C.6.1, C.6.2):
 
 - **C-MOVE** (PS3.4 C.4.2) names where the study is to go; pacs-rs opens an association to
   that AE and sends each instance by C-STORE. The destination must be one pacs-rs is
@@ -91,9 +92,11 @@ getscu -S -aet VIEWER -aec PACSRS -od received \
   project's AE title only that project's studies are there to send, and they are sent
   under that title.
 - **What is asked for**: studies by a list of Study Instance UID; the series of one study;
-  the instances of one series (PS3.4 C.6.2.1.5). An Identifier without those Unique Keys
-  is refused (`A900`). What is asked for and is not there is not an error: Success, with
-  nothing sent.
+  the instances of one series (PS3.4 C.6.2.1.5). On the Patient Root model each of these
+  also names its patient by one Patient ID, and a retrieval at the PATIENT level sends
+  every study of that patient (C.6.1.1.6); a study that is another patient's is not sent.
+  An Identifier without those Unique Keys is refused (`A900`). What is asked for and is
+  not there is not an error: Success, with nothing sent.
 - **Responses**: a Pending one after each instance, with the numbers of Remaining,
   Completed, Failed and Warning sub-operations; then Success when every instance was
   stored, Warning (`B000`) when some were not or were stored with a warning, and a
@@ -120,7 +123,7 @@ C-MOVE and C-GET statuses (PS3.4 Tables C.4-2 and C.4-3, PS3.7 9.1.4.1.7 and 9.1
 | `A702` Refused: Out of resources, unable to perform sub-operations | no instance was stored: no association with the destination of a C-MOVE, no context with the SCP role for a C-GET, or every instance refused |
 | `A701` Refused: Out of resources, unable to calculate number of matches | the index could not be read |
 | `0124` Refused: Not authorized | the calling AE title is not one of `PACS_DIMSE_REMOTES` |
-| `A900` Data Set does not match SOP Class | no Query/Retrieve Level, or one that is not STUDY, SERIES or IMAGE; a Unique Key missing, empty or not a UID; several values above the level retrieved; no Identifier |
+| `A900` Data Set does not match SOP Class | no Query/Retrieve Level, or one the model does not have; a Unique Key missing, empty or not a UID; several values above the level retrieved; on the Patient Root model, no single Patient ID; no Identifier |
 | `C000` Unable to process | the Identifier cannot be read |
 
 How the instances are sent, to the destination of a C-MOVE or the requester of a C-GET:
@@ -142,7 +145,8 @@ How the instances are sent, to the destination of a C-MOVE or the requester of a
   Message ID (PS3.7 9.3.1.1).
 
 Tested with DCMTK 3.6.9 `movescu`, receiving itself and naming `storescp` as a third AE,
-with `getscu`, as it comes and preferring JPEG-LS, and with pynetdicom 3.0.4 doing both;
+with `getscu`, as it comes and preferring JPEG-LS, and with pynetdicom 3.0.4 doing both,
+on both models;
 and the sending alone against `storescp`
 (uncompressed only, and preferring JPEG-LS: the files it writes hold the original pixels
 either way, checked with `dcmdjpls`) and a pynetdicom Storage SCP that takes Implicit VR
@@ -150,12 +154,14 @@ Little Endian only.
 
 ## Being searched
 
-A viewer or a workstation searches pacs-rs with C-FIND on the Study Root Query/Retrieve
-Information Model (PS3.4 C.6.2), as it searches any archive:
+A viewer or a workstation searches pacs-rs with C-FIND on the Study Root or the Patient Root
+Query/Retrieve Information Model (PS3.4 C.6.2, C.6.1), as it searches any archive:
 
 ```bash
 findscu -S -aet VIEWER -aec PACSRS -k QueryRetrieveLevel=STUDY \
   -k "PatientName=DOE*" -k StudyDate=20260101-20260131 -k StudyInstanceUID pacs.example 11112
+findscu -P -aet VIEWER -aec PACSRS -k QueryRetrieveLevel=PATIENT \
+  -k "PatientName=DOE*" -k PatientID pacs.example 11112
 ```
 
 - **Who is answered**: the AE titles of `PACS_DIMSE_REMOTES`. Another caller gets `0124`
@@ -168,8 +174,12 @@ findscu -S -aet VIEWER -aec PACSRS -k QueryRetrieveLevel=STUDY \
   other, as an account [limited to that project](login.md#rights-per-project) sees them
   over HTTP: a study outside it is not found, at any level.
 - **The search** is the hierarchical one (PS3.4 C.4.1.3.1.1): studies; a study's series,
-  with its Study Instance UID; a series' instances, with both UIDs. Relational queries are
-  not negotiated.
+  with its Study Instance UID; a series' instances, with both UIDs. On the Patient Root
+  model it starts a level higher: patients; then a patient's studies, with its Patient ID,
+  which every level below names too. Relational queries are not negotiated.
+- **A patient** is the studies with its Patient ID that the caller sees: it is found by
+  any of them, once, and described by one of them. A study without a Patient ID belongs to
+  no patient, and is found on the Study Root model only.
 - **Matching** is the same as [QIDO-RS](dicomweb.md#searching) does, by the same code
   (PS3.4 C.2.2.2): single value, list of UID, universal, wild card (`*`, `?`), range, and
   sequence matching. Names match without regard to case, the rest with; dates and times by
@@ -191,12 +201,15 @@ findscu -S -aet VIEWER -aec PACSRS -k QueryRetrieveLevel=STUDY \
 
 | Level | Keys |
 |---|---|
-| STUDY | Study Instance UID, Study Date, Study Time, Accession Number, Patient's Name, Patient ID, Study ID; and Modalities in Study, Referring Physician's Name, Study Description, Patient's Birth Date, Patient's Sex, Number of Study Related Series, Number of Study Related Instances |
+| PATIENT (Patient Root) | Patient ID, Patient's Name; and Patient's Birth Date, Patient's Sex, Number of Patient Related Studies, Number of Patient Related Series, Number of Patient Related Instances |
+| STUDY | Study Instance UID, Study Date, Study Time, Accession Number, Study ID; on the Study Root model Patient's Name and Patient ID too; and Modalities in Study, Referring Physician's Name, Study Description, Number of Study Related Series, Number of Study Related Instances; on the Study Root model Patient's Birth Date and Patient's Sex too |
 | SERIES | Series Instance UID, Modality, Series Number; and Series Description, Number of Series Related Instances, Performed Procedure Step Start Date and Time, Request Attributes Sequence (Scheduled Procedure Step ID, Requested Procedure ID) |
 | IMAGE | SOP Instance UID, Instance Number; and SOP Class UID, Number of Frames, Rows, Columns, Bits Allocated |
 
-Each level has its Unique and Required Keys (PS3.4 Tables C.6-5, C.6-3 and C.6-4) and the
-Optional ones listed after "and". Any other key is left out of the responses, which then
+Each level has its Unique and Required Keys (PS3.4 Tables C.6-1 and C.6-2 for the Patient
+Root model, C.6-5 for the Study Root one, C.6-3 and C.6-4 for both) and the Optional ones
+listed after "and". What is the patient's is a key of the PATIENT level on the Patient Root
+model, and of the STUDY level on the Study Root one, which has no PATIENT level. Any other key is left out of the responses, which then
 have status `FF01` instead of `FF00`: the caller filters on it itself (PS3.4 C.4.1.2.1).
 
 C-FIND statuses (PS3.4 Table C.4-1, PS3.7 9.1.2.1.6); a Failure has an Error Comment, and
@@ -210,7 +223,7 @@ names the Offending Element when there is one:
 | `FE00` Cancel | the search was cancelled |
 | `0124` Refused: Not authorized | the calling AE title is not one of `PACS_DIMSE_REMOTES` |
 | `A700` Refused: Out of resources | the Identifier is larger than `PACS_MAX_UPLOAD_BYTES` |
-| `A900` Data Set does not match SOP Class | no Query/Retrieve Level, or one that is not STUDY, SERIES or IMAGE; no single value in the Unique Key of a level above; no Identifier |
+| `A900` Data Set does not match SOP Class | no Query/Retrieve Level, or one the model does not have (PATIENT on the Study Root model); no single value in the Unique Key of a level above, the Patient ID included on the Patient Root model; no Identifier |
 | `C000` Unable to process | the Identifier cannot be read; a value that is not a match for its key (a date that is not one, a wild card in a UID, two values, a range of times across midnight); a sequence key of several items |
 | `C001` Unable to process | the index could not be searched |
 
