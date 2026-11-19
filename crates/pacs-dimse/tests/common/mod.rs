@@ -335,9 +335,21 @@ impl Client {
 }
 
 /// Store every slice of `series` in `archive`, as an upload would.
-pub async fn ingest(archive: &Archive, series: &pacs_core::synthetic::SyntheticSeries) {
+pub async fn ingest(archive: &Archive, series: &pacs_core::sample::SampleSeries) {
     for bytes in series.all_bytes() {
         archive.ingest(bytes.into()).await.unwrap();
+    }
+}
+
+/// Put `series` in `archive`'s index without keeping its files: for the tests that search
+/// thousands of studies and retrieve none.
+pub async fn index_only(archive: &Archive, series: &pacs_core::sample::SampleSeries) {
+    for slice in 0..series.slices {
+        let bytes = series.header_bytes(slice);
+        let instance = pacs_core::Instance::from_bytes(&bytes).unwrap();
+        let key = format!("not-stored/{}/{slice}.dcm", series.seed);
+        let new = pacs_index::NewInstance::new(&instance, key, bytes.len()).unwrap();
+        archive.index().record(&new).await.unwrap();
     }
 }
 

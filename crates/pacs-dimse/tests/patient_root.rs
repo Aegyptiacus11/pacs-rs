@@ -11,7 +11,7 @@ use common::*;
 use dicom_core::{Tag, VR};
 use dicom_dictionary_std::tags;
 use pacs_archive::Archive;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::sample::SampleSeries;
 use pacs_deid::{Keys, Profile};
 use pacs_dimse::command::tag;
 use pacs_dimse::query::{PATIENT_ROOT_FIND, PATIENT_ROOT_GET, PATIENT_ROOT_MOVE, STUDY_ROOT_FIND};
@@ -44,23 +44,23 @@ async fn viewer(addr: std::net::SocketAddr, called: &str) -> Client {
 
 /// Doe (patient 800) with two studies, the first of two series; Roe (803) with one.
 /// Seeds 801 (two slices), 802 (in study 801, three), 804 (one), 803 (one).
-async fn two_patients(archive: &Archive) -> [SyntheticSeries; 4] {
+async fn two_patients(archive: &Archive) -> [SampleSeries; 4] {
     let series = [
-        SyntheticSeries::new(801, 2)
+        SampleSeries::new(801, 2)
             .for_patient(800)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(802, 3)
+        SampleSeries::new(802, 3)
             .in_study(801, 2)
             .for_patient(800)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(804, 1)
+        SampleSeries::new(804, 1)
             .for_patient(800)
             .with_patient("Doe^Jane", None)
             .at("20260301", "090000")
             .of_modality("MR"),
-        SyntheticSeries::new(803, 1)
+        SampleSeries::new(803, 1)
             .with_patient("Roe^Richard", None)
             .at("20260106", "120000"),
     ];
@@ -90,7 +90,7 @@ fn uid_keys(level: &str, keys: &[(Tag, &str)]) -> dicom_object::InMemDicomObject
     identifier(level, &keys)
 }
 
-fn instances(series: &[&SyntheticSeries]) -> Vec<String> {
+fn instances(series: &[&SampleSeries]) -> Vec<String> {
     let mut uids: Vec<String> = series
         .iter()
         .flat_map(|one| (0..one.slices).map(|slice| one.instance_uid(slice)))
@@ -126,19 +126,20 @@ async fn patients_are_found_once_each() {
     assert_eq!(answer.pending, [Status::PENDING; 2]);
     assert_eq!(
         sorted(answer.values(tags::PATIENT_ID)),
-        ["SYN800", "SYN803"]
+        ["LITS-800", "LITS-803"]
     );
     let doe = answer
         .matches
         .iter()
-        .find(|found| value(found, tags::PATIENT_ID).as_deref() == Some("SYN800"))
+        .find(|found| value(found, tags::PATIENT_ID).as_deref() == Some("LITS-800"))
         .unwrap();
     for (tag, expected) in [
         (tags::QUERY_RETRIEVE_LEVEL, "PATIENT"),
         (tags::RETRIEVE_AE_TITLE, "PACSRS"),
         (tags::PATIENT_NAME, "Doe^Jane"),
-        (tags::PATIENT_BIRTH_DATE, "19700101"),
-        (tags::PATIENT_SEX, "O"),
+        // the sample has neither: asked for, they come back empty
+        (tags::PATIENT_BIRTH_DATE, ""),
+        (tags::PATIENT_SEX, ""),
         (tags::NUMBER_OF_PATIENT_RELATED_STUDIES, "2"),
         (tags::NUMBER_OF_PATIENT_RELATED_SERIES, "3"),
         (tags::NUMBER_OF_PATIENT_RELATED_INSTANCES, "6"),
@@ -151,22 +152,22 @@ async fn patients_are_found_once_each() {
     for (keys, expected, why) in [
         (
             vec![(tags::PATIENT_NAME, VR::PN, "roe*")],
-            vec!["SYN803"],
+            vec!["LITS-803"],
             "a name, without regard to case",
         ),
         (
-            vec![(tags::PATIENT_ID, VR::LO, "SYN80?")],
-            vec!["SYN800", "SYN803"],
+            vec![(tags::PATIENT_ID, VR::LO, "LITS-80?")],
+            vec!["LITS-800", "LITS-803"],
             "a wild card",
         ),
         (
-            vec![(tags::PATIENT_ID, VR::LO, "SYN800")],
-            vec!["SYN800"],
+            vec![(tags::PATIENT_ID, VR::LO, "LITS-800")],
+            vec!["LITS-800"],
             "one patient",
         ),
         (
             vec![(tags::NUMBER_OF_PATIENT_RELATED_STUDIES, VR::IS, "2")],
-            vec!["SYN800"],
+            vec!["LITS-800"],
             "what is counted",
         ),
         (vec![(tags::PATIENT_ID, VR::LO, "NOBODY")], vec![], "nobody"),
@@ -208,7 +209,7 @@ async fn studies_series_and_instances_are_found_under_their_patient() {
         identifier("STUDY", &all)
     };
     let answer = client
-        .find(PATIENT_ROOT_FIND, &studies("SYN800", &[]))
+        .find(PATIENT_ROOT_FIND, &studies("LITS-800", &[]))
         .await;
     assert_eq!(answer.status(), Status::SUCCESS);
     assert_eq!(answer.pending, [Status::PENDING; 2]);
@@ -217,7 +218,7 @@ async fn studies_series_and_instances_are_found_under_their_patient() {
     assert_eq!(sorted(answer.values(tags::STUDY_INSTANCE_UID)), expected);
     for found in &answer.matches {
         // the Unique Key of the level above comes back; nothing else of the patient
-        assert_eq!(value(found, tags::PATIENT_ID).unwrap(), "SYN800");
+        assert_eq!(value(found, tags::PATIENT_ID).unwrap(), "LITS-800");
         assert_eq!(value(found, tags::QUERY_RETRIEVE_LEVEL).unwrap(), "STUDY");
         assert!(found.get(tags::PATIENT_NAME).is_none());
     }
@@ -228,7 +229,7 @@ async fn studies_series_and_instances_are_found_under_their_patient() {
             &identifier(
                 "STUDY",
                 &[
-                    (tags::PATIENT_ID, VR::LO, "SYN800"),
+                    (tags::PATIENT_ID, VR::LO, "LITS-800"),
                     (tags::STUDY_INSTANCE_UID, VR::UI, ""),
                     (tags::STUDY_DATE, VR::DA, "20260201-"),
                 ],
@@ -243,14 +244,14 @@ async fn studies_series_and_instances_are_found_under_their_patient() {
     let answer = client
         .find(
             PATIENT_ROOT_FIND,
-            &studies("SYN800", &[(tags::PATIENT_NAME, VR::PN, "")]),
+            &studies("LITS-800", &[(tags::PATIENT_NAME, VR::PN, "")]),
         )
         .await;
     assert_eq!(answer.pending, [Status::PENDING_OPTIONAL_KEYS; 2]);
     assert!(answer.matches[0].get(tags::PATIENT_NAME).is_none());
     // the Patient ID is matched as it is written
     let answer = client
-        .find(PATIENT_ROOT_FIND, &studies("syn800", &[]))
+        .find(PATIENT_ROOT_FIND, &studies("lits-800", &[]))
         .await;
     assert_eq!(answer.status(), Status::SUCCESS);
     assert!(answer.matches.is_empty());
@@ -267,21 +268,24 @@ async fn studies_series_and_instances_are_found_under_their_patient() {
         )
     };
     let answer = client
-        .find(PATIENT_ROOT_FIND, &series("SYN800", &first.study_uid()))
+        .find(PATIENT_ROOT_FIND, &series("LITS-800", &first.study_uid()))
         .await;
     assert_eq!(
         answer.values(tags::SERIES_INSTANCE_UID),
         [Some(first.series_uid()), Some(second.series_uid())]
     );
     for found in &answer.matches {
-        assert_eq!(value(found, tags::PATIENT_ID).unwrap(), "SYN800");
+        assert_eq!(value(found, tags::PATIENT_ID).unwrap(), "LITS-800");
         assert_eq!(
             value(found, tags::STUDY_INSTANCE_UID).unwrap(),
             first.study_uid()
         );
     }
     // Roe's study under Doe's Patient ID, and Doe's under Roe's: not under these keys
-    for (patient, study) in [("SYN800", roe.study_uid()), ("SYN803", first.study_uid())] {
+    for (patient, study) in [
+        ("LITS-800", roe.study_uid()),
+        ("LITS-803", first.study_uid()),
+    ] {
         let answer = client
             .find(PATIENT_ROOT_FIND, &series(patient, &study))
             .await;
@@ -301,14 +305,14 @@ async fn studies_series_and_instances_are_found_under_their_patient() {
             ],
         )
     };
-    let answer = client.find(PATIENT_ROOT_FIND, &images("SYN800")).await;
+    let answer = client.find(PATIENT_ROOT_FIND, &images("LITS-800")).await;
     assert_eq!(
         answer.values(tags::SOP_INSTANCE_UID),
         [0, 1, 2].map(|slice| Some(second.instance_uid(slice)))
     );
     assert!(
         client
-            .find(PATIENT_ROOT_FIND, &images("SYN803"))
+            .find(PATIENT_ROOT_FIND, &images("LITS-803"))
             .await
             .matches
             .is_empty()
@@ -336,7 +340,7 @@ async fn each_model_has_its_levels_and_its_unique_keys() {
             identifier(
                 "STUDY",
                 &[
-                    (tags::PATIENT_ID, VR::LO, "SYN80*"),
+                    (tags::PATIENT_ID, VR::LO, "LITS-80*"),
                     (tags::STUDY_INSTANCE_UID, VR::UI, ""),
                 ],
             ),
@@ -358,7 +362,7 @@ async fn each_model_has_its_levels_and_its_unique_keys() {
             identifier(
                 "SERIES",
                 &[
-                    (tags::PATIENT_ID, VR::LO, "SYN800"),
+                    (tags::PATIENT_ID, VR::LO, "LITS-800"),
                     (tags::SERIES_INSTANCE_UID, VR::UI, ""),
                 ],
             ),
@@ -414,7 +418,7 @@ async fn each_model_has_its_levels_and_its_unique_keys() {
 #[tokio::test]
 async fn a_study_without_a_patient_id_is_no_patient() {
     let archive = archive().await;
-    let series = SyntheticSeries::new(811, 1);
+    let series = SampleSeries::new(811, 1);
     let mut object = dicom_object::from_reader(&*series.slice_bytes(0)).unwrap();
     object.remove_element(tags::PATIENT_ID);
     let mut bytes = Vec::new();
@@ -470,7 +474,7 @@ async fn a_patient_is_retrieved_whole_and_by_parts_with_c_get() {
         (retrieval.status(), uids)
     };
     assert_eq!(
-        get(uid_keys("PATIENT", &[(tags::PATIENT_ID, "SYN800")])).await,
+        get(uid_keys("PATIENT", &[(tags::PATIENT_ID, "LITS-800")])).await,
         (Status::SUCCESS, instances(&[&first, &second, &later]))
     );
     assert_eq!(
@@ -483,7 +487,7 @@ async fn a_patient_is_retrieved_whole_and_by_parts_with_c_get() {
         get(uid_keys(
             "STUDY",
             &[
-                (tags::PATIENT_ID, "SYN800"),
+                (tags::PATIENT_ID, "LITS-800"),
                 (tags::STUDY_INSTANCE_UID, &both)
             ]
         ))
@@ -491,7 +495,7 @@ async fn a_patient_is_retrieved_whole_and_by_parts_with_c_get() {
         (Status::SUCCESS, instances(&[&later]))
     );
     let series = [
-        (tags::PATIENT_ID, "SYN800"),
+        (tags::PATIENT_ID, "LITS-800"),
         (tags::STUDY_INSTANCE_UID, &first.study_uid()),
         (tags::SERIES_INSTANCE_UID, &second.series_uid()),
     ];
@@ -508,7 +512,7 @@ async fn a_patient_is_retrieved_whole_and_by_parts_with_c_get() {
     );
     // the same series under Roe's Patient ID
     let mut wrong = series.to_vec();
-    wrong[0] = (tags::PATIENT_ID, "SYN803");
+    wrong[0] = (tags::PATIENT_ID, "LITS-803");
     assert_eq!(
         get(uid_keys("SERIES", &wrong)).await,
         (Status::SUCCESS, Vec::new())
@@ -544,7 +548,7 @@ async fn a_patient_is_sent_whole_with_c_move() {
         .c_move(
             PATIENT_ROOT_MOVE,
             "STORESCP",
-            &uid_keys("PATIENT", &[(tags::PATIENT_ID, "SYN800")]),
+            &uid_keys("PATIENT", &[(tags::PATIENT_ID, "LITS-800")]),
         )
         .await;
     assert_eq!(moved.status(), Status::SUCCESS);
@@ -561,7 +565,7 @@ async fn a_patient_is_sent_whole_with_c_move() {
     let study = uid_keys(
         "STUDY",
         &[
-            (tags::PATIENT_ID, "SYN800"),
+            (tags::PATIENT_ID, "LITS-800"),
             (tags::STUDY_INSTANCE_UID, &later.study_uid()),
         ],
     );
@@ -590,10 +594,10 @@ async fn a_patient_is_sent_whole_with_c_move() {
 async fn a_project_ae_title_shows_a_patient_as_its_studies_in_the_project() {
     let archive = archive().await;
     // one patient, a study in the project and one outside it
-    let outside = SyntheticSeries::new(821, 2).for_patient(820);
+    let outside = SampleSeries::new(821, 2).for_patient(820);
     ingest(&archive, &outside).await;
     let liver = archive.clone().for_project("liver-2026");
-    let inside = SyntheticSeries::new(822, 1).for_patient(820);
+    let inside = SampleSeries::new(822, 1).for_patient(820);
     ingest(&liver, &inside).await;
     let project = Project {
         ae_title: AeTitle::new("LIVER_2026").unwrap(),
@@ -610,12 +614,12 @@ async fn a_project_ae_title_shows_a_patient_as_its_studies_in_the_project() {
     let patient = identifier(
         "PATIENT",
         &[
-            (tags::PATIENT_ID, VR::LO, "SYN820"),
+            (tags::PATIENT_ID, VR::LO, "LITS-820"),
             (tags::NUMBER_OF_PATIENT_RELATED_STUDIES, VR::IS, ""),
             (tags::NUMBER_OF_PATIENT_RELATED_INSTANCES, VR::IS, ""),
         ],
     );
-    let whole = uid_keys("PATIENT", &[(tags::PATIENT_ID, "SYN820")]);
+    let whole = uid_keys("PATIENT", &[(tags::PATIENT_ID, "LITS-820")]);
     for (called, studies, instances_seen, sent) in [
         ("LIVER_2026", "1", "1", instances(&[&inside])),
         ("PACSRS", "2", "3", instances(&[&outside, &inside])),

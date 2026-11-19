@@ -15,6 +15,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
 use common::*;
+use pacs_core::sample::SampleSeries;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::{AeTitle, RemoteAe, StudyQuery};
 
@@ -684,16 +685,16 @@ fn answering(callers: &[&str]) -> pacs_dimse::Config {
 }
 
 /// Doe's CT of two series and Roe's MR, in `archive`.
-async fn two_studies(archive: &pacs_archive::Archive) -> [SyntheticSeries; 3] {
+async fn two_studies(archive: &pacs_archive::Archive) -> [SampleSeries; 3] {
     let series = [
-        SyntheticSeries::new(401, 2)
+        SampleSeries::new(401, 2)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(402, 3)
+        SampleSeries::new(402, 3)
             .in_study(401, 2)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(403, 1)
+        SampleSeries::new(403, 1)
             .with_patient("Roe^Richard", None)
             .at("20260106", "120000")
             .of_modality("MR"),
@@ -786,7 +787,7 @@ async fn dcmtk_findscu_queries_the_three_levels() {
     for (tag, expected) in [
         (tags::STUDY_INSTANCE_UID, doe.study_uid()),
         (tags::PATIENT_NAME, "Doe^Jane".into()),
-        (tags::PATIENT_ID, "SYN401".into()),
+        (tags::PATIENT_ID, "LITS-401".into()),
         (tags::STUDY_DATE, "20260105".into()),
         (tags::MODALITIES_IN_STUDY, "CT".into()),
         (tags::NUMBER_OF_STUDY_RELATED_INSTANCES, "5".into()),
@@ -928,7 +929,7 @@ async fn dcmtk_findscu_cancels_in_the_middle() {
     const STUDIES: u32 = 2500;
     let archive = archive().await;
     for seed in 0..STUDIES {
-        ingest(&archive, &SyntheticSeries::new(30_000 + seed, 1)).await;
+        index_only(&archive, &SampleSeries::new(30_000 + seed, 1)).await;
     }
     let server = start(answering(&["FINDSCU"]), archive).await;
     let addr = gate(server, 2048, 2).await;
@@ -957,7 +958,7 @@ async fn pynetdicom_queries_the_three_levels() {
     let [doe, report, _] = two_studies(&archive).await;
     ingest(
         &archive,
-        &SyntheticSeries::new(404, 1).with_patient("Benaïssa^Amel", Some("ISO_IR 192")),
+        &SampleSeries::new(404, 1).with_patient("Benaïssa^Amel", Some("ISO_IR 192")),
     )
     .await;
     let addr = start(answering(&["PYNETDICOM"]), archive).await;
@@ -1005,7 +1006,7 @@ names = [str(i.PatientName) for s, i in assoc.send_c_find(ds, FIND) if s.Status 
 assert names == ["Benaïssa^Amel"], names
 
 # a key pacs-rs does not have: left out, and the status says so
-found, last = find(assoc, QueryRetrieveLevel="STUDY", PatientID="SYN401", StudyInstanceUID="",
+found, last = find(assoc, QueryRetrieveLevel="STUDY", PatientID="LITS-401", StudyInstanceUID="",
                    AdmittingDiagnosesDescription="")
 assert last == 0x0000 and [s for s, _ in found] == [0xFF01], (found, last)
 assert "AdmittingDiagnosesDescription" not in found[0][1], found[0][1]
@@ -1020,7 +1021,7 @@ found, last = find(assoc, QueryRetrieveLevel="IMAGE", StudyInstanceUID=study,
                    SeriesInstanceUID=second, SOPInstanceUID="", InstanceNumber="", Rows=None)
 assert last == 0x0000, hex(last)
 assert [i.InstanceNumber for _, i in found] == [1, 2, 3], found
-assert all(i.Rows == 4 and i.StudyInstanceUID == study for _, i in found), found
+assert all(i.Rows == 512 and i.StudyInstanceUID == study for _, i in found), found
 
 # a SERIES query without its study: the Identifier does not match the SOP class
 found, last = find(assoc, QueryRetrieveLevel="SERIES", SeriesInstanceUID="")
@@ -1055,15 +1056,12 @@ assoc.release()
 async fn compressed_series(
     seed: u32,
     slices: u32,
-) -> (
-    SyntheticSeries,
-    Vec<(pacs_index::InstanceEntry, bytes::Bytes)>,
-) {
+) -> (SampleSeries, Vec<(pacs_index::InstanceEntry, bytes::Bytes)>) {
     let archive = pacs_archive::Archive::new(
         pacs_store::Store::memory(),
         pacs_index::Index::in_memory().await.unwrap(),
     );
-    let series = SyntheticSeries::new(seed, slices);
+    let series = SampleSeries::new(seed, slices);
     ingest(&archive, &series).await;
     let entries = archive
         .index()
@@ -1264,7 +1262,7 @@ def on_store(event):
     assert event.context.transfer_syntax == ImplicitVRLittleEndian
     ds = event.dataset
     ds.file_meta = event.file_meta
-    assert ds.Rows == 4 and ds.Columns == 4, (ds.Rows, ds.Columns)
+    assert ds.Rows == 512 and ds.Columns == 512, (ds.Rows, ds.Columns)
     # the pixels as pydicom reads them, 16 bits little endian, for the test to compare
     raw = ds.PixelData
     values = [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)]
@@ -1301,14 +1299,14 @@ ae.start_server(("127.0.0.1", port), block=True, evt_handlers=[(evt.EVT_C_STORE,
 
 /// An archive that compresses (JPEG-LS lossless) with Doe's study in it: a series of two
 /// slices and one of three.
-async fn archive_to_retrieve_from() -> (pacs_archive::Archive, [SyntheticSeries; 2]) {
+async fn archive_to_retrieve_from() -> (pacs_archive::Archive, [SampleSeries; 2]) {
     let archive = pacs_archive::Archive::new(
         pacs_store::Store::memory(),
         pacs_index::Index::in_memory().await.unwrap(),
     );
     let series = [
-        SyntheticSeries::new(91, 2).with_patient("Doe^Jane", None),
-        SyntheticSeries::new(92, 3)
+        SampleSeries::new(91, 2).with_patient("Doe^Jane", None),
+        SampleSeries::new(92, 3)
             .in_study(91, 2)
             .with_patient("Doe^Jane", None),
     ];
@@ -1334,7 +1332,7 @@ fn retrieving(caller: &str, destination: &str, port: u16) -> pacs_dimse::Config 
 }
 
 /// The pixels each instance of `series` must have, by SOP Instance UID, sorted.
-fn expected_pixels(series: &[SyntheticSeries]) -> Vec<(String, Vec<u16>)> {
+fn expected_pixels(series: &[SampleSeries]) -> Vec<(String, Vec<u16>)> {
     let mut expected: Vec<(String, Vec<u16>)> = series
         .iter()
         .flat_map(|one| {
@@ -1728,7 +1726,7 @@ assoc.release()
 async fn dcmtk_tools_query_and_retrieve_on_the_patient_root_model() {
     use dicom_dictionary_std::tags;
     let (archive, series) = archive_to_retrieve_from().await;
-    let other = SyntheticSeries::new(93, 1).with_patient("Roe^Richard", None);
+    let other = SampleSeries::new(93, 1).with_patient("Roe^Richard", None);
     ingest(&archive, &other).await;
     let receiving = free_port();
     let mut config = retrieving("DCMTK", "DCMTK", receiving);
@@ -1833,7 +1831,7 @@ async fn dcmtk_tools_query_and_retrieve_on_the_patient_root_model() {
 #[ignore = "needs pynetdicom"]
 async fn pynetdicom_queries_and_retrieves_on_the_patient_root_model() {
     let (archive, series) = archive_to_retrieve_from().await;
-    let other = SyntheticSeries::new(94, 1).with_patient("Roe^Richard", None);
+    let other = SampleSeries::new(94, 1).with_patient("Roe^Richard", None);
     ingest(&archive, &other).await;
     let addr = start(answering(&["PYNETDICOM"]), archive).await;
     let script = r#"

@@ -4,6 +4,7 @@ mod common;
 
 use pacs_core::Instance;
 use pacs_core::public_ids;
+use pacs_core::sample::SampleSeries;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_index::{Index, Level, NewInstance, PatientQuery, StudyFilter, WorklistQuery};
 
@@ -57,7 +58,50 @@ struct Ids {
     instance: String,
 }
 
-fn ids(s: &SyntheticSeries) -> Ids {
+/// What these tests need to know of a series, whichever kind made it.
+trait Named {
+    fn patient_id(&self) -> String;
+    fn study_uid(&self) -> String;
+    fn series_uid(&self) -> String;
+    fn instance_uid(&self, slice: u32) -> String;
+}
+
+macro_rules! named {
+    ($series:ty) => {
+        impl Named for $series {
+            fn patient_id(&self) -> String {
+                <$series>::patient_id(self)
+            }
+            fn study_uid(&self) -> String {
+                <$series>::study_uid(self)
+            }
+            fn series_uid(&self) -> String {
+                <$series>::series_uid(self)
+            }
+            fn instance_uid(&self, slice: u32) -> String {
+                <$series>::instance_uid(self, slice)
+            }
+        }
+    };
+}
+named!(SyntheticSeries);
+named!(SampleSeries);
+
+/// Index the real sample's slices under `series`' identifiers, in `project`: their
+/// headers, since nothing is stored here.
+async fn record_sample(index: &Index, series: &SampleSeries, project: Option<&str>) {
+    for slice in 0..series.slices {
+        let bytes = series.header_bytes(slice);
+        let instance = Instance::from_bytes(&bytes).unwrap();
+        let key = format!("dicom/{}/{slice}.dcm", series.seed);
+        let new = NewInstance::new(&instance, key, bytes.len())
+            .unwrap()
+            .in_project(project);
+        index.record(&new).await.unwrap();
+    }
+}
+
+fn ids(s: &dyn Named) -> Ids {
     let (p, st, se) = (s.patient_id(), s.study_uid(), s.series_uid());
     Ids {
         patient: public_ids::patient(&p),
@@ -91,7 +135,7 @@ async fn an_account_is_unlimited_until_it_is_given_a_list() {
 
 /// Every read of the hierarchy, as the account sees it: `seen` are the series it must
 /// find, `hidden` those it must not.
-async fn check(index: &Index, seen: &[&SyntheticSeries], hidden: &[&SyntheticSeries]) {
+async fn check(index: &Index, seen: &[&dyn Named], hidden: &[&dyn Named]) {
     let studies = index.studies(&StudyFilter::default()).await.unwrap();
     assert_eq!(studies.len(), seen.len());
     assert_eq!(index.study_public_ids().await.unwrap().len(), seen.len());
@@ -108,7 +152,7 @@ async fn check(index: &Index, seen: &[&SyntheticSeries], hidden: &[&SyntheticSer
     assert_eq!(dated, seen.len() as i64);
 
     for s in seen {
-        let (id, uid) = (ids(s), s.study_uid());
+        let (id, uid) = (ids(*s), s.study_uid());
         assert!(index.study(&uid).await.unwrap().is_some());
         assert_eq!(index.series(&uid, None).await.unwrap().len(), 1);
         assert_eq!(
@@ -168,7 +212,7 @@ async fn check(index: &Index, seen: &[&SyntheticSeries], hidden: &[&SyntheticSer
         );
     }
     for s in hidden {
-        let (id, uid) = (ids(s), s.study_uid());
+        let (id, uid) = (ids(*s), s.study_uid());
         assert!(index.study(&uid).await.unwrap().is_none());
         assert!(index.series(&uid, None).await.unwrap().is_empty());
         assert!(
@@ -298,7 +342,14 @@ async fn a_limited_index_reads_only_its_projects() {
 #[tokio::test]
 async fn a_project_sees_its_own_studies_and_no_other() {
     for index in common::indexes().await {
-        let [liver, lung, received] = three_studies(&index).await;
+        // one patient with a study in each of two projects, and another patient whose
+        // study is in none
+        let liver = SampleSeries::new(81, 2).for_patient(80);
+        let lung = SampleSeries::new(82, 2).for_patient(80);
+        let received = SampleSeries::new(83, 2);
+        record_sample(&index, &liver, Some("liver")).await;
+        record_sample(&index, &lung, Some("lung")).await;
+        record_sample(&index, &received, None).await;
         for s in [&liver, &lung, &received] {
             index
                 .put_annotations(&s.study_uid(), Some("[0]"))

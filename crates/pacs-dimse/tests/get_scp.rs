@@ -11,7 +11,7 @@ use common::*;
 use dicom_core::{Tag, VR};
 use dicom_dictionary_std::tags;
 use pacs_archive::{Archive, Compression};
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::sample::SampleSeries;
 use pacs_deid::{Keys, Profile};
 use pacs_dimse::command::{field, tag};
 use pacs_dimse::query::STUDY_ROOT_GET;
@@ -41,13 +41,13 @@ async fn viewer(addr: std::net::SocketAddr, called: &str, storage: &[&str]) -> C
 }
 
 /// Doe's study of two series (seed 701 of two slices, 702 of three) and Roe's (703).
-async fn two_studies(archive: &Archive) -> [SyntheticSeries; 3] {
+async fn two_studies(archive: &Archive) -> [SampleSeries; 3] {
     let series = [
-        SyntheticSeries::new(701, 2).with_patient("Doe^Jane", None),
-        SyntheticSeries::new(702, 3)
+        SampleSeries::new(701, 2).with_patient("Doe^Jane", None),
+        SampleSeries::new(702, 3)
             .in_study(701, 2)
             .with_patient("Doe^Jane", None),
-        SyntheticSeries::new(703, 1).with_patient("Roe^Richard", None),
+        SampleSeries::new(703, 1).with_patient("Roe^Richard", None),
     ];
     for one in &series {
         ingest(archive, one).await;
@@ -60,7 +60,7 @@ fn keys(level: &str, keys: &[(Tag, &str)]) -> dicom_object::InMemDicomObject {
     identifier(level, &keys)
 }
 
-fn study(series: &SyntheticSeries) -> dicom_object::InMemDicomObject {
+fn study(series: &SampleSeries) -> dicom_object::InMemDicomObject {
     keys("STUDY", &[(tags::STUDY_INSTANCE_UID, &series.study_uid())])
 }
 
@@ -79,7 +79,7 @@ fn uids(got: &[Got]) -> Vec<String> {
     uids
 }
 
-fn instances(series: &[&SyntheticSeries]) -> Vec<String> {
+fn instances(series: &[&SampleSeries]) -> Vec<String> {
     let mut uids: Vec<String> = series
         .iter()
         .flat_map(|one| (0..one.slices).map(|slice| one.instance_uid(slice)))
@@ -243,10 +243,10 @@ async fn series_and_instances_are_selected_by_their_unique_keys() {
 #[tokio::test]
 async fn an_instance_the_requester_did_not_take_the_scp_role_for_fails() {
     let archive = archive().await;
-    let ct = SyntheticSeries::new(711, 2);
+    let ct = SampleSeries::new(711, 2);
     ingest(&archive, &ct).await;
     // the same study's second series, under the MR Image Storage SOP class
-    let mr = SyntheticSeries::new(712, 2).in_study(711, 2);
+    let mr = SampleSeries::new(712, 2).in_study(711, 2);
     for slice in 0..2 {
         let mut object = dicom_object::from_reader(&*mr.slice_bytes(slice)).unwrap();
         object.put(dicom_core::DataElement::new(
@@ -482,10 +482,10 @@ async fn another_request_instead_of_the_c_store_rsp_aborts() {
 #[tokio::test]
 async fn a_project_ae_title_gives_only_its_project() {
     let archive = archive().await;
-    let identified = SyntheticSeries::new(721, 2).with_patient("Identified^Ida", None);
+    let identified = SampleSeries::new(721, 2).with_patient("Identified^Ida", None);
     ingest(&archive, &identified).await;
     let liver = archive.clone().for_project("liver-2026");
-    let in_liver = SyntheticSeries::new(722, 2).with_patient("PSEUDO-1", None);
+    let in_liver = SampleSeries::new(722, 2).with_patient("PSEUDO-1", None);
     ingest(&liver, &in_liver).await;
     let project = Project {
         ae_title: AeTitle::new("LIVER_2026").unwrap(),
