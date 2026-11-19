@@ -93,3 +93,50 @@ async fn s3_round_trip() {
     let store = Store::s3(&config, "dicom").unwrap();
     round_trip(&store, 14).await;
 }
+
+/// Parts of a stored file come back as they are in it, in the order asked.
+async fn ranges(store: &Store, seed: u32) {
+    let series = RealSeries::new(seed, 1);
+    let bytes = series.multiframe_bytes(0);
+    let instance = Instance::from_bytes(&bytes).unwrap();
+    let key = store
+        .put(&instance.key, Bytes::from(bytes.clone()))
+        .await
+        .unwrap();
+    let len = bytes.len() as u64;
+
+    assert_eq!(store.get_range(&key, 0..132).await.unwrap(), bytes[..132]);
+    let read = store
+        .get_ranges(&key, &[len - 10..len, 5..5, 128..132, 0..len])
+        .await
+        .unwrap();
+    assert_eq!(read[0], bytes[bytes.len() - 10..]);
+    assert!(read[1].is_empty());
+    assert_eq!(&read[2][..], b"DICM");
+    assert_eq!(read[3], bytes);
+    assert!(store.get_ranges(&key, &[]).await.unwrap().is_empty());
+
+    // past the end, wholly or in part: an error, not fewer bytes
+    for range in [len - 4..len + 1, len..len + 8, len + 100..len + 108] {
+        assert!(
+            store.get_range(&key, range.clone()).await.is_err(),
+            "{range:?} of {len}"
+        );
+    }
+    // of a file that is not there
+    assert!(matches!(
+        store.get_range("no/such/file.dcm", 0..8).await,
+        Err(Error::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn memory_ranges() {
+    ranges(&Store::memory(), 13).await;
+}
+
+#[tokio::test]
+async fn local_disk_ranges() {
+    let dir = tempfile::tempdir().unwrap();
+    ranges(&Store::local(dir.path(), "dicom").unwrap(), 14).await;
+}

@@ -5,6 +5,7 @@
 //! `<prefix>/<study uid>/<series uid>/<sop instance uid>.dcm`. The index records that
 //! key; the store knows nothing about DICOM beyond it.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -22,6 +23,8 @@ pub enum Error {
     InvalidUid(String),
     #[error("no object at {0}")]
     NotFound(String),
+    #[error("the object at {object_key} ends before byte {end}")]
+    PastEnd { object_key: String, end: u64 },
     #[error(transparent)]
     Backend(#[from] object_store::Error),
 }
@@ -117,6 +120,49 @@ impl Store {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// The bytes of an object in each of `ranges`, in their order, without reading the rest
+    /// of it: ranges close to each other come in one request. A range of nothing gives
+    /// nothing; one that runs past the end of the object is an error ([`Error::PastEnd`] where
+    /// the backend would give what there is of it).
+    pub async fn get_ranges(
+        &self,
+        object_key: &str,
+        ranges: &[Range<u64>],
+    ) -> Result<Vec<Bytes>, Error> {
+        let path = Path::from(object_key);
+        // Backends refuse a range of nothing, so those are not asked for.
+        let asked: Vec<Range<u64>> = ranges.iter().filter(|r| r.start < r.end).cloned().collect();
+        let mut read = match self.backend.get_ranges(&path, &asked).await {
+            Ok(read) => read.into_iter(),
+            Err(object_store::Error::NotFound { .. }) => {
+                return Err(Error::NotFound(object_key.to_owned()));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        ranges
+            .iter()
+            .map(|range| {
+                if range.start >= range.end {
+                    return Ok(Bytes::new());
+                }
+                let bytes = read.next().expect("one answer for each range asked");
+                if bytes.len() as u64 != range.end - range.start {
+                    return Err(Error::PastEnd {
+                        object_key: object_key.to_owned(),
+                        end: range.end,
+                    });
+                }
+                Ok(bytes)
+            })
+            .collect()
+    }
+
+    /// The bytes of an object in `range`; see [`Store::get_ranges`].
+    pub async fn get_range(&self, object_key: &str, range: Range<u64>) -> Result<Bytes, Error> {
+        let mut read = self.get_ranges(object_key, &[range]).await?;
+        Ok(read.pop().expect("one answer for the one range"))
     }
 
     /// Remove an object; removing one that is not there is not an error.
