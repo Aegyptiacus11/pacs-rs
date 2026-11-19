@@ -1,7 +1,8 @@
 # Hospital interfaces: the plan
 
-Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside; the rest is
-not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND and C-MOVE today.
+Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside, and of
+step 8 the C-FIND SCP; the rest is not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE
+C-ECHO, C-STORE, C-FIND and C-MOVE today.
 
 It is meant to be both kinds of PACS in one program:
 
@@ -58,7 +59,9 @@ destination the hospital names.
    Reports, sent by C-STORE SCU to the hospital's destination. Never in research mode: the de-identified
    UIDs no longer match the hospital's.
 8. **Later**: the SCP side of query/retrieve, so viewers and workstations can query pacs-rs (rules below);
-   then the Conformance Statement (PS3.2), kept current from the first DIMSE release.
+   then the Conformance Statement (PS3.2), kept current from the first DIMSE release. *C-FIND SCP done
+   for Study Root ([being searched](dimse.md#being-searched)); C-MOVE and C-GET SCP, and Patient Root,
+   not yet.*
 
 Patient lists from the hospital's records system (HL7 v2 or FHIR Patient and ImagingStudy) are optional, for
 a site that wants them pushed; a C-FIND by Accession Number or Patient ID covers the usual request.
@@ -97,8 +100,13 @@ Not yet:
 
 - **C-FIND** (PS3.4 C.4.1.3.1): one Pending response per match, each with a single match's values; a
   C-CANCEL interrupts the matching and ends with status Cancel. Matches stream from an index cursor.
+  *Built, for Study Root.*
 - **Matching** (PS3.4 C.2.2.2): single value, list of UID, universal, wildcard, range, sequence, empty value
-  and multiple value matching. One matcher serves C-FIND, QIDO-RS and `/tools/find`.
+  and multiple value matching. One matcher serves C-FIND, QIDO-RS and `/tools/find`. *Built, but for
+  empty value and multiple value matching, which need an extended negotiation (C.5.1.1) that is not made.*
+- **Who and what**: DIMSE has no accounts. Query and retrieve are answered to the AE titles of
+  `PACS_DIMSE_REMOTES`; the called AE title sets what is seen, a project's showing that project only.
+  *Built for C-FIND.*
 - **Information models** (PS3.4 C.6): Patient Root and Study Root; Patient/Study Only is retired.
 - **C-MOVE** (PS3.4 C.4.2.3.1): Pending responses carry the Remaining, Completed, Failed and Warning counts;
   the final one is Success, Warning or Failure.
