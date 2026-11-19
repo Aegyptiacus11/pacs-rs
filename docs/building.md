@@ -74,9 +74,14 @@ pixels. A test that searches thousands of studies and retrieves none fills the i
 the file's header alone.
 
 The sample study of `docs/sample` is for the documentation, not for tests: its pixels are
-real, but its DICOM headers were written by a script. Older tests use
-`pacs_core::synthetic::SyntheticSeries`, which makes small images up; their conversion is
-separate work.
+real, but its DICOM headers were written by a script.
+
+No test makes an image up. The files are in `crates/pacs-core/tests/data/pydicom`, with where
+each comes from and under what terms: a CT and an MR of one frame, an MR of ten frames, the
+MRs in JPEG-LS, and a nuclear medicine image in lossy JPEG. What no file at hand has is made
+by altering one: `RealSeries::refragmented` cuts the real JPEG-LS codestreams into other
+fragments, and `AlteredFile` is the CT with elements written wrongly in place of its own
+(elements in UN, lengths that lie), for the tests of what a reader must survive.
 
 ## TLS to Postgres
 
@@ -94,7 +99,7 @@ Without them the test is skipped; CI sets them.
 
 ## Comparing with a reference server
 
-`crates/pacs-server/tests/reference.rs` stores the same synthetic files in pacs-rs and in a
+`crates/pacs-server/tests/reference.rs` stores the same files (those above) in pacs-rs and in a
 reference DICOMweb server, makes the same requests to both and compares the answers tag by tag,
 frame by frame and file by file. The reference is Orthanc 26.9.1 (core 1.13.0) with its DICOMweb plugin;
 pacs-rs aims to be compatible with it. Deliberate differences are listed in the test, each with

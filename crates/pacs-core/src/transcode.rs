@@ -149,20 +149,17 @@ mod tests {
 
     use super::*;
     use crate::codec::{EXPLICIT_VR_LE, JPEG_LS_LOSSLESS, JPEG_XL_LOSSLESS};
-    use crate::synthetic::SyntheticSeries;
+    use crate::real::RealSeries;
 
-    fn series() -> SyntheticSeries {
-        let mut series = SyntheticSeries::new(7, 1);
-        series.rows = 32;
-        series.columns = 24;
-        series
+    fn series() -> RealSeries {
+        RealSeries::new(7, 1)
     }
 
     #[test]
     fn every_way_round_and_back() {
-        let original = Instance::from_bytes(&series().multiframe_bytes(0, 3)).unwrap();
+        let original = Instance::from_bytes(&series().multiframe_bytes(0)).unwrap();
         let shape = original.shape().unwrap();
-        let reference: Vec<Vec<u8>> = (1..=3)
+        let reference: Vec<Vec<u8>> = (1..=RealSeries::FRAMES)
             .map(|n| original.native_frame(n, shape).unwrap())
             .collect();
         for first in [JPEG_LS_LOSSLESS, JPEG_XL_LOSSLESS, EXPLICIT_VR_LE] {
@@ -172,7 +169,7 @@ mod tests {
             for second in [JPEG_LS_LOSSLESS, JPEG_XL_LOSSLESS, EXPLICIT_VR_LE] {
                 let twice = Instance::from_bytes(&once.transcoded(second, true).unwrap()).unwrap();
                 assert_eq!(twice.key.transfer_syntax_uid, second);
-                for (n, expected) in (1..=3).zip(&reference) {
+                for (n, expected) in (1..=RealSeries::FRAMES).zip(&reference) {
                     assert_eq!(&twice.native_frame(n, shape).unwrap(), expected);
                 }
             }
@@ -181,7 +178,7 @@ mod tests {
 
     #[test]
     fn frames_come_out_one_per_fragment() {
-        let original = Instance::from_bytes(&series().multiframe_bytes(0, 2)).unwrap();
+        let original = Instance::from_bytes(&series().multiframe_bytes(0)).unwrap();
         let jls =
             Instance::from_bytes(&original.transcoded(JPEG_LS_LOSSLESS, true).unwrap()).unwrap();
         let frame = jls.frame(2).unwrap();
@@ -208,13 +205,8 @@ mod tests {
 
     #[test]
     fn refuses_colour_and_unknown_syntaxes() {
-        let bytes = series().encapsulated_bytes(
-            0,
-            uids::JPEG_BASELINE8_BIT,
-            1,
-            vec![],
-            vec![vec![0xFF, 0xD8]],
-        );
+        // a real image in lossy JPEG, which pacs-rs has no codec for
+        let bytes = series().jpeg_lossy_bytes(0);
         let instance = Instance::from_bytes(&bytes).unwrap();
         assert!(matches!(
             instance.transcoded(JPEG_LS_LOSSLESS, true),

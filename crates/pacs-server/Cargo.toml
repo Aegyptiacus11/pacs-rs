@@ -55,7 +55,7 @@ dicom-object.workspace = true
 dicom-transfer-syntax-registry.workspace = true
 dicom-ul.workspace = true
 http-body-util.workspace = true
-pacs-core = { workspace = true, features = ["synthetic", "real"] }
+pacs-core = { workspace = true, features = ["real"] }
 reqwest.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

@@ -1,13 +1,15 @@
-//! Elements written as UN (PS3.5 6.2.2) and lengths that lie, on files written byte by byte.
+//! Elements written as UN (PS3.5 6.2.2) and lengths that lie, on a scanner's file altered
+//! byte by byte (`pacs_core::real::AlteredFile`).
 //! The sequence cases follow dcm4che's `DicomInputStreamTest.testUNSequence*`.
 
 use std::borrow::Cow;
 
 use dicom_core::{Tag, VR};
 use dicom_dictionary_std::{tags, uids};
-use pacs_core::synthetic::{
-    ITEM, RawFile, SEQUENCE_END, SyntheticSeries, UNDEFINED, even, implicit,
-    implicit_reference_sequence, item, un_sequence_file, un_study_uid_file,
+use pacs_core::real::RealSeries;
+use pacs_core::real::{
+    AlteredFile, ITEM, SEQUENCE_END, UNDEFINED, even, implicit, implicit_reference_sequence, item,
+    un_sequence_file, un_study_uid_file,
 };
 use pacs_core::{Instance, wire};
 
@@ -15,8 +17,8 @@ const REFERENCED_STUDY: Tag = Tag(0x0008, 0x1110);
 /// Private Group Reference: a US in the dictionary, as dcm4che's sequence cases use.
 const NESTED_US: (u16, u16) = (0x0008, 0x0301);
 
-fn explicit_le() -> RawFile {
-    RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN).identifiers(1, b"UI")
+fn explicit_le() -> AlteredFile {
+    AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN).identifiers(1, b"UI")
 }
 
 fn nested_us(instance: &Instance, sequence: Tag) -> Vec<u16> {
@@ -56,6 +58,29 @@ fn standard_sequence_in_un_undefined_length() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+/// The file GDCM 2.4.4 wrote, as pydicom keeps it for its issue 1312: a data set of one
+/// private sequence in UN of undefined length, in a JPEG Lossless file. Nothing here is
+/// ours.
+#[test]
+fn the_file_gdcm_wrote_reads_as_a_sequence() {
+    let bytes = pacs_core::real::file_bytes("UN_sequence.dcm");
+    let checked = wire::checked(&bytes).unwrap();
+    assert!(matches!(checked, Cow::Owned(_)));
+    let object = dicom_object::from_reader(&checked[..]).unwrap();
+    let private = object.element(Tag(0x4453, 0x100C)).unwrap();
+    assert_eq!(private.vr(), VR::SQ);
+    let items = private.items().unwrap();
+    assert_eq!(items.len(), 1);
+    let series = items[0].element(Tag(0x0008, 0x1115)).unwrap();
+    assert_eq!(series.vr(), VR::SQ);
+    let study = items[0].element(tags::STUDY_INSTANCE_UID).unwrap();
+    assert_eq!(study.vr(), VR::UI);
+    assert_eq!(
+        study.to_str().unwrap().trim_end_matches('\0'),
+        "1.2.840.113619.2.327.3.185221411.476.1398588725.795"
     );
 }
 
@@ -113,7 +138,7 @@ fn big_endian_file_with_implicit_little_endian_un() {
     // dcm4che: testUNSequenceEVR_BE_UN_IVR_LE.
     let mut content = item(&implicit(NESTED_US, &[0x23, 0x01]));
     content.extend(SEQUENCE_END);
-    let bytes = RawFile::big_endian()
+    let bytes = AlteredFile::big_endian()
         .identifiers(1, b"UI")
         .long_declared((0x0008, 0x1110), b"UN", UNDEFINED, &content)
         .bytes();
@@ -132,7 +157,7 @@ fn big_endian_file_with_big_endian_sequence_in_un() {
         &[0xFF, 0xFE, 0xE0, 0xDD, 0, 0, 0, 0],
     ]
     .concat();
-    let bytes = RawFile::big_endian()
+    let bytes = AlteredFile::big_endian()
         .identifiers(1, b"UI")
         .long_declared((0x0008, 0x1110), b"UN", UNDEFINED, &content)
         .bytes();
@@ -143,7 +168,7 @@ fn big_endian_file_with_big_endian_sequence_in_un() {
 #[test]
 fn big_endian_un_number_stays_little_endian_until_reverted() {
     // PS3.5 6.2.2: a value in UN is not byte-swapped, whatever the file's order.
-    let bytes = RawFile::big_endian()
+    let bytes = AlteredFile::big_endian()
         .identifiers(1, b"UI")
         .long((0x0028, 0x0010), b"UN", &[0x00, 0x02])
         .bytes();
@@ -304,8 +329,8 @@ fn native_pixel_data_in_un_reads_as_ow() {
 #[test]
 fn a_file_without_un_comes_back_as_the_same_bytes() {
     for bytes in [
-        SyntheticSeries::new(3, 1).slice_bytes(0),
-        RawFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
+        RealSeries::new(3, 1).slice_bytes(0),
+        AlteredFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
             .raw(&implicit((0x0020, 0x000D), &even("2.25.1")))
             .bytes(),
     ] {
@@ -328,7 +353,7 @@ fn implicit_vr_file_is_walked_and_read() {
     data.extend(&sequence);
     data.extend(implicit((0x0020, 0x000D), &even("2.25.1")));
     data.extend(implicit((0x0020, 0x000E), &even("2.25.2")));
-    let bytes = RawFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
+    let bytes = AlteredFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
         .raw(&data)
         .bytes();
     let instance = Instance::from_bytes(&bytes).unwrap();
@@ -370,7 +395,7 @@ fn a_value_longer_than_the_file_is_refused_for_every_long_vr() {
 #[test]
 fn a_length_in_a_big_endian_or_implicit_file_is_refused_too() {
     refused(
-        &RawFile::big_endian()
+        &AlteredFile::big_endian()
             .identifiers(1, b"UI")
             .long_declared((0x0043, 0x1001), b"OB", LIE, b"data")
             .bytes(),
@@ -378,7 +403,7 @@ fn a_length_in_a_big_endian_or_implicit_file_is_refused_too() {
     let mut element = implicit((0x0043, 0x1001), b"data");
     element[4..8].copy_from_slice(&LIE.to_le_bytes());
     refused(
-        &RawFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
+        &AlteredFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
             .raw(&element)
             .bytes(),
     );
@@ -445,9 +470,15 @@ fn a_fragment_cut_short_stays_readable_at_the_size_it_has() {
     content.extend(ITEM);
     content.extend(LIE.to_le_bytes());
     content.extend([0xFF, 0xD8]);
-    let bytes = explicit_le()
+    let mut bytes = explicit_le()
         .long_declared((0x7FE0, 0x0010), b"OB", UNDEFINED, &content)
         .bytes();
+    // the file ends in the fragment: what the scanner wrote after its pixel data is cut off
+    let fragment = bytes
+        .windows(content.len())
+        .rposition(|window| window == content)
+        .unwrap();
+    bytes.truncate(fragment + content.len());
     assert!(matches!(wire::checked(&bytes).unwrap(), Cow::Owned(_)));
     let instance = Instance::from_bytes(&bytes).unwrap();
     let pixels = instance.object.get(tags::PIXEL_DATA).unwrap();
@@ -456,7 +487,7 @@ fn a_fragment_cut_short_stays_readable_at_the_size_it_has() {
 
 #[test]
 fn a_file_meta_length_longer_than_the_file_is_refused() {
-    let mut bytes = RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN).bytes();
+    let mut bytes = AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN).bytes();
     // (0002,0102) Private Information, the last of group 2, added by hand.
     let mut extra = vec![0x02, 0x00, 0x02, 0x01];
     extra.extend(b"OB");
@@ -522,7 +553,7 @@ fn what_is_not_part_10_passes_for_dicom_rs_to_refuse() {
 
 #[test]
 fn a_missing_uid_is_still_refused_after_reverting() {
-    let bytes = RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+    let bytes = AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
         .long((0x0020, 0x000D), b"UN", &even("2.25.1"))
         .bytes();
     let message = Instance::from_bytes(&bytes).err().unwrap().to_string();
@@ -531,7 +562,7 @@ fn a_missing_uid_is_still_refused_after_reverting() {
 
 #[test]
 fn a_uid_that_is_not_one_is_refused_after_reverting() {
-    let bad = RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+    let bad = AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
         .short((0x0008, 0x0016), b"UI", &even(uids::CT_IMAGE_STORAGE))
         .short((0x0008, 0x0018), b"UI", &even("2.25.3"))
         .long((0x0020, 0x000D), b"UN", b"../../etc/passwd")
@@ -547,7 +578,7 @@ fn cut_or_damaged_files_get_an_answer() {
     for file in [
         un_sequence_file(5),
         un_study_uid_file(5),
-        RawFile::big_endian()
+        AlteredFile::big_endian()
             .identifiers(1, b"UN")
             .long_declared(
                 (0x0008, 0x1110),
@@ -575,10 +606,11 @@ fn cut_or_damaged_files_get_an_answer() {
 
 #[test]
 fn read_cost_counts_elements_items_and_values() {
-    let cost = |file: RawFile| wire::read_cost(&file.bytes()).unwrap();
+    let cost = |file: AlteredFile| wire::read_cost(&file.bytes()).unwrap();
+    // the file as the scanner wrote it; each element below is one it does not have
     let empty = cost(explicit_le());
     assert_eq!(
-        cost(explicit_le().short((0x0020, 0x0013), b"IS", b"7 ")),
+        cost(explicit_le().short((0x0020, 0x0019), b"IS", b"7 ")),
         empty + 840
     );
     assert_eq!(
@@ -587,7 +619,7 @@ fn read_cost_counts_elements_items_and_values() {
     );
     // Numbers and bytes stay as they came, whatever the size.
     assert_eq!(
-        cost(explicit_le().long((0x7FE0, 0x0010), b"OW", &[0x5C; 4096])),
+        cost(explicit_le().long((0x0028, 0x1201), b"OW", &[0x5C; 4096])),
         empty + 840
     );
     // A backslash in text that is one value.
@@ -612,7 +644,7 @@ fn read_cost_refuses_what_checked_refuses_and_passes_what_it_passes() {
     assert!(wire::read_cost(&lying).is_err());
 }
 
-fn bare(file: RawFile) -> Vec<u8> {
+fn bare(file: AlteredFile) -> Vec<u8> {
     let bytes = file.bytes();
     let length = u32::from_le_bytes(bytes[140..144].try_into().unwrap()) as usize;
     bytes[144 + length..].to_vec()
@@ -627,7 +659,7 @@ fn a_bare_data_set_is_checked_in_its_transfer_syntax() {
         wire::checked_data_set(&plain, ts, NO_LIMIT).unwrap(),
         Cow::Borrowed(_)
     ));
-    let un = bare(RawFile::new(ts).long((0x0020, 0x000D), b"UN", &even("2.25.1")));
+    let un = bare(AlteredFile::new(ts).long((0x0020, 0x000D), b"UN", &even("2.25.1")));
     assert!(matches!(
         wire::checked_data_set(&un, ts, NO_LIMIT).unwrap(),
         Cow::Owned(_)

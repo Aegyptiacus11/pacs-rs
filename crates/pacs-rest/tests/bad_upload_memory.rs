@@ -11,8 +11,8 @@ use dicom_dictionary_std::uids;
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use pacs_archive::Archive;
-use pacs_core::synthetic::{
-    ITEM, RawFile, SEQUENCE_END, UNDEFINED, un_sequence_file, un_study_uid_file,
+use pacs_core::real::{
+    AlteredFile, ITEM, SEQUENCE_END, UNDEFINED, un_sequence_file, un_study_uid_file,
 };
 use pacs_index::Index;
 use pacs_store::Store;
@@ -82,7 +82,7 @@ async fn peak_of(app: &Router, files: Vec<Vec<u8>>) -> (usize, Vec<StatusCode>) 
 /// A length of 3 GiB declared in a small file, in the VRs dicom-rs reads differently: bytes (UN,
 /// OW), text (UT), a VR it does not know.
 fn lying_file(n: u32) -> Vec<u8> {
-    let base = || RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN).identifiers(70_000 + n, b"UI");
+    let base = || AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN).identifiers(70_000 + n, b"UI");
     let lie = 0xC000_0000;
     match n % 4 {
         0 => base()
@@ -118,7 +118,7 @@ fn estimate_holds(name: &str, file: Vec<u8>) {
 }
 
 fn uploads_of_values(seed: u32, values: usize) -> Vec<u8> {
-    RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+    AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
         .identifiers(seed, b"UI")
         .long((0x0043, 0x1001), b"UC", &vec![b'\\'; values])
         .bytes()
@@ -155,7 +155,7 @@ async fn uploads_cost_little_however_their_lengths_lie() {
     }
     estimate_holds(
         "elements",
-        RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+        AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
             .identifiers(2, b"UI")
             .raw(&elements)
             .bytes(),
@@ -168,7 +168,7 @@ async fn uploads_cost_little_however_their_lengths_lie() {
     items.extend(SEQUENCE_END);
     estimate_holds(
         "items",
-        RawFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+        AlteredFile::new(uids::EXPLICIT_VR_LITTLE_ENDIAN)
             .identifiers(3, b"UI")
             .long_declared((0x0008, 0x1115), b"SQ", UNDEFINED, &items)
             .bytes(),

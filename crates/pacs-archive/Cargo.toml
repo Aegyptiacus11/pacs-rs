@@ -19,5 +19,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 dicom-dictionary-std.workspace = true
-pacs-core = { workspace = true, features = ["synthetic"] }
+pacs-core = { workspace = true, features = ["real"] }
 tempfile.workspace = true

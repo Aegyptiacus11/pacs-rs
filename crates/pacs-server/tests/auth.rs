@@ -11,7 +11,7 @@ use axum::http::{Method, Request, StatusCode};
 use base64::Engine;
 use clap::Parser;
 use http_body_util::BodyExt;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_server::api::accounts::{
     DownloadToken, Me, Refused, Role, Session, Token, TokenRefused, Tool, User,
 };
@@ -317,7 +317,7 @@ async fn the_whole_login(settings: Settings) {
     );
 
     let tokens = one_of_each(&app, &admin).await;
-    let series = SyntheticSeries::new(91, 2);
+    let series = RealSeries::new(91, 2);
 
     // Reading: everyone signed in. Writing: editor and above.
     for (role, may_write) in [
@@ -947,7 +947,7 @@ async fn a_download_token_is_good_for_one_path_and_only_in_the_url() {
     let tokens = one_of_each(&app, &admin).await;
     let reader = tokens["reader"].as_str();
     for seed in [95, 96] {
-        let bytes = SyntheticSeries::new(seed, 1).slice_bytes(0);
+        let bytes = RealSeries::new(seed, 1).slice_bytes(0);
         let upload = send(
             &app,
             Method::POST,
@@ -1216,7 +1216,7 @@ async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
         get(&app, "/auth/me", Some(&token)).await.body["permissions"],
         json!(["read", "delete"])
     );
-    let series = SyntheticSeries::new(97, 1);
+    let series = RealSeries::new(97, 1);
     let upload = async |token: String| {
         send(
             &app,
@@ -1487,7 +1487,7 @@ async fn a_client_from_secret_to_revocation(settings: Settings) {
         get(&app, "/dicom-web/studies", Some(&token)).await.status,
         StatusCode::OK
     );
-    let file = SyntheticSeries::new(98, 1).slice_bytes(0);
+    let file = RealSeries::new(98, 1).slice_bytes(0);
     let upload = send(
         &app,
         Method::POST,
@@ -1567,7 +1567,7 @@ async fn a_client_from_secret_to_revocation(settings: Settings) {
         get(&app, "/studies", Some(&narrow)).await.status,
         StatusCode::OK
     );
-    let file = SyntheticSeries::new(98, 1).slice_bytes(0);
+    let file = RealSeries::new(98, 1).slice_bytes(0);
     let upload = send(
         &app,
         Method::POST,
@@ -1596,7 +1596,7 @@ async fn a_client_from_secret_to_revocation(settings: Settings) {
         get(&app, "/studies", Some(&token)).await.status,
         StatusCode::OK
     );
-    let file = SyntheticSeries::new(98, 1).slice_bytes(0);
+    let file = RealSeries::new(98, 1).slice_bytes(0);
     let upload = send(
         &app,
         Method::POST,

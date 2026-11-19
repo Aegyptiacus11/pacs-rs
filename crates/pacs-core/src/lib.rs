@@ -19,8 +19,6 @@ pub mod main_tags;
 pub mod public_ids;
 #[cfg(feature = "real")]
 pub mod real;
-#[cfg(feature = "synthetic")]
-pub mod synthetic;
 pub mod transcode;
 pub mod wire;
 
@@ -88,12 +86,18 @@ impl Instance {
 
     /// The data set as DICOM JSON without its bulk pixel data, as the index keeps it for
     /// WADO-RS metadata; the server adds a BulkDataURI in its place when serving.
+    ///
+    /// Data Set Trailing Padding (FFFC,FFFC) is left out at every depth: its value "has no
+    /// significance and shall be ignored by all DICOM implementations reading this Data Set"
+    /// (PS3.10 7.2).
     pub fn metadata_json(&self) -> Result<serde_json::Value, serde_json::Error> {
-        elements_json(
+        let mut value = elements_json(
             self.object
                 .iter()
                 .filter(|e| !levels::BULK_PIXEL_DATA.contains(&e.tag())),
-        )
+        )?;
+        without_trailing_padding(&mut value);
+        Ok(value)
     }
 
     /// DICOM JSON of just those of `tags` present in the data set.
@@ -111,6 +115,19 @@ impl Instance {
     /// An integer attribute (IS, US, ...); `None` when absent or not a number.
     pub fn int(&self, tag: Tag) -> Option<i64> {
         self.object.get(tag)?.to_int::<i64>().ok()
+    }
+}
+
+/// Removes Data Set Trailing Padding from a DICOM JSON data set and from the items of its
+/// sequences.
+fn without_trailing_padding(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("FFFCFFFC");
+            map.values_mut().for_each(without_trailing_padding);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(without_trailing_padding),
+        _ => {}
     }
 }
 

@@ -10,7 +10,7 @@ use axum::http::{Method, Request, StatusCode};
 use base64::Engine;
 use clap::Parser;
 use http_body_util::BodyExt;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dicomweb::multipart;
 use pacs_server::audit::open_audit;
 use pacs_server::auth::open_login;
@@ -689,7 +689,7 @@ async fn what_is_stored_read_searched_exported_and_deleted_leaves_a_line() {
     let server = "UserID=\"pacs-server";
 
     // Stored: one line per study a request brings, from the caller to the server.
-    let series = SyntheticSeries::new(51, 3).with_patient("DOE^JANE", None);
+    let series = RealSeries::new(51, 3).with_patient("DOE^JANE", None);
     let (uid, patient) = (
         series.study_uid(),
         patient_object(&series.patient_id(), "DOE^JANE"),
@@ -736,7 +736,7 @@ async fn what_is_stored_read_searched_exported_and_deleted_leaves_a_line() {
     lines.none();
 
     // STOW-RS: two studies in one request, one already partly held, are two lines.
-    let other = SyntheticSeries::new(52, 2).with_patient("ROE^RICHARD", None);
+    let other = RealSeries::new(52, 2).with_patient("ROE^RICHARD", None);
     let boundary = multipart::new_boundary();
     let files = [
         series.slice_bytes(0),
@@ -816,7 +816,7 @@ async fn what_is_stored_read_searched_exported_and_deleted_leaves_a_line() {
         StatusCode::OK
     );
     lines.none();
-    let qido = "/dicom-web/studies?PatientID=SYN51";
+    let qido = "/dicom-web/studies?PatientID=NEMA-51";
     assert_eq!(
         call(&app, Method::GET, qido, admin, None).await.status,
         StatusCode::OK
@@ -995,7 +995,14 @@ async fn what_is_stored_read_searched_exported_and_deleted_leaves_a_line() {
         );
     }
     // an archive made to order, of both patients: a line each
-    let order = json!({"Resources": [study, call(&app, Method::GET, "/studies", admin, None).await.body[1]]});
+    let studies = call(&app, Method::GET, "/studies", admin, None).await.body;
+    let other_study = studies
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str() != Some(study.as_str()))
+        .expect("the other patient's study");
+    let order = json!({"Resources": [study, other_study]});
     let made = call(
         &app,
         Method::POST,
@@ -1090,7 +1097,7 @@ async fn without_a_login_the_trail_names_the_address_and_a_tool_is_named_by_its_
     let app = app_with_audit(archive, &settings, None, open_audit(&settings).unwrap()).unwrap();
     let mut lines = Reader::new(path);
 
-    let series = SyntheticSeries::new(53, 1);
+    let series = RealSeries::new(53, 1);
     assert_eq!(
         upload(&app, None, series.slice_bytes(0)).await.status,
         StatusCode::OK

@@ -381,15 +381,15 @@ async fn an_scp_without_study_root_find_is_reported() {
 /// allocated; so is one that costs too much to read, and a standard element in UN is read.
 #[tokio::test]
 async fn an_identifier_is_checked_before_it_is_read() {
-    use pacs_core::synthetic::{RawFile, even};
+    use pacs_core::real::{AlteredFile, even};
     // Written as data sets: what follows the File Meta group of these files.
-    let data_set = |file: RawFile| {
+    let data_set = |file: AlteredFile| {
         let bytes = file.bytes();
         let length = u32::from_le_bytes(bytes[140..144].try_into().unwrap()) as usize;
         bytes[144 + length..].to_vec()
     };
     let identifier = || {
-        RawFile::new(EXPLICIT)
+        AlteredFile::new(EXPLICIT)
             .short((0x0008, 0x0052), b"CS", b"STUDY ")
             .short((0x0010, 0x0020), b"LO", b"P1")
     };

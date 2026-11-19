@@ -1,10 +1,10 @@
 mod common;
 
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_core::{Instance, public_ids};
 use pacs_index::{Index, Level, NewInstance, Statistics};
 
-async fn record(index: &Index, series: &SyntheticSeries) -> i64 {
+async fn record(index: &Index, series: &RealSeries) -> i64 {
     let mut total = 0;
     for bytes in series.all_bytes() {
         let instance = Instance::from_bytes(&bytes).unwrap();
@@ -18,11 +18,11 @@ async fn record(index: &Index, series: &SyntheticSeries) -> i64 {
 #[tokio::test]
 async fn studies_series_and_instances_by_public_id() {
     for index in common::indexes().await {
-        let first = SyntheticSeries::new(81, 3);
-        let second = SyntheticSeries::new(82, 2).in_study(81, 2);
+        let first = RealSeries::new(81, 3);
+        let second = RealSeries::new(82, 2).in_study(81, 2);
         let size = record(&index, &second).await + record(&index, &first).await;
 
-        let patient = "SYN81";
+        let patient = "NEMA-81";
         let study_id = public_ids::study(patient, &first.study_uid());
         assert_eq!(
             index.study_public_ids().await.unwrap(),
@@ -93,10 +93,10 @@ async fn studies_series_and_instances_by_public_id() {
 async fn the_studies_a_resource_lies_in_for_the_audit_trail() {
     for index in common::indexes().await {
         // one patient with two studies, the first of two series; and another patient
-        let first = SyntheticSeries::new(71, 3).for_patient(7);
-        let second = SyntheticSeries::new(72, 2).in_study(71, 2).for_patient(7);
-        let other_study = SyntheticSeries::new(73, 1).for_patient(7);
-        let other_patient = SyntheticSeries::new(74, 1);
+        let first = RealSeries::new(71, 3).for_patient(7);
+        let second = RealSeries::new(72, 2).in_study(71, 2).for_patient(7);
+        let other_study = RealSeries::new(73, 1).for_patient(7);
+        let other_patient = RealSeries::new(74, 1);
         for series in [&first, &second, &other_study, &other_patient] {
             record(&index, series).await;
         }
@@ -108,8 +108,8 @@ async fn the_studies_a_resource_lies_in_for_the_audit_trail() {
             .unwrap()
             .unwrap();
         assert_eq!(study.study_instance_uid, first.study_uid());
-        assert_eq!(study.patient_id.as_deref(), Some("SYN7"));
-        assert_eq!(study.patient_name.as_deref(), Some("SYNTHETIC^SERIES"));
+        assert_eq!(study.patient_id.as_deref(), Some("NEMA-7"));
+        assert_eq!(study.patient_name.as_deref(), Some("CompressedSamples^CT1"));
         // both series' instances, counted by SOP class
         assert_eq!(study.sop_classes, [(ct.clone(), 5)]);
         assert_eq!(index.audited_study("1.2.3").await.unwrap(), None);
@@ -131,13 +131,13 @@ async fn the_studies_a_resource_lies_in_for_the_audit_trail() {
         // a study, a series of it and an instance of it are all in that one study
         let whole = vec![(study_uid.clone(), vec![(ct.clone(), 5)])];
         assert_eq!(
-            by(Level::Study, id("study", &["SYN7", &study_uid])).await,
+            by(Level::Study, id("study", &["NEMA-7", &study_uid])).await,
             whole
         );
         assert_eq!(
             by(
                 Level::Series,
-                id("series", &["SYN7", &study_uid, &second.series_uid()])
+                id("series", &["NEMA-7", &study_uid, &second.series_uid()])
             )
             .await,
             whole
@@ -148,7 +148,7 @@ async fn the_studies_a_resource_lies_in_for_the_audit_trail() {
                 id(
                     "instance",
                     &[
-                        "SYN7",
+                        "NEMA-7",
                         &study_uid,
                         &first.series_uid(),
                         &first.instance_uid(1)
@@ -159,7 +159,7 @@ async fn the_studies_a_resource_lies_in_for_the_audit_trail() {
             whole
         );
         // a patient: every study of theirs, and none of anyone else's
-        let mut of_patient = by(Level::Patient, id("patient", &["SYN7"])).await;
+        let mut of_patient = by(Level::Patient, id("patient", &["NEMA-7"])).await;
         of_patient.sort();
         let mut expected = vec![
             (study_uid.clone(), vec![(ct.clone(), 5)]),
@@ -169,7 +169,7 @@ async fn the_studies_a_resource_lies_in_for_the_audit_trail() {
         assert_eq!(of_patient, expected);
         // an ID of another level, or of nothing, is in no study
         assert_eq!(
-            by(Level::Series, id("study", &["SYN7", &study_uid])).await,
+            by(Level::Series, id("study", &["NEMA-7", &study_uid])).await,
             []
         );
         assert_eq!(by(Level::Study, "nothing".into()).await, []);

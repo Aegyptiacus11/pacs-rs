@@ -12,7 +12,7 @@ use clap::Parser;
 use http_body_util::BodyExt;
 use pacs_archive::Archive;
 use pacs_core::public_ids;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_server::auth::open_login;
 use pacs_server::{Settings, open_archive};
 use serde_json::{Value, json};
@@ -157,7 +157,7 @@ struct Ids {
     instance_uid: String,
 }
 
-fn ids(s: &SyntheticSeries) -> Ids {
+fn ids(s: &RealSeries) -> Ids {
     let (p, st, se, i) = (
         s.patient_id(),
         s.study_uid(),
@@ -180,11 +180,11 @@ struct Server {
     archive: Archive,
     admin: String,
     /// In `liver-2026`.
-    liver: SyntheticSeries,
+    liver: RealSeries,
     /// In `lung-2026`, of the same patient as `liver`.
-    lung: SyntheticSeries,
+    lung: RealSeries,
     /// Stored as received, of another patient.
-    received: SyntheticSeries,
+    received: RealSeries,
     dir: tempfile::TempDir,
 }
 
@@ -195,9 +195,9 @@ async fn server() -> Server {
     let login = open_login(&settings, archive.index(), env).await.unwrap();
     let audit = pacs_server::audit::open_audit(&settings).unwrap();
     let app = pacs_server::app_with_audit(archive.clone(), &settings, login, audit).unwrap();
-    let liver = SyntheticSeries::new(91, 2).for_patient(90);
-    let lung = SyntheticSeries::new(92, 2).for_patient(90);
-    let received = SyntheticSeries::new(93, 2);
+    let liver = RealSeries::new(91, 2).for_patient(90);
+    let lung = RealSeries::new(92, 2).for_patient(90);
+    let received = RealSeries::new(93, 2);
     for (series, project) in [
         (&liver, Some("liver-2026")),
         (&lung, Some("lung-2026")),
@@ -520,7 +520,7 @@ async fn a_limited_account_writes_and_deletes_within_its_project() {
     let (_, token) = user(app, &s.admin, "second", "admin", json!(["liver-2026"])).await;
 
     // it stores nothing over HTTP: what it sent would be in no project
-    let file = SyntheticSeries::new(94, 1).slice_bytes(0);
+    let file = RealSeries::new(94, 1).slice_bytes(0);
     let upload = send(
         app,
         Method::POST,

@@ -3,12 +3,12 @@ mod common;
 use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use pacs_core::Instance;
 use pacs_core::public_ids;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_index::{Index, NewInstance, PatientQuery, PatientSort, WorklistQuery, WorklistSort};
 
 /// A one-slice study of its own patient: this date, description, sex and modality.
 async fn study(index: &Index, seed: u32, date: &str, description: &str, sex: &str, modality: &str) {
-    let series = SyntheticSeries::new(seed, 1);
+    let series = RealSeries::new(seed, 1).born("19700101");
     let bytes = series.slice_bytes(0);
     let mut instance = Instance::from_bytes(&bytes).unwrap();
     for (tag, vr, value) in [
@@ -108,7 +108,7 @@ async fn the_list_is_filtered_sorted_and_paged_in_the_index() {
         };
         assert_eq!(index.worklist(&q).await.unwrap().1, 1);
         let q = WorklistQuery {
-            words: vec!["syn92".into()],
+            words: vec!["nema-92".into()],
             ..all()
         };
         assert_eq!(
@@ -116,7 +116,7 @@ async fn the_list_is_filtered_sorted_and_paged_in_the_index() {
             ["MR LIVER"]
         );
         // one patient
-        let patient = public_ids::patient("SYN94");
+        let patient = public_ids::patient("NEMA-94");
         let q = WorklistQuery {
             patient: Some(patient.clone()),
             ..all()
@@ -210,7 +210,7 @@ async fn the_list_is_filtered_sorted_and_paged_in_the_index() {
 
 /// A one-slice study of patient `patient` (SYN<patient>), on `date`, of `modality`.
 async fn study_of(index: &Index, seed: u32, patient: u32, date: &str, modality: &str) {
-    let series = SyntheticSeries::new(seed, 1).for_patient(patient);
+    let series = RealSeries::new(seed, 1).for_patient(patient);
     let bytes = series.slice_bytes(0);
     let mut instance = Instance::from_bytes(&bytes).unwrap();
     instance.object.put(DataElement::new(
@@ -247,7 +247,7 @@ async fn patients_come_a_page_at_a_time_with_their_totals() {
             .iter()
             .map(|p| p.main_tags["PatientID"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, ["SYN7", "SYN8", "SYN9"]);
+        assert_eq!(ids, ["NEMA-7", "NEMA-8", "NEMA-9"]);
         let seven = &list[0];
         assert_eq!((seven.studies, seven.instances), (2, 2));
         assert_eq!(seven.modalities, ["CT", "MR"]);
@@ -255,7 +255,7 @@ async fn patients_come_a_page_at_a_time_with_their_totals() {
             (seven.first_study.as_deref(), seven.last_study.as_deref()),
             (Some("20250105"), Some("20260310"))
         );
-        assert_eq!(seven.public_id, public_ids::patient("SYN7"));
+        assert_eq!(seven.public_id, public_ids::patient("NEMA-7"));
 
         // by number of studies, a page of one, a word
         let q = PatientQuery {
@@ -266,7 +266,7 @@ async fn patients_come_a_page_at_a_time_with_their_totals() {
         let (page, total) = index.worklist_patients(&q).await.unwrap();
         assert_eq!(
             (page[0].main_tags["PatientID"].as_str(), total),
-            (Some("SYN7"), 3)
+            (Some("NEMA-7"), 3)
         );
         let q = PatientQuery {
             offset: 1,
@@ -275,10 +275,10 @@ async fn patients_come_a_page_at_a_time_with_their_totals() {
         };
         assert_eq!(
             index.worklist_patients(&q).await.unwrap().0[0].main_tags["PatientID"],
-            "SYN8"
+            "NEMA-8"
         );
         let q = PatientQuery {
-            words: vec!["syn9".into()],
+            words: vec!["nema-9".into()],
             ..all.clone()
         };
         let (found, total) = index.worklist_patients(&q).await.unwrap();

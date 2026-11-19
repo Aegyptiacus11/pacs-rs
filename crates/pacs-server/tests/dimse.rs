@@ -13,7 +13,6 @@ use clap::Parser;
 use dicom_ul::ClientAssociationOptions;
 use http_body_util::BodyExt;
 use pacs_core::real::RealSeries;
-use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::command::{Command, PRIORITY_MEDIUM, field, tag};
 use pacs_dimse::message::{self, Incoming};
 use pacs_server::{Settings, app, dimse_config, open_archive, serve_dimse};
@@ -223,7 +222,7 @@ async fn a_c_store_shows_in_the_rest_api_and_the_study_list() {
     let dir = tempfile::tempdir().unwrap();
     let settings = settings_in(dir.path(), &[]);
     let addr = start_dimse(&settings).await;
-    let series = SyntheticSeries::new(91, 1);
+    let series = RealSeries::new(91, 1);
     let file = series.slice_bytes(0);
     let meta = u32::from_le_bytes(file[140..144].try_into().unwrap()) as usize;
     let data_set = &file[144 + meta..];
@@ -971,8 +970,8 @@ async fn what_an_association_stored_and_one_that_was_refused_are_in_the_audit_tr
     ));
 
     // Two studies of two patients in one association: a line each, once it is over.
-    let first = SyntheticSeries::new(61, 2).with_patient("DOE^JANE", None);
-    let second = SyntheticSeries::new(62, 1).with_patient("ROE^RICHARD", None);
+    let first = RealSeries::new(61, 2).with_patient("DOE^JANE", None);
+    let second = RealSeries::new(62, 1).with_patient("ROE^RICHARD", None);
     let files = [
         (first.instance_uid(0), first.slice_bytes(0)),
         (second.instance_uid(0), second.slice_bytes(0)),

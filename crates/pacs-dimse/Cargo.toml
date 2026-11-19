@@ -28,5 +28,5 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-pacs-core = { workspace = true, features = ["synthetic", "real"] }
+pacs-core = { workspace = true, features = ["real"] }
 tempfile.workspace = true

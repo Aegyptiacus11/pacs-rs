@@ -7,7 +7,7 @@ use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use clap::Parser;
 use http_body_util::BodyExt;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dicomweb::multipart;
 use pacs_server::{Settings, StorageLocation, app, open_archive, secret, serve};
 use serde_json::{Value, json};
@@ -122,7 +122,7 @@ fn defaults() {
 async fn health_and_dicomweb_under_its_path_and_data_survives_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     let settings = settings_in(dir.path(), &[]);
-    let series = SyntheticSeries::new(71, 2);
+    let series = RealSeries::new(71, 2);
     {
         let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
         let (status, _, body) =
@@ -298,7 +298,7 @@ async fn measurements_are_kept_per_study() {
     };
     let settings = settings_in(dir.path(), &[]);
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
-    let series = SyntheticSeries::new(82, 1);
+    let series = RealSeries::new(82, 1);
     let (status, _, body) = call(
         &app,
         Request::post("/instances")
@@ -377,7 +377,10 @@ async fn the_study_list_comes_a_page_at_a_time() {
     let settings = settings_in(dir.path(), &[]);
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
     for seed in [83, 84, 85] {
-        let bytes = SyntheticSeries::new(seed, 1).slice_bytes(0);
+        let bytes = RealSeries::new(seed, 1)
+            .born("19700101")
+            .at("20260101", "120000")
+            .slice_bytes(0);
         let request = Request::post("/instances").body(Body::from(bytes)).unwrap();
         assert_eq!(call(&app, request).await.0, StatusCode::OK);
     }
@@ -400,7 +403,7 @@ async fn the_study_list_comes_a_page_at_a_time() {
     assert_eq!(json(body)["Studies"].as_array().unwrap().len(), 1);
 
     // a word, and the summary of what it finds
-    let (_, _, body) = call(&app, get("/ui/api/studies?q=syn84&summary=true")).await;
+    let (_, _, body) = call(&app, get("/ui/api/studies?q=nema-84&summary=true")).await;
     let found = json(body);
     assert_eq!(found["Total"], 1);
     assert_eq!(found["Summary"]["Studies"], 1);
@@ -412,7 +415,7 @@ async fn the_study_list_comes_a_page_at_a_time() {
     let (_, _, body) = call(&app, get("/ui/api/studies/facets")).await;
     let facets = json(body);
     assert_eq!(facets["Modalities"]["CT"], 3);
-    // synthetic patients, born 1970, scanned in 2026
+    // patients said to be born in 1970, scanned in 2026
     assert_eq!(facets["Ages"]["56"], 3);
     let (_, _, body) = call(&app, get("/ui/api/studies?age=40-64")).await;
     assert_eq!(json(body)["Total"], 3);
@@ -440,10 +443,10 @@ async fn the_study_list_comes_a_page_at_a_time() {
     assert_eq!(patients["Patients"].as_array().unwrap().len(), 2);
     assert_eq!(patients["Patients"][0]["Studies"], 1);
     assert_eq!(patients["Patients"][0]["Modalities"][0], "CT");
-    let (_, _, body) = call(&app, get("/ui/api/patients?q=syn85")).await;
+    let (_, _, body) = call(&app, get("/ui/api/patients?q=nema-85")).await;
     assert_eq!(
         json(body)["Patients"][0]["MainDicomTags"]["PatientID"],
-        "SYN85"
+        "NEMA-85"
     );
     let (status, _, _) = call(&app, get("/ui/api/patients?sort=age")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -536,7 +539,7 @@ async fn the_rest_api_is_at_the_root() {
     let dir = tempfile::tempdir().unwrap();
     let settings = settings_in(dir.path(), &[]);
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
-    let series = SyntheticSeries::new(72, 1);
+    let series = RealSeries::new(72, 1);
     let (status, _, body) = call(
         &app,
         Request::post("/instances")
@@ -617,7 +620,7 @@ async fn the_server_on_postgres() {
     let settings =
         Settings::try_parse_from(["pacs-server", "--index", &url, "--storage", &storage]).unwrap();
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
-    let series = SyntheticSeries::new(73, 3);
+    let series = RealSeries::new(73, 3);
     let (status, _, _) = call(&app, stow_request("/dicom-web/studies", series.all_bytes())).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _, body) = call(
@@ -806,7 +809,7 @@ async fn the_index_over_tls() {
     .unwrap();
     assert!(encrypted(&archive).await);
     // and the archive works over it
-    let series = SyntheticSeries::new(74, 1);
+    let series = RealSeries::new(74, 1);
     archive.ingest(series.slice_bytes(0).into()).await.unwrap();
     assert!(
         archive

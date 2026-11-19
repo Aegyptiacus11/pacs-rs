@@ -7,7 +7,7 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use pacs_archive::{Archive, Compression};
 use pacs_core::public_ids;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_index::Index;
 use pacs_store::Store;
 use serde_json::{Value, json};
@@ -55,7 +55,7 @@ async fn json(app: &Router, method: &str, uri: &str, body: Bytes) -> Value {
     serde_json::from_slice(&body).unwrap()
 }
 
-async fn upload_all(app: &Router, series: &SyntheticSeries) {
+async fn upload_all(app: &Router, series: &RealSeries) {
     for bytes in series.all_bytes() {
         json(app, "POST", "/instances", bytes.into()).await;
     }
@@ -64,9 +64,9 @@ async fn upload_all(app: &Router, series: &SyntheticSeries) {
 #[tokio::test]
 async fn upload_answers_with_the_ids_and_keeps_the_first_copy() {
     let app = app().await;
-    let series = SyntheticSeries::new(91, 1);
+    let series = RealSeries::new(91, 1);
     let (p, st, se, i) = (
-        "SYN91",
+        "NEMA-91",
         series.study_uid(),
         series.series_uid(),
         series.instance_uid(0),
@@ -97,11 +97,11 @@ async fn upload_answers_with_the_ids_and_keeps_the_first_copy() {
 #[tokio::test]
 async fn what_a_client_reads_back() {
     let app = app().await;
-    let first = SyntheticSeries::new(92, 3);
-    let second = SyntheticSeries::new(93, 2).in_study(92, 2);
+    let first = RealSeries::new(92, 3);
+    let second = RealSeries::new(93, 2).in_study(92, 2);
     upload_all(&app, &first).await;
     upload_all(&app, &second).await;
-    let study_id = public_ids::study("SYN92", &first.study_uid());
+    let study_id = public_ids::study("NEMA-92", &first.study_uid());
 
     // find the study by its UID
     let find = json!({"Level": "Study", "Query": {"StudyInstanceUID": first.study_uid()}});
@@ -118,12 +118,9 @@ async fn what_a_client_reads_back() {
         study["MainDicomTags"]["StudyInstanceUID"],
         first.study_uid()
     );
-    assert_eq!(
-        study["MainDicomTags"]["StudyDescription"],
-        "Synthetic study"
-    );
-    assert_eq!(study["PatientMainDicomTags"]["PatientID"], "SYN92");
-    assert_eq!(study["ParentPatient"], public_ids::patient("SYN92"));
+    assert_eq!(study["MainDicomTags"]["StudyDescription"], "e+1");
+    assert_eq!(study["PatientMainDicomTags"]["PatientID"], "NEMA-92");
+    assert_eq!(study["ParentPatient"], public_ids::patient("NEMA-92"));
     assert_eq!(study["Series"].as_array().unwrap().len(), 2);
     assert_eq!(study["IsStable"], false);
 
@@ -176,7 +173,7 @@ async fn what_a_client_reads_back() {
     let mut file = archive.by_index(0).unwrap();
     assert_eq!(
         file.name(),
-        "SYN92 - SYNTHETIC^SERIES/ACC92 - Synthetic study/1 - CT - Synthetic series 1/CT000001.dcm"
+        "NEMA-92 - CompressedSamples^CT1/ACC92 - e+1/1 - CT/CT000001.dcm"
     );
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
@@ -186,9 +183,9 @@ async fn what_a_client_reads_back() {
 #[tokio::test]
 async fn series_instances_and_files() {
     let app = app().await;
-    let series = SyntheticSeries::new(94, 2);
+    let series = RealSeries::new(94, 2);
     upload_all(&app, &series).await;
-    let (p, st, se) = ("SYN94", series.study_uid(), series.series_uid());
+    let (p, st, se) = ("NEMA-94", series.study_uid(), series.series_uid());
     let series_id = public_ids::series(p, &st, &se);
 
     let s = json(&app, "GET", &format!("/series/{series_id}"), Bytes::new()).await;
@@ -306,18 +303,18 @@ async fn unknown_ids_are_a_bare_404_and_searches_it_cannot_do_are_400() {
 async fn find_matches_as_the_standard_says() {
     let app = app().await;
     for series in [
-        SyntheticSeries::new(301, 1)
+        RealSeries::new(301, 1)
             .with_patient("Doe^Jane", None)
             .at("20260105", "103000"),
-        SyntheticSeries::new(302, 1)
+        RealSeries::new(302, 1)
             .with_patient("DOE^JOHN", None)
             .at("20260107", "090000")
             .of_modality("MR"),
-        SyntheticSeries::new(303, 1)
+        RealSeries::new(303, 1)
             .with_patient("Roe^Jane", None)
             .at("20260201", "180000"),
         // a second study of the first patient
-        SyntheticSeries::new(304, 1)
+        RealSeries::new(304, 1)
             .for_patient(301)
             .with_patient("Doe^Jane", None)
             .at("20260301", "120000"),
@@ -326,11 +323,11 @@ async fn find_matches_as_the_standard_says() {
     }
     let study = |seed: u32, patient: u32| {
         public_ids::study(
-            &format!("SYN{patient}"),
-            &SyntheticSeries::new(seed, 1).study_uid(),
+            &format!("NEMA-{patient}"),
+            &RealSeries::new(seed, 1).study_uid(),
         )
     };
-    let patient = |seed: u32| public_ids::patient(&format!("SYN{seed}"));
+    let patient = |seed: u32| public_ids::patient(&format!("NEMA-{seed}"));
     let find = async |level: &str, query: Value| -> Vec<String> {
         let body = json!({"Level": level, "Query": query}).to_string();
         let mut found: Vec<String> = json(&app, "POST", "/tools/find", body.into())
@@ -358,7 +355,7 @@ async fn find_matches_as_the_standard_says() {
             vec![study(301, 301), study(304, 301)],
         ),
         (
-            json!({"PatientID": "SYN30?"}),
+            json!({"PatientID": "NEMA-30?"}),
             vec![
                 study(301, 301),
                 study(302, 302),
@@ -366,7 +363,7 @@ async fn find_matches_as_the_standard_says() {
                 study(304, 301),
             ],
         ),
-        (json!({"PatientID": "syn30?"}), vec![]),
+        (json!({"PatientID": "nema-30?"}), vec![]),
         (
             json!({"StudyDate": "20260105-20260131"}),
             vec![study(301, 301), study(302, 302)],
@@ -419,12 +416,12 @@ async fn find_matches_as_the_standard_says() {
             json!({"PatientName": "*^jane"}),
             vec![patient(301), patient(303)],
         ),
-        (json!({"PatientID": "SYN303"}), vec![patient(303)]),
+        (json!({"PatientID": "NEMA-303"}), vec![patient(303)]),
         (
-            json!({"PatientID": "SYN30*", "PatientSex": "O"}),
+            json!({"PatientID": "NEMA-30*", "PatientSex": "O"}),
             vec![patient(301), patient(302), patient(303)],
         ),
-        (json!({"PatientID": "SYN9*"}), vec![]),
+        (json!({"PatientID": "NEMA-9*"}), vec![]),
     ] {
         assert_eq!(
             find("Patient", query.clone()).await,
@@ -433,11 +430,11 @@ async fn find_matches_as_the_standard_says() {
         );
     }
     // series and instances by a list of UIDs, those that are not there left out
-    let series = SyntheticSeries::new(301, 1);
+    let series = RealSeries::new(301, 1);
     let both = format!(
         "{}\\{}\\2.25.9",
         series.series_uid(),
-        SyntheticSeries::new(303, 1).series_uid()
+        RealSeries::new(303, 1).series_uid()
     );
     assert_eq!(
         find("Series", json!({"SeriesInstanceUID": both}))
@@ -461,9 +458,9 @@ async fn find_matches_as_the_standard_says() {
 #[tokio::test]
 async fn the_archive_is_streamed_file_by_file() {
     let app = app().await;
-    let series = SyntheticSeries::new(95, 6);
+    let series = RealSeries::new(95, 6);
     upload_all(&app, &series).await;
-    let study_id = public_ids::study("SYN95", &series.study_uid());
+    let study_id = public_ids::study("NEMA-95", &series.study_uid());
     let response = app
         .clone()
         .oneshot(
@@ -502,11 +499,11 @@ async fn the_archive_is_streamed_file_by_file() {
     }
 }
 
-/// Patient SYN96: study 96 (series 96 of 2 slices, series 97 of 1) and study 98 (1 slice).
-async fn two_studies(app: &Router) -> [SyntheticSeries; 3] {
-    let a = SyntheticSeries::new(96, 2);
-    let b = SyntheticSeries::new(97, 1).in_study(96, 2).for_patient(96);
-    let c = SyntheticSeries::new(98, 1).for_patient(96);
+/// Patient NEMA-96: study 96 (series 96 of 2 slices, series 97 of 1) and study 98 (1 slice).
+async fn two_studies(app: &Router) -> [RealSeries; 3] {
+    let a = RealSeries::new(96, 2);
+    let b = RealSeries::new(97, 1).in_study(96, 2).for_patient(96);
+    let c = RealSeries::new(98, 1).for_patient(96);
     for s in [&a, &b, &c] {
         upload_all(app, s).await;
     }
@@ -517,9 +514,9 @@ async fn two_studies(app: &Router) -> [SyntheticSeries; 3] {
 async fn patients_and_parents() {
     let app = app().await;
     let [a, _, c] = two_studies(&app).await;
-    let patient = public_ids::patient("SYN96");
-    let study_a = public_ids::study("SYN96", &a.study_uid());
-    let study_c = public_ids::study("SYN96", &c.study_uid());
+    let patient = public_ids::patient("NEMA-96");
+    let study_a = public_ids::study("NEMA-96", &a.study_uid());
+    let study_c = public_ids::study("NEMA-96", &c.study_uid());
 
     assert_eq!(
         json(&app, "GET", "/patients", Bytes::new()).await,
@@ -527,7 +524,7 @@ async fn patients_and_parents() {
     );
     let p = json(&app, "GET", &format!("/patients/{patient}"), Bytes::new()).await;
     assert_eq!(p["Type"], "Patient");
-    assert_eq!(p["MainDicomTags"]["PatientID"], "SYN96");
+    assert_eq!(p["MainDicomTags"]["PatientID"], "NEMA-96");
     assert_eq!(p["IsProtected"], false);
     let mut studies: Vec<String> = serde_json::from_value(p["Studies"].clone()).unwrap();
     studies.sort();
@@ -563,16 +560,20 @@ async fn patients_and_parents() {
         4
     );
 
-    let find = json!({"Level": "Patient", "Query": {"PatientID": "SYN96"}});
+    let find = json!({"Level": "Patient", "Query": {"PatientID": "NEMA-96"}});
     assert_eq!(
         json(&app, "POST", "/tools/find", find.to_string().into()).await,
         json!([patient])
     );
 
     // each resource's ancestors
-    let series_a = public_ids::series("SYN96", &a.study_uid(), &a.series_uid());
-    let instance =
-        public_ids::instance("SYN96", &a.study_uid(), &a.series_uid(), &a.instance_uid(0));
+    let series_a = public_ids::series("NEMA-96", &a.study_uid(), &a.series_uid());
+    let instance = public_ids::instance(
+        "NEMA-96",
+        &a.study_uid(),
+        &a.series_uid(),
+        &a.instance_uid(0),
+    );
     for (uri, id) in [
         (format!("/studies/{study_a}/patient"), &patient),
         (format!("/series/{series_a}/patient"), &patient),
@@ -597,13 +598,13 @@ async fn patients_and_parents() {
 async fn deleting_answers_with_the_remaining_ancestor() {
     let app = app().await;
     let [a, b, c] = two_studies(&app).await;
-    let patient = public_ids::patient("SYN96");
-    let study_a = public_ids::study("SYN96", &a.study_uid());
-    let series_a = public_ids::series("SYN96", &a.study_uid(), &a.series_uid());
-    let series_b = public_ids::series("SYN96", &b.study_uid(), &b.series_uid());
+    let patient = public_ids::patient("NEMA-96");
+    let study_a = public_ids::study("NEMA-96", &a.study_uid());
+    let series_a = public_ids::series("NEMA-96", &a.study_uid(), &a.series_uid());
+    let series_b = public_ids::series("NEMA-96", &b.study_uid(), &b.series_uid());
     let instance = |slice| {
         public_ids::instance(
-            "SYN96",
+            "NEMA-96",
             &a.study_uid(),
             &a.series_uid(),
             &a.instance_uid(slice),
@@ -663,7 +664,7 @@ async fn deleting_answers_with_the_remaining_ancestor() {
 
     // a deleted study can be uploaded again
     upload_all(&app, &c).await;
-    let study_c = public_ids::study("SYN96", &c.study_uid());
+    let study_c = public_ids::study("NEMA-96", &c.study_uid());
     assert_eq!(
         json(&app, "GET", "/studies", Bytes::new()).await,
         json!([study_c])
@@ -680,8 +681,8 @@ fn zip_names(zip: &Bytes) -> Vec<String> {
 #[tokio::test]
 async fn create_archive_takes_resources_at_any_level_each_file_once() {
     let app = app().await;
-    let a = SyntheticSeries::new(96, 3);
-    let b = SyntheticSeries::new(97, 2);
+    let a = RealSeries::new(96, 3);
+    let b = RealSeries::new(97, 2);
     upload_all(&app, &a).await;
     upload_all(&app, &b).await;
     let (pa, pb) = (a.patient_id(), b.patient_id());
@@ -759,8 +760,8 @@ async fn create_archive_takes_resources_at_any_level_each_file_once() {
 async fn standard_elements_in_un_are_read_and_kept_as_received() {
     let app = app().await;
     for (bytes, study) in [
-        (pacs_core::synthetic::un_sequence_file(92), "2.25.921"),
-        (pacs_core::synthetic::un_study_uid_file(93), "2.25.931"),
+        (pacs_core::real::un_sequence_file(92), "2.25.921"),
+        (pacs_core::real::un_study_uid_file(93), "2.25.931"),
     ] {
         let answer = json(&app, "POST", "/instances", bytes.clone().into()).await;
         assert_eq!(answer["Status"], "Success");
@@ -773,7 +774,7 @@ async fn standard_elements_in_un_are_read_and_kept_as_received() {
         assert_eq!(file, bytes);
     }
 
-    let lying = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+    let lying = pacs_core::real::AlteredFile::new("1.2.840.10008.1.2.1")
         .identifiers(94, b"UI")
         .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
         .bytes();
@@ -789,7 +790,7 @@ async fn a_file_too_costly_to_read_is_413() {
         .with_compression(Compression::Off)
         .with_read_limit(1 << 20);
     let app = pacs_rest::router(archive, 1 << 30);
-    let costly = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+    let costly = pacs_core::real::AlteredFile::new("1.2.840.10008.1.2.1")
         .identifiers(103, b"UI")
         .long((0x0043, 0x1001), b"UC", &vec![b'\\'; 100_000])
         .bytes();

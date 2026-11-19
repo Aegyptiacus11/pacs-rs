@@ -13,6 +13,7 @@ dicom-core.workspace = true
 dicom-dictionary-std.workspace = true
 dicom-json.workspace = true
 dicom-object.workspace = true
+dicom-transfer-syntax-registry = { workspace = true, optional = true }
 jxl.workspace = true
 memchr.workspace = true
 serde_json.workspace = true
@@ -22,19 +23,18 @@ zune-core.workspace = true
 zune-jpegxl.workspace = true
 
 [features]
-# Synthetic CT series for tests here and in the other crates.
-synthetic = []
-# Two files made by scanners (tests/data/pydicom), as test data for the other crates.
-real = []
+# Real DICOM files (tests/data/pydicom), whole and altered, as test data for the tests here
+# and in the other crates.
+real = ["dep:dicom-transfer-syntax-registry"]
 
 [dev-dependencies]
 dicom-dictionary-std.workspace = true
-pacs-core = { path = ".", features = ["synthetic", "real"] }
+pacs-core = { path = ".", features = ["real"] }
 
 [[example]]
-name = "write_synthetic"
-required-features = ["synthetic"]
+name = "write_real"
+required-features = ["real"]
 
 [[example]]
-name = "write_un_vr"
-required-features = ["synthetic"]
+name = "write_altered"
+required-features = ["real"]

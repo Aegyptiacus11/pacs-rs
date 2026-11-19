@@ -5,17 +5,21 @@
 //! e.g. `http://127.0.0.1:18042/dicom-web` (docs/building.md, "Comparing with a reference server").
 //! Differences that are deliberate are listed, with the reason, in `ALLOWED`; anything
 //! else fails the test with the full list of what differs.
+//!
+//! Two things are not differences. A number is compared by its value ([`same`]). A binary
+//! value the reference answers by a BulkDataURI and pacs-rs inline is compared by its bytes,
+//! fetched from the reference ([`Report::bulk_data`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::Engine;
 use bytes::Bytes;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dicomweb::media::MediaType;
 use pacs_dicomweb::multipart;
 use pacs_server::{Settings, app, open_archive, serve};
 use serde_json::Value;
 
-const JPEG_LS: &str = "1.2.840.10008.1.2.4.80";
 const FRAMES_ACCEPT: &str = "multipart/related; type=application/octet-stream; transfer-syntax=*";
 const JSON: &str = "application/dicom+json";
 
@@ -90,6 +94,38 @@ const ALLOWED_ORDER: &[(&str, &str, &str)] = &[
         "pacs-rs lists a patient's studies by Study Date; the reference by ID",
     ),
 ];
+
+/// Equal as DICOM JSON. Numbers are compared by value, so `-1` is `-1.0` (PS3.18 F.2.3: a
+/// number is a JSON number, with no form of its own), and to a few units in the last place of
+/// a double: the reference writes FL and FD one unit off what the file's bytes hold
+/// (pacs-core's `metadata_floats_are_the_bytes_of_the_file` holds pacs-rs to the bytes).
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) if x.is_f64() || y.is_f64() => {
+            let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
+            x == y || (x - y).abs() <= 4.0 * f64::EPSILON * x.abs().max(y.abs())
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(v, w)| same(v, w))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+        }
+        _ => a == b,
+    }
+}
+
+/// The reference's BulkDataURI and pacs-rs's inline bytes, when the two answers are one
+/// binary value given in those two ways. pacs-rs has no BulkDataURI yet (docs/roadmap.md,
+/// "DICOMweb to the end"), and both forms are DICOM JSON for the same value (PS3.18 F.2.2).
+fn bulk_pair(reference: &Value, pacs: &Value) -> Option<(String, String)> {
+    let (r, p) = (reference.as_object()?, pacs.as_object()?);
+    (r.len() == 2 && p.len() == 2 && r.get("vr")? == p.get("vr")?).then_some(())?;
+    Some((
+        r.get("BulkDataURI")?.as_str()?.to_owned(),
+        p.get("InlineBinary")?.as_str()?.to_owned(),
+    ))
+}
 
 fn same_members(a: &Value, b: &Value) -> bool {
     let set = |v: &Value| -> Option<BTreeSet<String>> {
@@ -229,6 +265,9 @@ fn parts(reply: &Reply) -> Vec<multipart::Part> {
 #[derive(Default)]
 struct Report {
     lines: Vec<String>,
+    /// (what, the reference's BulkDataURI, pacs-rs's InlineBinary), until [`Self::bulk_data`]
+    /// compares their bytes.
+    bulk: Vec<(String, String, String)>,
 }
 
 impl Report {
@@ -251,8 +290,12 @@ impl Report {
         let tags: BTreeSet<&String> = r.keys().chain(p.keys()).collect();
         for tag in tags {
             match (r.get(tag), p.get(tag)) {
+                (Some(a), Some(b)) if place == "metadata" && bulk_pair(a, b).is_some() => {
+                    let (uri, inline) = bulk_pair(a, b).unwrap();
+                    self.bulk.push((format!("{what} {tag}"), uri, inline));
+                }
                 (Some(a), Some(b))
-                    if a != b
+                    if !same(a, b)
                         && !ALLOWED_VALUES
                             .iter()
                             .any(|(p, t, _)| *p == place && t == tag)
@@ -302,6 +345,37 @@ impl Report {
         for (uid, a) in &r {
             if let Some(b) = p.get(uid) {
                 self.objects(place, &format!("{what} [{uid}]"), a, b);
+            }
+        }
+    }
+
+    /// Fetches each BulkDataURI set aside by [`Self::objects`] from the reference and
+    /// compares the bytes with the ones pacs-rs gave inline.
+    async fn bulk_data(&mut self, reference: &Server) {
+        for (what, uri, inline) in std::mem::take(&mut self.bulk) {
+            let Some(path) = uri.strip_prefix("BASE") else {
+                self.push(format!("{what}: BulkDataURI outside the reference: {uri}"));
+                continue;
+            };
+            let Ok(inline) = base64::engine::general_purpose::STANDARD.decode(&inline) else {
+                self.push(format!("{what}: pacs-rs InlineBinary is not base64"));
+                continue;
+            };
+            let reply = reference
+                .get(path, "multipart/related; type=application/octet-stream")
+                .await;
+            if reply.status != 200 {
+                self.push(format!("{what}: bulk data status {}", reply.status));
+                continue;
+            }
+            let parts = parts(&reply);
+            if parts.len() != 1 || parts[0].content != inline {
+                self.push(format!(
+                    "{what}: {} part(s) of bulk data, {} bytes | {} bytes inline, contents differ",
+                    parts.len(),
+                    parts.first().map_or(0, |p| p.content.len()),
+                    inline.len()
+                ));
             }
         }
     }
@@ -438,10 +512,10 @@ async fn same_rest_answers_as_the_reference_server() {
         .as_secs()
         % 100_000) as u32
         + 100_000;
-    let big = SyntheticSeries::new(run * 10 + 6, 3);
-    let small = SyntheticSeries::new(run * 10 + 7, 2).in_study(run * 10 + 6, 2);
+    let big = RealSeries::new(run * 10 + 6, 3);
+    let small = RealSeries::new(run * 10 + 7, 2).in_study(run * 10 + 6, 2);
     // a second study of the same patient
-    let other = SyntheticSeries::new(run * 10 + 8, 1).for_patient(run * 10 + 6);
+    let other = RealSeries::new(run * 10 + 8, 1).for_patient(run * 10 + 6);
     let files: Vec<Vec<u8>> = big
         .all_bytes()
         .into_iter()
@@ -691,6 +765,10 @@ async fn same_rest_answers_as_the_reference_server() {
     }
 
     assert!(
+        report.bulk.is_empty(),
+        "bulk data set aside and not compared"
+    );
+    assert!(
         report.lines.is_empty(),
         "{} difference(s) from the reference server:\n{}",
         report.lines.len(),
@@ -723,16 +801,16 @@ async fn same_answers_as_the_reference_server() {
     let seed = |n: u32| run * 10 + n;
     // a study of two series, a native multi-frame instance, an encapsulated one, and a
     // patient name in ISO 8859-1
-    let big = SyntheticSeries::new(seed(1), 3);
-    let small = SyntheticSeries::new(seed(2), 2).in_study(seed(1), 2);
-    let multiframe = SyntheticSeries::new(seed(3), 1);
-    let jls = SyntheticSeries::new(seed(4), 1);
-    let latin1 = SyntheticSeries::new(seed(5), 2).with_patient("MÜLLER^RENÉ", Some("ISO_IR 100"));
+    let big = RealSeries::new(seed(1), 3);
+    let small = RealSeries::new(seed(2), 2).in_study(seed(1), 2);
+    let multiframe = RealSeries::new(seed(3), 1);
+    let jls = RealSeries::new(seed(4), 1);
+    let latin1 = RealSeries::new(seed(5), 2).with_patient("MÜLLER^RENÉ", Some("ISO_IR 100"));
     let mut files = big.all_bytes();
     files.extend(small.all_bytes());
     files.extend(latin1.all_bytes());
-    files.push(multiframe.multiframe_bytes(0, 3));
-    files.push(jls.encapsulated_bytes(0, JPEG_LS, 2, vec![], vec![vec![7u8; 6], vec![9u8; 10]]));
+    files.push(multiframe.multiframe_bytes(0));
+    files.push(jls.jpeg_ls_multiframe_bytes(0));
 
     let (r, p) = (reference.stow(&files).await, pacs.stow(&files).await);
     if report.status("STOW", &r, &p) {
@@ -833,7 +911,7 @@ async fn same_answers_as_the_reference_server() {
         }
     }
 
-    let frames = |s: &SyntheticSeries, list: &str| {
+    let frames = |s: &RealSeries, list: &str| {
         format!(
             "/studies/{}/series/{}/instances/{}/frames/{list}",
             s.study_uid(),
@@ -855,6 +933,11 @@ async fn same_answers_as_the_reference_server() {
         }
     }
 
+    report.bulk_data(&reference).await;
+    assert!(
+        report.bulk.is_empty(),
+        "bulk data set aside and not compared"
+    );
     assert!(
         report.lines.is_empty(),
         "{} difference(s) from the reference server:\n{}",

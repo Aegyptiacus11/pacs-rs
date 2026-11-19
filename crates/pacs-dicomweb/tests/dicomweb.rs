@@ -4,7 +4,7 @@ use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use pacs_archive::{Archive, Compression};
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dicomweb::media::MediaType;
 use pacs_dicomweb::{Config, multipart, router};
 use pacs_index::Index;
@@ -113,9 +113,11 @@ fn value<'a>(json: &'a Value, tag: &str) -> &'a Value {
 }
 
 /// A study of two series, 3 and 2 slices, stored through STOW-RS.
-async fn two_series_study(app: &Router) -> (SyntheticSeries, SyntheticSeries) {
-    let big = SyntheticSeries::new(61, 3);
-    let small = SyntheticSeries::new(62, 2).in_study(61, 2);
+async fn two_series_study(app: &Router) -> (RealSeries, RealSeries) {
+    let big = RealSeries::new(61, 3).described("Axial series 1");
+    let small = RealSeries::new(62, 2)
+        .in_study(61, 2)
+        .described("Axial series 2");
     let mut files = small.all_bytes();
     files.extend(big.all_bytes());
     let reply = stow(app, "/studies", files).await;
@@ -169,7 +171,7 @@ async fn the_requests_a_viewer_makes() {
     assert_eq!(value(&series[1], "0020000E"), &small.series_uid());
     assert_eq!(value(&series[1], "00201209"), 2);
     // a series result carries its study's attributes too, and says it is UTF-8
-    assert_eq!(value(&series[0], "00100020"), "SYN61");
+    assert_eq!(value(&series[0], "00100020"), "NEMA-61");
     assert_eq!(value(&series[0], "00080005"), "ISO_IR 192");
 
     // 3. the largest series' metadata, in one response
@@ -186,10 +188,8 @@ async fn the_requests_a_viewer_makes() {
     for (slice, instance) in metadata.iter().enumerate() {
         assert_eq!(value(instance, "00080018"), &big.instance_uid(slice as u32));
         assert_eq!(value(instance, "00200013"), slice + 1);
-        assert_eq!(
-            instance["00200032"]["Value"][2],
-            (slice as f64 * 2.5).to_string()
-        );
+        // the scanner's own position, the slices being one image
+        assert_eq!(instance["00200032"]["Value"][2], "-75.699997");
         assert!(instance.get("7FE00010").is_none());
     }
 
@@ -291,16 +291,25 @@ async fn instances_and_series_come_back_byte_for_byte() {
 #[tokio::test]
 async fn multiframe_and_encapsulated_frames() {
     let app = app().await;
-    let native = SyntheticSeries::new(63, 1);
-    let jls = SyntheticSeries::new(64, 1);
-    let fragments = vec![vec![1u8, 1], vec![2, 2, 2, 2]];
+    let native = RealSeries::new(63, 1);
+    let jls = RealSeries::new(64, 1);
+    // the file of ten frames as it is, and as it is in JPEG-LS: a fragment a frame
+    let cut = RealSeries::new(65, 1);
+    let fragments = RealSeries::jpeg_ls_frames();
     let files = vec![
-        native.multiframe_bytes(0, 3),
-        jls.encapsulated_bytes(0, JPEG_LS, 2, vec![], fragments.clone()),
+        native.multiframe_bytes(0),
+        jls.jpeg_ls_multiframe_bytes(0),
+        // the same codestreams, the first cut short: a frame that does not decode
+        cut.refragmented(
+            0,
+            2,
+            vec![],
+            vec![fragments[0][..1000].to_vec(), fragments[1].clone()],
+        ),
     ];
     assert_eq!(stow(&app, "/studies", files).await.status, StatusCode::OK);
 
-    let frames_uri = |s: &SyntheticSeries, list: &str| {
+    let frames_uri = |s: &RealSeries, list: &str| {
         format!(
             "/studies/{}/series/{}/instances/{}/frames/{list}",
             s.study_uid(),
@@ -311,10 +320,10 @@ async fn multiframe_and_encapsulated_frames() {
     let reply = get(&app, &frames_uri(&native, "3,1"), CORNERSTONE_FRAMES).await;
     let parts = reply.parts();
     assert_eq!(parts.len(), 2);
-    assert_eq!(parts[0].content, le_bytes(&native.pixels(0, 2)));
-    assert_eq!(parts[1].content, le_bytes(&native.pixels(0, 0)));
+    assert_eq!(parts[0].content, le_bytes(&RealSeries::frame_pixels(2)));
+    assert_eq!(parts[1].content, le_bytes(&RealSeries::frame_pixels(0)));
 
-    let reply = get(&app, &frames_uri(&native, "4"), CORNERSTONE_FRAMES).await;
+    let reply = get(&app, &frames_uri(&native, "11"), CORNERSTONE_FRAMES).await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
     let reply = get(&app, &frames_uri(&native, "x"), CORNERSTONE_FRAMES).await;
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
@@ -329,13 +338,17 @@ async fn multiframe_and_encapsulated_frames() {
     assert_eq!(parts[0].content, fragments[1]);
     assert!(reply.content_type.contains(r#"type="image/jls""#));
 
-    // uncompressed frames of fragments that are not real JPEG-LS: nothing to decode
-    let reply = get(
-        &app,
-        &frames_uri(&jls, "1"),
-        r#"multipart/related; type="application/octet-stream""#,
-    )
-    .await;
+    // asked uncompressed, the JPEG-LS frame is decoded: the pixels of the native file
+    let uncompressed = r#"multipart/related; type="application/octet-stream""#;
+    let reply = get(&app, &frames_uri(&jls, "1"), uncompressed).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(
+        reply.parts()[0].content,
+        le_bytes(&RealSeries::frame_pixels(0))
+    );
+
+    // a codestream cut short does not decode: nothing uncompressed to answer with
+    let reply = get(&app, &frames_uri(&cut, "1"), uncompressed).await;
     assert_eq!(reply.status, StatusCode::NOT_ACCEPTABLE);
 }
 
@@ -343,9 +356,8 @@ async fn multiframe_and_encapsulated_frames() {
 async fn stored_as_jpeg_ls_and_transcoded_on_request() {
     let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
     let app = router(archive, Config::default());
-    let mut series = SyntheticSeries::new(66, 1);
-    (series.rows, series.columns) = (48, 40);
-    let sent = series.multiframe_bytes(0, 2);
+    let series = RealSeries::new(66, 1);
+    let sent = series.multiframe_bytes(0);
     assert_eq!(
         stow(&app, "/studies", vec![sent.clone()]).await.status,
         StatusCode::OK
@@ -365,10 +377,10 @@ async fn stored_as_jpeg_ls_and_transcoded_on_request() {
         series.instance_uid(0)
     );
     let expected = [
-        le_bytes(&series.pixels(0, 0)),
-        le_bytes(&series.pixels(0, 1)),
+        le_bytes(&RealSeries::frame_pixels(0)),
+        le_bytes(&RealSeries::frame_pixels(1)),
     ];
-    let shape = pacs_core::codec::Shape::new(48, 40, 16, 12);
+    let shape = pacs_core::codec::Shape::new(64, 64, 16, 12);
 
     // the viewer takes whatever is stored: JPEG-LS
     let reply = get(&app, &frames_uri("1,2"), CORNERSTONE_FRAMES).await;
@@ -447,7 +459,7 @@ async fn stored_as_jpeg_ls_and_transcoded_on_request() {
 #[tokio::test]
 async fn stow_reports_what_it_stored_and_what_it_did_not() {
     let app = app().await;
-    let series = SyntheticSeries::new(65, 2);
+    let series = RealSeries::new(65, 2);
     let reply = stow(
         &app,
         "/studies",
@@ -485,7 +497,7 @@ async fn stow_reports_what_it_stored_and_what_it_did_not() {
     assert_eq!(reply.status, StatusCode::CONFLICT);
 
     // into another study: refused, with the UIDs of what was refused
-    let other = SyntheticSeries::new(66, 1);
+    let other = RealSeries::new(66, 1);
     let reply = stow(
         &app,
         &format!("/studies/{}", series.study_uid()),
@@ -516,11 +528,13 @@ async fn searches_match_as_the_standard_says() {
     two_series_study(&app).await;
     // two more studies, at other dates and times, one of another modality
     for series in [
-        SyntheticSeries::new(63, 1)
+        RealSeries::new(63, 1)
             .with_patient("Doe^Jane", None)
+            .referred_by("REFERRING^PHYSICIAN")
             .at("20260105", "103000"),
-        SyntheticSeries::new(64, 1)
+        RealSeries::new(64, 1)
             .with_patient("DOE^JOHN", None)
+            .referred_by("REFERRING^PHYSICIAN")
             .at("20260107", "090000")
             .of_modality("MR"),
     ] {
@@ -553,56 +567,59 @@ async fn searches_match_as_the_standard_says() {
     for (query, expected) in [
         ("StudyInstanceUID=2.25.999", vec![]),
         // single value, by keyword and by tag
-        ("PatientID=SYN61", vec!["SYN61"]),
-        ("00100020=SYN61", vec!["SYN61"]),
+        ("PatientID=NEMA-61", vec!["NEMA-61"]),
+        ("00100020=NEMA-61", vec!["NEMA-61"]),
         // wild cards: case-sensitive for text, not for names
-        ("PatientID=SYN6?", vec!["SYN61", "SYN63", "SYN64"]),
-        ("PatientID=syn6?", vec![]),
-        ("PatientName=doe*", vec!["SYN63", "SYN64"]),
-        ("PatientName=*%5EJane", vec!["SYN63"]),
-        ("PatientName=Doe%5EJane", vec!["SYN63"]),
+        ("PatientID=NEMA-6?", vec!["NEMA-61", "NEMA-63", "NEMA-64"]),
+        ("PatientID=nema-6?", vec![]),
+        ("PatientName=doe*", vec!["NEMA-63", "NEMA-64"]),
+        ("PatientName=*%5EJane", vec!["NEMA-63"]),
+        ("PatientName=Doe%5EJane", vec!["NEMA-63"]),
         // an empty value, and a lone star: everything
-        ("PatientName=", vec!["SYN61", "SYN63", "SYN64"]),
-        ("PatientName=*", vec!["SYN61", "SYN63", "SYN64"]),
+        ("PatientName=", vec!["NEMA-61", "NEMA-63", "NEMA-64"]),
+        ("PatientName=*", vec!["NEMA-61", "NEMA-63", "NEMA-64"]),
         // ranges of dates and of times
-        ("StudyDate=20260105-20260107", vec!["SYN63", "SYN64"]),
-        ("StudyDate=20260106-", vec!["SYN64"]),
-        ("StudyDate=-20260101", vec!["SYN61"]),
-        ("StudyDate=20260105", vec!["SYN63"]),
-        ("StudyTime=0900-1100", vec!["SYN63", "SYN64"]),
-        ("StudyTime=1030", vec!["SYN63"]),
+        ("StudyDate=20260105-20260107", vec!["NEMA-63", "NEMA-64"]),
+        ("StudyDate=20260106-", vec!["NEMA-64"]),
+        ("StudyDate=-20260101", vec!["NEMA-61"]),
+        ("StudyDate=20260105", vec!["NEMA-63"]),
+        ("StudyTime=0900-1100", vec!["NEMA-63", "NEMA-64"]),
+        ("StudyTime=1030", vec!["NEMA-63"]),
         // a range of dates with a range of times: from the 5th at 11:00 to the 7th at 10:00
         (
             "StudyDate=20260105-20260107&StudyTime=1100-1000",
-            vec!["SYN64"],
+            vec!["NEMA-64"],
         ),
         (
             "StudyDate=20260105-20260107&StudyTime=1000-1000",
-            vec!["SYN63", "SYN64"],
+            vec!["NEMA-63", "NEMA-64"],
         ),
         // a list of UIDs
         (
             "StudyInstanceUID=2.25.63100000%2C2.25.64100000%2C2.25.9",
-            vec!["SYN63", "SYN64"],
+            vec!["NEMA-63", "NEMA-64"],
         ),
         // the modalities of a study's series
-        ("ModalitiesInStudy=MR", vec!["SYN64"]),
-        ("ModalitiesInStudy=CT", vec!["SYN61", "SYN63"]),
+        ("ModalitiesInStudy=MR", vec!["NEMA-64"]),
+        ("ModalitiesInStudy=CT", vec!["NEMA-61", "NEMA-63"]),
         // the other required keys
-        ("AccessionNumber=ACC6*", vec!["SYN61", "SYN63", "SYN64"]),
-        ("StudyID=S63", vec!["SYN63"]),
+        (
+            "AccessionNumber=ACC6*",
+            vec!["NEMA-61", "NEMA-63", "NEMA-64"],
+        ),
+        ("StudyID=S63", vec!["NEMA-63"]),
         (
             "ReferringPhysicianName=referring*",
-            vec!["SYN61", "SYN63", "SYN64"],
+            vec!["NEMA-63", "NEMA-64"],
         ),
         // several keys, and a page of the result
-        ("PatientName=doe*&ModalitiesInStudy=MR", vec!["SYN64"]),
-        ("PatientName=doe*&limit=1&offset=1", vec!["SYN63"]),
+        ("PatientName=doe*&ModalitiesInStudy=MR", vec!["NEMA-64"]),
+        ("PatientName=doe*&limit=1&offset=1", vec!["NEMA-63"]),
         ("limit=1&offset=3", vec![]),
         // parameters it knows and does nothing with
         (
-            "PatientID=SYN61&includefield=all&fuzzymatching=false",
-            vec!["SYN61"],
+            "PatientID=NEMA-61&includefield=all&fuzzymatching=false",
+            vec!["NEMA-61"],
         ),
     ] {
         assert_eq!(found(query).await, expected, "{query}");
@@ -615,8 +632,8 @@ async fn searches_match_as_the_standard_says() {
         ("StudyDate=-", "one end at least"),
         ("StudyTime=2500", "is not a time"),
         ("StudyInstanceUID=2.25.*", "is not a UID"),
-        ("PatientID=SYN61&PatientID=SYN63", "given twice"),
-        ("PatientID=SYN61&00100020=SYN63", "given twice"),
+        ("PatientID=NEMA-61&PatientID=NEMA-63", "given twice"),
+        ("PatientID=NEMA-61&00100020=NEMA-63", "given twice"),
         ("PatientWeight=70", "cannot search on PatientWeight"),
         ("limit=x", "limit is not a number"),
         ("fuzzymatching=maybe", "true or false"),
@@ -665,15 +682,15 @@ async fn searches_match_as_the_standard_says() {
     assert_eq!(reply.status, StatusCode::NOT_ACCEPTABLE);
 
     // a study's series, and a series' instances
-    let study = SyntheticSeries::new(61, 1).study_uid();
+    let study = RealSeries::new(61, 1).study_uid();
     let count = async |path: &str| -> usize {
         let reply = get(&app, &format!("/studies/{study}/{path}"), json).await;
         assert_eq!(reply.status, StatusCode::OK, "{path}");
         reply.json().as_array().unwrap().len()
     };
     let (big, small) = (
-        SyntheticSeries::new(61, 3),
-        SyntheticSeries::new(62, 2).in_study(61, 2),
+        RealSeries::new(61, 3),
+        RealSeries::new(62, 2).in_study(61, 2),
     );
     for (path, expected) in [
         ("series?Modality=MR".to_owned(), 0),
@@ -730,7 +747,7 @@ async fn searches_match_as_the_standard_says() {
     for bad in [
         "series?SeriesNumber=two",
         "series?Modality=CT&00080060=MR",
-        "series?PatientID=SYN61",
+        "series?PatientID=NEMA-61",
     ] {
         let reply = get(&app, &format!("/studies/{study}/{bad}"), json).await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{bad}");
@@ -753,7 +770,7 @@ async fn retrieve_urls_follow_the_proxy_and_the_mount_path() {
         ..Config::default()
     };
     let app = router(archive, config);
-    let series = SyntheticSeries::new(68, 1);
+    let series = RealSeries::new(68, 1);
     stow(&app, "/studies", series.all_bytes()).await;
     let reply = send(
         &app,
@@ -795,10 +812,9 @@ async fn retrieve_urls_follow_the_proxy_and_the_mount_path() {
 #[tokio::test]
 async fn the_clients_first_choice_wins() {
     let app = app().await;
-    let mut series = SyntheticSeries::new(67, 1);
-    (series.rows, series.columns) = (32, 24);
+    let series = RealSeries::new(67, 1);
     assert_eq!(
-        stow(&app, "/studies", vec![series.multiframe_bytes(0, 1)])
+        stow(&app, "/studies", vec![series.multiframe_bytes(0)])
             .await
             .status,
         StatusCode::OK
@@ -817,9 +833,9 @@ async fn the_clients_first_choice_wins() {
         parts[0].content_type.as_deref(),
         Some("image/jls; transfer-syntax=1.2.840.10008.1.2.4.80")
     );
-    let shape = pacs_core::codec::Shape::new(32, 24, 16, 12);
+    let shape = pacs_core::codec::Shape::new(64, 64, 16, 12);
     let decoded = pacs_core::codec::decode(JPEG_LS, shape, &parts[0].content).unwrap();
-    assert_eq!(decoded, le_bytes(&series.pixels(0, 0)));
+    assert_eq!(decoded, le_bytes(&RealSeries::frame_pixels(0)));
 
     // ranked lower, JPEG-LS loses to the stored form
     let jls_less = format!(r#"multipart/related; type="image/jls"; q=0.5, {CORNERSTONE_FRAMES}"#);
@@ -904,7 +920,7 @@ async fn overwritten_instances_are_asked_about() {
         .with_compression(Compression::Off)
         .with_overwrite(true);
     let app = router(archive, Config::default());
-    let series = SyntheticSeries::new(68, 1);
+    let series = RealSeries::new(68, 1);
     assert_eq!(
         stow(&app, "/studies", series.all_bytes()).await.status,
         StatusCode::OK
@@ -937,14 +953,14 @@ async fn overwritten_instances_are_asked_about() {
 #[tokio::test]
 async fn stow_reads_un_and_refuses_a_lying_length() {
     let app = app().await;
-    let lying = pacs_core::synthetic::RawFile::new("1.2.840.10008.1.2.1")
+    let lying = pacs_core::real::AlteredFile::new("1.2.840.10008.1.2.1")
         .identifiers(68, b"UI")
         .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short")
         .bytes();
     let reply = stow(
         &app,
         "/studies",
-        vec![pacs_core::synthetic::un_sequence_file(67), lying],
+        vec![pacs_core::real::un_sequence_file(67), lying],
     )
     .await;
     assert_eq!(reply.status, StatusCode::ACCEPTED);

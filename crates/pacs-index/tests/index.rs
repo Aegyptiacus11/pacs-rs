@@ -1,10 +1,10 @@
 mod common;
 
 use pacs_core::Instance;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_index::{Error, Index, NewInstance, Recorded, StudyFilter};
 
-async fn record_series(index: &Index, series: &SyntheticSeries) {
+async fn record_series(index: &Index, series: &RealSeries) {
     for (slice, bytes) in series.all_bytes().iter().enumerate() {
         let instance = Instance::from_bytes(bytes).unwrap();
         let key = format!("dicom/{slice}.dcm");
@@ -16,8 +16,8 @@ async fn record_series(index: &Index, series: &SyntheticSeries) {
 #[tokio::test]
 async fn a_study_with_two_series_has_its_counts() {
     for index in common::indexes().await {
-        let first = SyntheticSeries::new(21, 3);
-        let second = SyntheticSeries::new(22, 2).in_study(21, 2);
+        let first = RealSeries::new(21, 3);
+        let second = RealSeries::new(22, 2).in_study(21, 2);
         record_series(&index, &second).await;
         record_series(&index, &first).await;
 
@@ -25,7 +25,7 @@ async fn a_study_with_two_series_has_its_counts() {
         assert_eq!(study.series_count, 2);
         assert_eq!(study.instance_count, 5);
         assert_eq!(study.modalities, ["CT"]);
-        assert_eq!(study.attributes["00100020"]["Value"][0], "SYN21");
+        assert_eq!(study.attributes["00100020"]["Value"][0], "NEMA-21");
 
         // by series number, whatever the order received
         let series = index.series(&first.study_uid(), None).await.unwrap();
@@ -49,7 +49,7 @@ async fn a_study_with_two_series_has_its_counts() {
 #[tokio::test]
 async fn instances_and_metadata_come_in_instance_number_order() {
     for index in common::indexes().await {
-        let series = SyntheticSeries::new(23, 4);
+        let series = RealSeries::new(23, 4);
         // receive the slices backwards
         for bytes in series.all_bytes().iter().rev() {
             let instance = Instance::from_bytes(bytes).unwrap();
@@ -93,7 +93,7 @@ async fn instances_and_metadata_come_in_instance_number_order() {
 #[tokio::test]
 async fn an_instance_is_found_only_under_its_own_study_and_series() {
     for index in common::indexes().await {
-        let series = SyntheticSeries::new(24, 1);
+        let series = RealSeries::new(24, 1);
         record_series(&index, &series).await;
         let sop = series.instance_uid(0);
         let found = index
@@ -102,7 +102,7 @@ async fn an_instance_is_found_only_under_its_own_study_and_series() {
             .unwrap()
             .unwrap();
         assert_eq!(found.object_key, "dicom/0.dcm");
-        let other = SyntheticSeries::new(25, 1);
+        let other = RealSeries::new(25, 1);
         assert!(
             index
                 .instance(&other.study_uid(), &series.series_uid(), &sop)
@@ -123,7 +123,7 @@ async fn an_instance_is_found_only_under_its_own_study_and_series() {
 #[tokio::test]
 async fn resending_replaces_and_moving_between_studies_is_refused() {
     for index in common::indexes().await {
-        let series = SyntheticSeries::new(26, 1);
+        let series = RealSeries::new(26, 1);
         record_series(&index, &series).await;
 
         let bytes = series.slice_bytes(0);
@@ -135,7 +135,7 @@ async fn resending_replaces_and_moving_between_studies_is_refused() {
 
         // the same series UID claimed by another study
         let mut moved = again.clone();
-        moved.study_instance_uid = SyntheticSeries::new(27, 1).study_uid();
+        moved.study_instance_uid = RealSeries::new(27, 1).study_uid();
         assert!(matches!(
             index.record(&moved).await,
             Err(Error::Conflict(_))
@@ -151,7 +151,7 @@ async fn resending_replaces_and_moving_between_studies_is_refused() {
 
         // the same instance UID claimed by another series
         let mut moved = again.clone();
-        moved.series_instance_uid = SyntheticSeries::new(28, 1).series_uid();
+        moved.series_instance_uid = RealSeries::new(28, 1).series_uid();
         assert!(matches!(
             index.record(&moved).await,
             Err(Error::Conflict(_))
@@ -167,19 +167,19 @@ async fn resending_replaces_and_moving_between_studies_is_refused() {
 async fn studies_filter_by_patient_and_paginate() {
     for index in common::indexes().await {
         for seed in [31, 32, 33] {
-            record_series(&index, &SyntheticSeries::new(seed, 1)).await;
+            record_series(&index, &RealSeries::new(seed, 1)).await;
         }
         let all = index.studies(&StudyFilter::default()).await.unwrap();
         assert_eq!(all.len(), 3);
         let by_patient = StudyFilter {
-            patient_id: Some("SYN32".into()),
+            patient_id: Some("NEMA-32".into()),
             ..StudyFilter::default()
         };
         let found = index.studies(&by_patient).await.unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].study_instance_uid,
-            SyntheticSeries::new(32, 1).study_uid()
+            RealSeries::new(32, 1).study_uid()
         );
         let page = StudyFilter {
             limit: Some(2),
@@ -194,7 +194,7 @@ async fn studies_filter_by_patient_and_paginate() {
 async fn a_file_index_survives_reopening() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite");
-    let series = SyntheticSeries::new(34, 2);
+    let series = RealSeries::new(34, 2);
     {
         let index = Index::open(&path).await.unwrap();
         record_series(&index, &series).await;
@@ -219,7 +219,7 @@ async fn a_file_index_opens_at_a_path_with_url_characters() {
     let sub = dir.path().join(name);
     std::fs::create_dir(&sub).unwrap();
     let path = sub.join("in dex.sqlite");
-    let series = SyntheticSeries::new(36, 1);
+    let series = RealSeries::new(36, 1);
     {
         let index = Index::open(&path).await.unwrap();
         record_series(&index, &series).await;
@@ -237,7 +237,7 @@ async fn concurrent_records_all_succeed() {
     let mut backends = vec![Index::open(dir.path().join("index.sqlite")).await.unwrap()];
     backends.extend(common::postgres().await);
     for index in backends {
-        let series = SyntheticSeries::new(35, 64);
+        let series = RealSeries::new(35, 64);
         let mut tasks = Vec::new();
         for bytes in series.all_bytes() {
             let index = index.clone();
@@ -258,21 +258,20 @@ async fn concurrent_records_all_succeed() {
 #[tokio::test]
 async fn a_study_keeps_the_project_of_its_first_instance() {
     for index in common::indexes().await {
-        let new = |series: &SyntheticSeries, slice: u32, project: Option<&str>| {
+        let new = |series: &RealSeries, slice: u32, project: Option<&str>| {
             let bytes = series.slice_bytes(slice);
             let instance = Instance::from_bytes(&bytes).unwrap();
             NewInstance::new(&instance, format!("dicom/{slice}.dcm"), bytes.len())
                 .unwrap()
                 .in_project(project)
         };
-        let liver = SyntheticSeries::new(31, 2);
-        let received = SyntheticSeries::new(32, 2);
+        let liver = RealSeries::new(31, 2);
+        let received = RealSeries::new(32, 2);
         assert_eq!(index.study_project(&liver.study_uid()).await.unwrap(), None);
 
         index.record(&new(&liver, 0, Some("liver"))).await.unwrap();
         index.record(&new(&received, 0, None)).await.unwrap();
-        let project =
-            async |series: &SyntheticSeries| index.study_project(&series.study_uid()).await;
+        let project = async |series: &RealSeries| index.study_project(&series.study_uid()).await;
         assert_eq!(project(&liver).await.unwrap(), Some(Some("liver".into())));
         assert_eq!(project(&received).await.unwrap(), Some(None));
 

@@ -2,13 +2,13 @@ mod common;
 
 use pacs_core::Instance;
 use pacs_core::public_ids;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_index::{Level, NewInstance};
 
 #[tokio::test]
 async fn measurements_are_kept_per_study_and_go_with_it() {
     for index in common::indexes().await {
-        let series = SyntheticSeries::new(81, 1);
+        let series = RealSeries::new(81, 1);
         let bytes = series.slice_bytes(0);
         let instance = Instance::from_bytes(&bytes).unwrap();
         let new = NewInstance::new(&instance, series.instance_uid(0), bytes.len()).unwrap();

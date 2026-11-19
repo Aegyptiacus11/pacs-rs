@@ -9,7 +9,7 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use pacs_archive::{Archive, Compression};
 use pacs_core::public_ids;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_index::Index;
 use pacs_rest::schema::{
     Deleted, Error, Found, Instance, Patient, PatientList, Series, Statistics, Stored, Study,
@@ -64,8 +64,8 @@ async fn get<T: DeserializeOwned>(app: &Router, uri: &str) -> T {
 #[tokio::test]
 async fn every_answer_is_what_the_description_says() {
     let (app, _) = api().await;
-    let series = SyntheticSeries::new(41, 2);
-    let (p, st, se) = ("SYN41", series.study_uid(), series.series_uid());
+    let series = RealSeries::new(41, 2);
+    let (p, st, se) = ("NEMA-41", series.study_uid(), series.series_uid());
     let patient = public_ids::patient(p);
     let study = public_ids::study(p, &st);
     let series_id = public_ids::series(p, &st, &se);
@@ -180,7 +180,7 @@ async fn every_answer_is_what_the_description_says() {
     }
     // a wild card and a range find the study; a value that is not a date is refused
     let search =
-        json!({"Level": "Study", "Query": {"PatientName": "s*", "StudyDate": "20260101-"}});
+        json!({"Level": "Study", "Query": {"PatientName": "c*", "StudyDate": "20040119-"}});
     let found: Found = answer(
         &app,
         "POST",
@@ -295,7 +295,7 @@ async fn every_answer_is_what_the_description_says() {
         // the series' deletion took its study and patient with it
         assert!(matches!(status, StatusCode::OK | StatusCode::NOT_FOUND));
     }
-    let series = SyntheticSeries::new(42, 1);
+    let series = RealSeries::new(42, 1);
     let _: Stored = answer(
         &app,
         "POST",
@@ -306,8 +306,8 @@ async fn every_answer_is_what_the_description_says() {
     .await;
     for level in ["studies", "patients"] {
         let id = match level {
-            "studies" => public_ids::study("SYN42", &series.study_uid()),
-            _ => public_ids::patient("SYN42"),
+            "studies" => public_ids::study("NEMA-42", &series.study_uid()),
+            _ => public_ids::patient("NEMA-42"),
         };
         let (status, bytes) = call(&app, "DELETE", &format!("/{level}/{id}"), Bytes::new()).await;
         if status == StatusCode::OK {

@@ -3,7 +3,7 @@
 # to 1 GiB: the answers, the peak of its cgroup, whether it was OOM-killed. Linux with cgroup v2.
 # Exits non-zero if the container was killed or restarted. See docs/benchmarks.md.
 #
-# un-vr-memory.sh <image> <dir from: cargo run -p pacs-core --features synthetic --example write_un_vr>
+# un-vr-memory.sh <image> <dir from: cargo run -p pacs-core --features real --example write_altered>
 set -euo pipefail
 image=$1 files=$2
 name=un-vr-memory-$$

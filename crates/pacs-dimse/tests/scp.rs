@@ -11,7 +11,7 @@ use dicom_ul::pdu::{
     AssociationRJ, AssociationRJResult, AssociationRJServiceProviderPresentationReason,
     AssociationRJServiceUserReason, AssociationRJSource,
 };
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dimse::command::{field, tag};
 use pacs_dimse::message::Incoming;
 use pacs_dimse::{AeTitle, RemoteAe, Status, VERIFICATION};
@@ -248,7 +248,7 @@ async fn only_the_sop_classes_pacs_rs_provides_are_accepted() {
 async fn c_store_stores_through_the_archive() {
     let archive = archive().await;
     let addr = start(config(), archive.clone()).await;
-    let series = SyntheticSeries::new(61, 2);
+    let series = RealSeries::new(61, 2);
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -288,7 +288,7 @@ async fn c_store_stores_through_the_archive() {
 async fn c_store_keeps_the_negotiated_transfer_syntax() {
     let archive = archive().await;
     let addr = start(config(), archive.clone()).await;
-    let series = SyntheticSeries::new(62, 1);
+    let series = RealSeries::new(62, 1);
     let mut object = pacs_core::Instance::from_bytes(&series.slice_bytes(0))
         .unwrap()
         .object;
@@ -326,7 +326,7 @@ async fn c_store_keeps_the_negotiated_transfer_syntax() {
 async fn an_instance_sent_twice_is_success_and_kept_once() {
     let archive = archive().await;
     let addr = start(config(), archive.clone()).await;
-    let series = SyntheticSeries::new(63, 1);
+    let series = RealSeries::new(63, 1);
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -352,7 +352,7 @@ async fn an_instance_sent_twice_is_success_and_kept_once() {
 async fn a_data_set_of_another_sop_class_is_a900() {
     let archive = archive().await;
     let addr = start(config(), archive.clone()).await;
-    let series = SyntheticSeries::new(64, 1);
+    let series = RealSeries::new(64, 1);
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[MR], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -381,7 +381,7 @@ async fn a_data_set_of_another_sop_class_is_a900() {
 #[tokio::test]
 async fn a_data_set_with_another_instance_uid_is_refused() {
     let addr = start(config(), archive().await).await;
-    let series = SyntheticSeries::new(65, 1);
+    let series = RealSeries::new(65, 1);
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -421,7 +421,7 @@ async fn an_unreadable_data_set_is_cannot_understand() {
 #[tokio::test]
 async fn a_hierarchy_conflict_is_refused() {
     let addr = start(config(), archive().await).await;
-    let first = SyntheticSeries::new(66, 1);
+    let first = RealSeries::new(66, 1);
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -466,7 +466,7 @@ async fn a_data_set_over_the_limit_is_refused_out_of_resources() {
     let mut config = config();
     config.max_data_set_bytes = 100;
     let addr = start(config, archive().await).await;
-    let series = SyntheticSeries::new(67, 1);
+    let series = RealSeries::new(67, 1);
     let mut client = Client::connect(
         addr,
         "STORESCU",
@@ -510,7 +510,7 @@ async fn an_unsupported_sop_class_is_0122() {
 #[tokio::test]
 async fn a_sop_class_not_agreed_for_the_context_is_0212() {
     let addr = start(config(), archive().await).await;
-    let series = SyntheticSeries::new(68, 1);
+    let series = RealSeries::new(68, 1);
     let mut client = Client::connect(addr, "A", "PACSRS", &[CT, MR], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -652,12 +652,12 @@ async fn c_store_takes_un_and_refuses_a_lying_length() {
     let mut client = Client::connect(addr, "STORESCU", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
-    let file = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE).identifiers(62, b"UN");
+    let file = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE).identifiers(62, b"UN");
     let rsp = client
         .store_as(CT, CT, "2.25.623", &data_set(&file.bytes()))
         .await;
     assert_eq!(rsp.status(), Ok(Status::SUCCESS));
-    let lying = pacs_core::synthetic::RawFile::new(EXPLICIT_VR_LE)
+    let lying = pacs_core::real::AlteredFile::new(EXPLICIT_VR_LE)
         .identifiers(63, b"UI")
         .long_declared((0x0043, 0x1001), b"UN", 0xC000_0000, b"short");
     let rsp = client

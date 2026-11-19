@@ -2117,6 +2117,7 @@ dependencies = [
  "dicom-dictionary-std",
  "dicom-json",
  "dicom-object",
+ "dicom-transfer-syntax-registry",
  "jxl",
  "memchr",
  "pacs-core",
