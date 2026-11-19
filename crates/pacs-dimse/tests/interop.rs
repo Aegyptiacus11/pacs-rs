@@ -1281,3 +1281,247 @@ ae.start_server(("127.0.0.1", port), block=True, evt_handlers=[(evt.EVT_C_STORE,
         assert_eq!(pixels, series.pixels(slice, 0));
     }
 }
+
+// ---- pacs-rs as a Retrieve SCP (PS3.4 C.4.2.3), asked by DCMTK's movescu and by pynetdicom ----
+
+/// An archive that compresses (JPEG-LS lossless) with Doe's study in it: a series of two
+/// slices and one of three.
+async fn archive_to_retrieve_from() -> (pacs_archive::Archive, [SyntheticSeries; 2]) {
+    let archive = pacs_archive::Archive::new(
+        pacs_store::Store::memory(),
+        pacs_index::Index::in_memory().await.unwrap(),
+    );
+    let series = [
+        SyntheticSeries::new(91, 2).with_patient("Doe^Jane", None),
+        SyntheticSeries::new(92, 3)
+            .in_study(91, 2)
+            .with_patient("Doe^Jane", None),
+    ];
+    for one in &series {
+        ingest(&archive, one).await;
+    }
+    (archive, series)
+}
+
+/// A configuration that answers `caller` and sends to `destination` on `port` here.
+fn retrieving(caller: &str, destination: &str, port: u16) -> pacs_dimse::Config {
+    let mut config = answering(&[caller]);
+    config
+        .remotes
+        .retain(|remote| !remote.ae_title.matches(destination));
+    config.remotes.push(
+        format!("destination={destination}@127.0.0.1:{port}")
+            .parse()
+            .unwrap(),
+    );
+    config.move_destinations = vec!["destination".into()];
+    config
+}
+
+/// The pixels each instance of `series` must have, by SOP Instance UID, sorted.
+fn expected_pixels(series: &[SyntheticSeries]) -> Vec<(String, Vec<u16>)> {
+    let mut expected: Vec<(String, Vec<u16>)> = series
+        .iter()
+        .flat_map(|one| {
+            (0..one.slices).map(|slice| (one.instance_uid(slice), one.pixels(slice, 0)))
+        })
+        .collect();
+    expected.sort();
+    expected
+}
+
+/// movescu asks pacs-rs to send a study to movescu's own Storage SCP, which takes
+/// uncompressed transfer syntaxes: every instance arrives, decoded, with its pixels.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_movescu_pulls_a_study_from_pacs_rs() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let receiving = free_port();
+    let addr = start(retrieving("MOVESCU", "MOVESCU", receiving), archive).await;
+    let out = tempfile::tempdir().unwrap();
+    let mut movescu = dcmtk("movescu");
+    movescu
+        .args([
+            "-v", "-S", "-aet", "MOVESCU", "-aec", "PACSRS", "-aem", "MOVESCU",
+        ])
+        .args(["+P", &receiving.to_string(), "-od"])
+        .arg(out.path())
+        .args(["-k", "QueryRetrieveLevel=STUDY", "-k"])
+        .arg(format!("StudyInstanceUID={}", series[0].study_uid()))
+        .args(["127.0.0.1", &addr.port().to_string()]);
+    let output = run(movescu).await;
+    assert!(output.status.success(), "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("Received Final Move Response (Success)"),
+        "{said}"
+    );
+    let written: Vec<(String, Vec<u16>)> = written(out.path(), 5)
+        .await
+        .into_iter()
+        .map(|(uid, _, pixels)| (uid, pixels))
+        .collect();
+    assert_eq!(written, expected_pixels(&series));
+}
+
+/// movescu names a third AE as the destination, DCMTK's storescp: the series asked for
+/// goes there, and only it.
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_movescu_sends_a_series_to_dcmtk_storescp() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let port = free_port();
+    let out = tempfile::tempdir().unwrap();
+    let mut storescp = dcmtk("storescp");
+    storescp
+        .args(["-aet", "STORESCP", "-od"])
+        .arg(out.path())
+        .arg(port.to_string());
+    let _storescp = Killed(storescp.spawn().expect("storescp could not start"));
+    listening(port).await;
+    let addr = start(retrieving("MOVESCU", "STORESCP", port), archive).await;
+    let mut movescu = dcmtk("movescu");
+    movescu
+        .args([
+            "-v", "-S", "-aet", "MOVESCU", "-aec", "PACSRS", "-aem", "STORESCP",
+        ])
+        .args(["-k", "QueryRetrieveLevel=SERIES", "-k"])
+        .arg(format!("StudyInstanceUID={}", series[1].study_uid()))
+        .arg("-k")
+        .arg(format!("SeriesInstanceUID={}", series[1].series_uid()))
+        .args(["127.0.0.1", &addr.port().to_string()]);
+    let output = run(movescu).await;
+    assert!(output.status.success(), "{}", text(&output));
+    let written: Vec<(String, Vec<u16>)> = written(out.path(), 3)
+        .await
+        .into_iter()
+        .map(|(uid, _, pixels)| (uid, pixels))
+        .collect();
+    assert_eq!(written, expected_pixels(&series[1..]));
+}
+
+/// movescu is told what is wrong: a destination pacs-rs does not send to (A801), and a
+/// destination that does not answer (A702).
+#[tokio::test]
+#[ignore = "needs DCMTK"]
+async fn dcmtk_movescu_is_refused_with_a_status_it_shows() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    // nothing listens where the destination is said to be
+    let addr = start(retrieving("MOVESCU", "STORESCP", free_port()), archive).await;
+    let ask = async |destination: &str| {
+        let mut movescu = dcmtk("movescu");
+        movescu
+            .args([
+                "-v",
+                "-S",
+                "-aet",
+                "MOVESCU",
+                "-aec",
+                "PACSRS",
+                "-aem",
+                destination,
+            ])
+            .args(["-k", "QueryRetrieveLevel=STUDY", "-k"])
+            .arg(format!("StudyInstanceUID={}", series[0].study_uid()))
+            .args(["127.0.0.1", &addr.port().to_string()]);
+        text(&run(movescu).await)
+    };
+    let said = ask("NOBODY").await;
+    assert!(said.contains("MoveDestinationUnknown"), "{said}");
+    let said = ask("STORESCP").await;
+    assert!(said.contains("OutOfResourcesSubOperations"), "{said}");
+}
+
+/// pynetdicom asks pacs-rs to send a study to its own Storage SCP and follows the counts
+/// of the Pending responses; then an unknown destination, and an AE title pacs-rs does
+/// not answer.
+#[tokio::test]
+#[ignore = "needs pynetdicom"]
+async fn pynetdicom_pulls_a_study_from_pacs_rs() {
+    let (archive, series) = archive_to_retrieve_from().await;
+    let receiving = free_port();
+    let addr = start(retrieving("PYNETDICOM", "PYNETDICOM", receiving), archive).await;
+    let script = r#"
+import sys
+from pydicom.dataset import Dataset
+from pydicom.uid import ImplicitVRLittleEndian, ExplicitVRLittleEndian
+from pynetdicom import AE, evt
+from pynetdicom.sop_class import CTImageStorage
+from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelMove as MOVE
+port, receiving, study = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+
+stored = {}
+def on_store(event):
+    ds = event.dataset
+    raw = ds.PixelData
+    stored[ds.SOPInstanceUID] = (
+        str(ds.PatientName),
+        event.request.MoveOriginatorApplicationEntityTitle,
+        [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)],
+    )
+    return 0x0000
+
+ae = AE(ae_title="PYNETDICOM")
+ae.add_supported_context(CTImageStorage, [ExplicitVRLittleEndian, ImplicitVRLittleEndian])
+ae.add_requested_context(MOVE)
+scp = ae.start_server(("127.0.0.1", receiving), block=False,
+                      evt_handlers=[(evt.EVT_C_STORE, on_store)])
+
+def move(assoc, destination, uid):
+    ds = Dataset()
+    ds.QueryRetrieveLevel = "STUDY"
+    ds.StudyInstanceUID = uid
+    return [(s.Status, s) for s, _ in assoc.send_c_move(ds, destination, MOVE)]
+
+assoc = ae.associate("127.0.0.1", port, ae_title="PACSRS")
+assert assoc.is_established, "no association"
+responses = move(assoc, "PYNETDICOM", study)
+pending = [s for status, s in responses if status == 0xFF00]
+assert [s.NumberOfRemainingSuboperations for s in pending] == [4, 3, 2, 1], responses
+assert [s.NumberOfCompletedSuboperations for s in pending] == [1, 2, 3, 4], responses
+status, last = responses[-1]
+assert status == 0x0000, hex(status)
+assert (last.NumberOfCompletedSuboperations, last.NumberOfFailedSuboperations,
+        last.NumberOfWarningSuboperations) == (5, 0, 0), last
+assert len(stored) == 5, stored.keys()
+for uid, (name, originator, pixels) in sorted(stored.items()):
+    assert name == "Doe^Jane" and originator.strip() == "PYNETDICOM", (name, originator)
+    print(uid, " ".join(str(v) for v in pixels))
+
+# a destination pacs-rs does not send to, and a study it does not have
+responses = move(assoc, "NOBODY", study)
+assert [status for status, _ in responses] == [0xA801], responses
+responses = move(assoc, "PYNETDICOM", "2.25.404")
+status, last = responses[-1]
+assert status == 0x0000 and last.NumberOfCompletedSuboperations == 0, responses
+assoc.release()
+
+stranger = AE(ae_title="STRANGER")
+stranger.add_requested_context(MOVE)
+assoc = stranger.associate("127.0.0.1", port, ae_title="PACSRS")
+assert assoc.is_established, "no association"
+responses = move(assoc, "PYNETDICOM", study)
+assert [status for status, _ in responses] == [0x0124], responses
+assoc.release()
+scp.shutdown()
+"#;
+    let mut py = python();
+    py.args([
+        "-c",
+        script,
+        &addr.port().to_string(),
+        &receiving.to_string(),
+        &series[0].study_uid(),
+    ]);
+    let output = run(py).await;
+    assert!(output.status.success(), "{}", text(&output));
+    let printed: Vec<(String, Vec<u16>)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            let mut words = line.split(' ');
+            let uid = words.next().unwrap().to_owned();
+            (uid, words.map(|v| v.parse().unwrap()).collect())
+        })
+        .collect();
+    assert_eq!(printed, expected_pixels(&series));
+}
