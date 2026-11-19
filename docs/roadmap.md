@@ -60,19 +60,19 @@ So that workstations, viewers and other archives can use pacs-rs as they use any
 Built: [C-FIND as SCP](dimse.md#being-searched) on the Study Root model, which DCMTK's
 `findscu` and pynetdicom search at its three levels, with sequence matching (PS3.4
 C.2.2.2.6) added to the [one matcher](dicomweb.md#searching) it shares with QIDO-RS and
-`/tools/find`. [C-MOVE as SCP](dimse.md#being-retrieved-from), which `movescu` and
-pynetdicom retrieve with, to themselves or to a third AE: it sends with a C-STORE SCU that
-decodes for a peer that does not take the stored transfer syntax, to the AEs listed as
-destinations (`PACS_DIMSE_MOVE_DESTINATIONS`), and a move to any other is refused with
-status A801. What remains:
+`/tools/find`. [C-MOVE and C-GET as SCP](dimse.md#being-retrieved-from), which `movescu`,
+`getscu` and pynetdicom retrieve with: a C-MOVE sends to the AEs listed as destinations
+(`PACS_DIMSE_MOVE_DESTINATIONS`) and a move to any other is refused with status A801; a
+C-GET sends on the association that asks, by SCP/SCU role selection. Both send with a
+C-STORE SCU that decodes for a peer that does not take the stored transfer syntax. What
+remains:
 
 | Item | Done when |
 |---|---|
-| C-GET as SCP | DCMTK's `getscu` retrieves from pacs-rs (step 8 of the [plan](interop.md#rules-for-the-scp-side-step-8)) |
 | Sequence matching over HTTP | QIDO-RS takes a key inside a sequence (`RequestAttributesSequence.ScheduledProcedureStepID`), which the matcher already answers |
 | Patient Root | both information models of PS3.4 C.6, as SCU and SCP |
 | C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |
-| Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a C-MOVE makes it send) |
+| Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a retrieval makes it send) |
 | Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |
 | A service per SOP class | the SCP finds its handler for each SOP class in a registry, so a new service is added without touching the association loop |
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |

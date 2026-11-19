@@ -4,8 +4,8 @@ New to the protocol? [DICOM: the network](dicom-network.md) explains the words u
 
 Off unless `PACS_DIMSE_LISTEN` names an address. What works now is steps 1 to 4 of
 [the plan for hospital interfaces](interop.md), a research PACS that pulls studies from a
-hospital's PACS and de-identifies them on ingest, and most of step 8: other applications
-can search pacs-rs, and have it send studies on.
+hospital's PACS and de-identifies them on ingest, and step 8 for the Study Root model: other
+applications can search pacs-rs and retrieve from it.
 
 - **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the AEs of
   `PACS_DIMSE_REMOTES`, through `POST /modalities/{id}/echo`, to test a hospital link.
@@ -32,8 +32,8 @@ can search pacs-rs, and have it send studies on.
   kept in memory, the latest hundred finished ones with them; a restart forgets them.
 - **C-FIND SCP**, Study Root, at the STUDY, SERIES and IMAGE levels: [Being
   searched](#being-searched) below.
-- **C-MOVE SCP**, Study Root, at the same levels, with the **C-STORE SCU** it sends by:
-  [Being retrieved from](#being-retrieved-from) below.
+- **C-MOVE SCP** and **C-GET SCP**, Study Root, at the same levels, with the **C-STORE
+  SCU** they send by: [Being retrieved from](#being-retrieved-from) below.
 - **C-STORE SCP** for the 173 Storage SOP Classes of PS3.4 Table B.5-1 (DICOM 2026d), in any
   transfer syntax dicom-rs reads. Each data set is kept in the transfer syntax it came in, with
   file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
@@ -59,21 +59,30 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 | `C002` Cannot understand | the UIDs contradict the archive (an instance already in another series) |
 | `0122` SOP Class not supported | a SOP class pacs-rs does not have |
 | `0212` Mistyped argument | a SOP class not the one agreed for the presentation context |
-| `0211` Unrecognized operation | an operation pacs-rs does not provide (C-GET for now), or one the SOP class does not have |
+| `0211` Unrecognized operation | an operation the SOP class does not have |
 
-Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`, `movescu`) and pynetdicom 3.0.4,
+Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`, `movescu`, `getscu`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
-into a project shows there de-identified. Not yet: C-GET, as SCP and as SCU, and Patient Root.
+into a project shows there de-identified. Not yet: C-GET as SCU, and Patient Root.
 The order is in [the hospital interfaces plan](interop.md).
 
 ## Being retrieved from
 
-A viewer or a workstation has pacs-rs send it a study with C-MOVE on the Study Root model
-(PS3.4 C.4.2, C.6.2), naming where the study is to go; pacs-rs opens an association to that
-AE and sends each instance by C-STORE.
+A viewer or a workstation has pacs-rs send it a study in one of two ways, on the Study Root
+model (PS3.4 C.6.2):
+
+- **C-MOVE** (PS3.4 C.4.2) names where the study is to go; pacs-rs opens an association to
+  that AE and sends each instance by C-STORE. The destination must be one pacs-rs is
+  configured to send to, and reachable from it.
+- **C-GET** (PS3.4 C.4.3) has the instances come back on the association that asks, so
+  nothing has to be configured or opened towards the requester. The requester proposes a
+  presentation context for each Storage SOP class it wants, with the SCP role for it
+  (PS3.7 D.3.3.4); pacs-rs accepts the role for every Storage SOP class.
 
 ```bash
 movescu -S -aet VIEWER -aec PACSRS -aem VIEWER +P 11113 -od received \
+  -k QueryRetrieveLevel=STUDY -k StudyInstanceUID=1.2.840.113619.2.55.3.1 pacs.example 11112
+getscu -S -aet VIEWER -aec PACSRS -od received \
   -k QueryRetrieveLevel=STUDY -k StudyInstanceUID=1.2.840.113619.2.55.3.1 pacs.example 11112
 ```
 
@@ -90,12 +99,16 @@ movescu -S -aet VIEWER -aec PACSRS -aem VIEWER +P 11113 -od received \
   stored, Warning (`B000`) when some were not or were stored with a warning, and a
   Failure (`A702`) when none was. Warning, Failure and Cancel come with the Failed SOP
   Instance UID List.
-- **C-CANCEL-MOVE-RQ** is looked for between two instances and ends with status Cancel:
-  the instance on its way is finished, the rest is not sent.
+- **A C-GET sends an instance only on a context where the requester is the SCP**: an
+  instance of a SOP class it proposed no context for, or took no SCP role for, is a failed
+  sub-operation. With the role for no class at all, every one fails (`A702`).
+- **A cancel** (C-CANCEL-MOVE-RQ, C-CANCEL-GET-RQ) is looked for between two instances,
+  and for a C-GET while the requester has one, and ends with status Cancel: the instance
+  on its way is finished, the rest is not sent.
 - **The [audit trail](audit.md#what-is-recorded)** has what the destination stored, a line
   per study, with the AE that asked.
 
-C-MOVE statuses (PS3.4 Table C.4-2, PS3.7 9.1.4.1.7):
+C-MOVE and C-GET statuses (PS3.4 Tables C.4-2 and C.4-3, PS3.7 9.1.4.1.7 and 9.1.3.1.6):
 
 | Status | When |
 |---|---|
@@ -103,21 +116,22 @@ C-MOVE statuses (PS3.4 Table C.4-2, PS3.7 9.1.4.1.7):
 | `0000` Success | every instance was stored by the destination; or there was none to send |
 | `B000` Warning | some instances failed, or were stored with a warning |
 | `FE00` Cancel | the move was cancelled |
-| `A801` Refused: Move Destination unknown | the Move Destination is not one of `PACS_DIMSE_MOVE_DESTINATIONS` |
-| `A702` Refused: Out of resources, unable to perform sub-operations | no association with the destination, or no instance that it stored |
+| `A801` Refused: Move Destination unknown | C-MOVE: the Move Destination is not one of `PACS_DIMSE_MOVE_DESTINATIONS` |
+| `A702` Refused: Out of resources, unable to perform sub-operations | no instance was stored: no association with the destination of a C-MOVE, no context with the SCP role for a C-GET, or every instance refused |
 | `A701` Refused: Out of resources, unable to calculate number of matches | the index could not be read |
 | `0124` Refused: Not authorized | the calling AE title is not one of `PACS_DIMSE_REMOTES` |
 | `A900` Data Set does not match SOP Class | no Query/Retrieve Level, or one that is not STUDY, SERIES or IMAGE; a Unique Key missing, empty or not a UID; several values above the level retrieved; no Identifier |
 | `C000` Unable to process | the Identifier cannot be read |
 
-How the instances are sent:
+How the instances are sent, to the destination of a C-MOVE or the requester of a C-GET:
 
 - **Destinations**: `PACS_DIMSE_MOVE_DESTINATIONS` names, by their `id`, the remote AEs of
   `PACS_DIMSE_REMOTES` that studies may be sent to. None unless named: the hospital's
   archive is among the remote AEs, and a research PACS only reads from it. A name that is
   not a remote AE, or two destinations with one AE title, stops the start.
-- **Transfer syntax**: for each SOP class pacs-rs proposes the transfer syntax the instance
-  is stored in, and Explicit and Implicit VR Little Endian. A peer that takes the stored one
+- **Transfer syntax**: to a destination, pacs-rs proposes for each SOP class the transfer
+  syntax the instance is stored in, and Explicit and Implicit VR Little Endian; on a C-GET
+  the requester has proposed its own. A peer that takes the stored one
   gets the data set as stored, byte for byte; one that takes only uncompressed ones, as
   DCMTK's `storescp` does unless told otherwise, gets the pixel data decoded. What the
   codecs do not decode (colour, more than 16 bits) and the peer does not take as stored is
@@ -128,7 +142,8 @@ How the instances are sent:
   Message ID (PS3.7 9.3.1.1).
 
 Tested with DCMTK 3.6.9 `movescu`, receiving itself and naming `storescp` as a third AE,
-and with pynetdicom 3.0.4 doing the same; and the sending alone against `storescp`
+with `getscu`, as it comes and preferring JPEG-LS, and with pynetdicom 3.0.4 doing both;
+and the sending alone against `storescp`
 (uncompressed only, and preferring JPEG-LS: the files it writes hold the original pixels
 either way, checked with `dcmdjpls`) and a pynetdicom Storage SCP that takes Implicit VR
 Little Endian only.

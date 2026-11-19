@@ -1,7 +1,7 @@
 # Hospital interfaces: the plan
 
 Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside, and of
-step 8 the C-FIND and C-MOVE SCP; the rest is not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE
+step 8 the C-FIND, C-MOVE and C-GET SCP on the Study Root model; the rest is not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE
 C-ECHO, C-STORE, C-FIND and C-MOVE today.
 
 It is meant to be both kinds of PACS in one program:
@@ -59,9 +59,9 @@ destination the hospital names.
    Reports, sent by C-STORE SCU to the hospital's destination. Never in research mode: the de-identified
    UIDs no longer match the hospital's.
 8. **Later**: the SCP side of query/retrieve, so viewers and workstations can query pacs-rs (rules below);
-   then the Conformance Statement (PS3.2), kept current from the first DIMSE release. *C-FIND and C-MOVE SCP done
-   for Study Root ([being searched](dimse.md#being-searched), [being retrieved
-   from](dimse.md#being-retrieved-from)); C-GET SCP and Patient Root not yet.*
+   then the Conformance Statement (PS3.2), kept current from the first DIMSE release. *C-FIND, C-MOVE and C-GET SCP
+   done for Study Root ([being searched](dimse.md#being-searched), [being retrieved
+   from](dimse.md#being-retrieved-from)); Patient Root not yet.*
 
 Patient lists from the hospital's records system (HL7 v2 or FHIR Patient and ImagingStudy) are optional, for
 a site that wants them pushed; a C-FIND by Accession Number or Patient ID covers the usual request.
@@ -106,7 +106,7 @@ Not yet:
   empty value and multiple value matching, which need an extended negotiation (C.5.1.1) that is not made.*
 - **Who and what**: DIMSE has no accounts. Query and retrieve are answered to the AE titles of
   `PACS_DIMSE_REMOTES`; the called AE title sets what is seen, a project's showing that project only.
-  *Built for C-FIND and C-MOVE.*
+  *Built for the three services.*
 - **Information models** (PS3.4 C.6): Patient Root and Study Root; Patient/Study Only is retired.
 - **Sending**: the C-STORE SCU sends in the stored transfer syntax or decodes for the peer; the
   destinations a C-MOVE may name are a list of their own, empty unless set, since the hospital's
@@ -114,7 +114,7 @@ Not yet:
 - **C-MOVE** (PS3.4 C.4.2.3.1): Pending responses carry the Remaining, Completed, Failed and Warning counts;
   the final one is Success, Warning or Failure. *Built, for Study Root.*
 - **C-GET** (PS3.4 C.4.3.3.1): the C-STORE sub-operations run on the same association; role selection as
-  above.
+  above. *Built, for Study Root.*
 
 ## What dicom-ul 0.10 already gives
 
