@@ -24,10 +24,12 @@ zune-jpegxl.workspace = true
 [features]
 # Synthetic CT series for tests here and in the other crates.
 synthetic = []
+# The sample study of docs/sample, a real CT, as test data for the other crates.
+sample = []
 
 [dev-dependencies]
 dicom-dictionary-std.workspace = true
-pacs-core = { path = ".", features = ["synthetic"] }
+pacs-core = { path = ".", features = ["synthetic", "sample"] }
 
 [[example]]
 name = "write_synthetic"
