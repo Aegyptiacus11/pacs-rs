@@ -207,7 +207,7 @@ fn remote_aes_are_read_from_id_title_host_port() {
 /// syntax, and the data set unchanged after it.
 #[test]
 fn a_received_data_set_becomes_a_part_10_file() {
-    let series = pacs_core::synthetic::SyntheticSeries::new(3, 1);
+    let series = pacs_core::real::RealSeries::new(3, 1);
     let original = series.slice_bytes(0);
     let meta_length = u32::from_le_bytes(original[140..144].try_into().unwrap()) as usize;
     let data_set = &original[144 + meta_length..];

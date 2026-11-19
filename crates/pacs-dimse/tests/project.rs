@@ -9,7 +9,7 @@ use std::sync::Arc;
 use common::*;
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_deid::{Keys, Profile};
 use pacs_dimse::{AeTitle, Destination, Project, Scp, Status};
 use pacs_store::Store;
@@ -47,7 +47,7 @@ async fn with_project(quarantine: Option<Store>) -> (std::net::SocketAddr, pacs_
 #[tokio::test]
 async fn an_instance_sent_to_a_project_is_de_identified() {
     let (addr, archive) = with_project(None).await;
-    let series = SyntheticSeries::new(101, 1);
+    let series = RealSeries::new(101, 1);
     let mut client = Client::connect(addr, "HOSPITAL", "LIVER_2026", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -112,7 +112,7 @@ async fn an_instance_sent_to_a_project_is_de_identified() {
 #[tokio::test]
 async fn pacs_rs_own_title_stores_as_received() {
     let (addr, archive) = with_project(None).await;
-    let series = SyntheticSeries::new(102, 1);
+    let series = RealSeries::new(102, 1);
     let mut client = Client::connect(addr, "HOSPITAL", "PACSRS", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -141,7 +141,7 @@ async fn pacs_rs_own_title_stores_as_received() {
 #[tokio::test]
 async fn a_project_instance_sent_twice_is_kept_once() {
     let (addr, archive) = with_project(None).await;
-    let series = SyntheticSeries::new(103, 1);
+    let series = RealSeries::new(103, 1);
     let mut client = Client::connect(addr, "HOSPITAL", "LIVER_2026", &[CT], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -167,7 +167,7 @@ async fn a_project_instance_sent_twice_is_kept_once() {
     assert_eq!(patient.study_instance_uid, study);
 }
 
-fn secondary_capture(series: &SyntheticSeries) -> Vec<u8> {
+fn secondary_capture(series: &RealSeries) -> Vec<u8> {
     let mut object = pacs_core::Instance::from_bytes(&series.slice_bytes(0))
         .unwrap()
         .object;
@@ -187,7 +187,7 @@ fn secondary_capture(series: &SyntheticSeries) -> Vec<u8> {
 #[tokio::test]
 async fn a_quarantined_instance_is_refused_without_a_quarantine() {
     let (addr, archive) = with_project(None).await;
-    let series = SyntheticSeries::new(104, 1);
+    let series = RealSeries::new(104, 1);
     let mut client = Client::connect(addr, "HOSPITAL", "LIVER_2026", &[SC], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
@@ -225,7 +225,7 @@ async fn a_quarantined_instance_is_refused_without_a_quarantine() {
 async fn a_quarantined_instance_goes_to_the_quarantine_store() {
     let quarantine = Store::memory();
     let (addr, archive) = with_project(Some(quarantine.clone())).await;
-    let series = SyntheticSeries::new(105, 1);
+    let series = RealSeries::new(105, 1);
     let mut client = Client::connect(addr, "HOSPITAL", "LIVER_2026", &[SC], &[EXPLICIT_VR_LE])
         .await
         .unwrap();
