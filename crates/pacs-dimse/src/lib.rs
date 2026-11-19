@@ -1,5 +1,5 @@
-//! DIMSE for pacs-rs, on dicom-ul's associations: C-ECHO and C-FIND as SCP and SCU,
-//! C-STORE as SCP, C-MOVE as SCU.
+//! DIMSE for pacs-rs, on dicom-ul's associations: C-ECHO, C-FIND and C-STORE as SCP and SCU,
+//! C-MOVE as SCU.
 //!
 //! Behaviour follows DICOM 2026d: messages and statuses from PS3.7 (6.3, 9.1, 9.3, Annexes
 //! C and E), the Verification, Storage and Query/Retrieve Service Classes from PS3.4 (Annexes
@@ -30,6 +30,7 @@ pub use scu::ConnectError;
 pub use scu::echo::{EchoError, echo};
 pub use scu::find::{FindError, FindOutcome, find_studies};
 pub use scu::retrieve::{MoveError, MoveOutcome, Progress, move_studies};
+pub use scu::store::{Accepted, Originator, SendError, Sender};
 pub use status::{Status, StatusClass};
 
 /// Implicit VR Little Endian, the default transfer syntax every AE accepts (PS3.5 10.1).
@@ -60,6 +61,10 @@ pub struct Config {
     pub extra_ae_titles: Vec<AeTitle>,
     /// The AEs pacs-rs can call.
     pub remotes: Vec<RemoteAe>,
+    /// The `id` of each remote AE that instances may be sent to: the destinations a C-MOVE
+    /// may name. None unless set: an archive this server only reads from is among the
+    /// remotes too, and must not be written to because someone asked.
+    pub move_destinations: Vec<String>,
     /// Refuse associations whose calling AE title is not one of `remotes`.
     pub known_callers_only: bool,
     /// Associations served at once; one more is rejected as a local limit exceeded.
@@ -82,6 +87,7 @@ impl Config {
             ae_title,
             extra_ae_titles: Vec::new(),
             remotes: Vec::new(),
+            move_destinations: Vec::new(),
             known_callers_only: false,
             max_associations: 16,
             timeout: Duration::from_secs(30),
@@ -93,5 +99,14 @@ impl Config {
 
     pub fn remote(&self, id: &str) -> Option<&RemoteAe> {
         self.remotes.iter().find(|r| r.id == id)
+    }
+
+    /// The remote AE a C-MOVE to `ae_title` sends to: one of [`Config::move_destinations`]
+    /// with that AE title. `None` is a Move Destination this server does not know (PS3.4
+    /// Table C.4-2, status A801).
+    pub fn move_destination(&self, ae_title: &str) -> Option<&RemoteAe> {
+        self.remotes.iter().find(|remote| {
+            remote.ae_title.matches(ae_title) && self.move_destinations.contains(&remote.id)
+        })
     }
 }
