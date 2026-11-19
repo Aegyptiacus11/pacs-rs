@@ -303,3 +303,101 @@ fn no_layout_for_a_file_to_read_whole() {
     assert_eq!(layout_of(&jls[..jls.len() - 8]), None, "no delimiter");
     assert_eq!(layout_of(&jls[..jls.len() - 200]), None);
 }
+
+/// The layout of a file without an offset table, passing over its fragments `block` bytes
+/// at a time, and how many bytes each read of the file took.
+fn layout_in_blocks(file: &[u8], block: u64) -> (Option<FrameLayout>, Vec<u64>) {
+    let at = found(file);
+    let header = Instance::from_bytes(&file[..at.element]).unwrap();
+    let Some(mut plan) = FrameLayout::plan(&header, at, file.len() as u64) else {
+        return (None, vec![]);
+    };
+    let mut reads = Vec::new();
+    loop {
+        match plan {
+            FramePlan::Ready(layout) => return (Some(layout), reads),
+            FramePlan::Read(search) => {
+                let search = search.in_blocks_of(block);
+                let wanted = search.wants();
+                assert!(wanted.end <= file.len() as u64, "a read past the file");
+                assert!(wanted.end - wanted.start >= 8);
+                reads.push(wanted.end - wanted.start);
+                match search.give(part(file, wanted)) {
+                    Some(next) => plan = next,
+                    None => return (None, reads),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fragments_are_passed_over_in_blocks() {
+    // ten frames, a fragment each of some four thousand bytes, an empty offset table
+    let file = RealSeries::new(66, 1).jpeg_ls_multiframe_bytes(0);
+    let frames = RealSeries::FRAMES as usize;
+    let longest = RealSeries::jpeg_ls_frames()
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap() as u64;
+    let expected = layout_of(&file).expect("a layout");
+
+    // whatever the block, and wherever it cuts a head or a fragment, the same layout
+    for block in [
+        0,
+        8,
+        9,
+        15,
+        16,
+        17,
+        100,
+        4096,
+        longest,
+        longest + 8,
+        longest + 9,
+        20_000,
+        1 << 30,
+    ] {
+        let (layout, reads) = layout_in_blocks(&file, block);
+        assert_eq!(layout.as_ref(), Some(&expected), "blocks of {block}");
+        // the table's head, then the fragments
+        assert!(reads.len() >= 2, "blocks of {block}: {reads:?}");
+    }
+    // a block that holds everything: one read for all the fragments
+    assert_eq!(layout_in_blocks(&file, 1 << 30).1.len(), 2);
+    // blocks of a few fragments: fewer reads than fragments
+    let (_, reads) = layout_in_blocks(&file, 3 * (longest + 8));
+    assert!((3..frames).contains(&reads.len()), "{reads:?}");
+    // blocks smaller than a fragment: the first read is a block, then heads alone, one a
+    // fragment and one for the delimiter, so no fragment is read to be passed over
+    let mut heads = vec![8, 100];
+    heads.resize(1 + frames + 1, 8);
+    assert_eq!(layout_in_blocks(&file, 100).1, heads);
+    assert_eq!(layout_in_blocks(&file, 8).1, vec![8; 1 + frames + 1]);
+
+    // what has no layout has none in blocks either: fragments that are not one a frame,
+    // more or fewer, and a file cut short, in a fragment or of its delimiter
+    let series = RealSeries::new(67, 1);
+    let fragments = RealSeries::jpeg_ls_frames();
+    let three = fragments[..3].to_vec();
+    for block in [8, 100, 5000, 1 << 30] {
+        for frames in [2, 4] {
+            let file = series.refragmented(0, frames, vec![], three.clone());
+            assert_eq!(
+                layout_in_blocks(&file, block).0,
+                None,
+                "{frames} frames, blocks of {block}"
+            );
+        }
+        let file = series.refragmented(0, 3, vec![], three.clone());
+        assert!(layout_in_blocks(&file, block).0.is_some());
+        for cut in [1, 7, 8, 9, 200, 5000] {
+            assert_eq!(
+                layout_in_blocks(&file[..file.len() - cut], block).0,
+                None,
+                "{cut} bytes short, blocks of {block}"
+            );
+        }
+    }
+}
