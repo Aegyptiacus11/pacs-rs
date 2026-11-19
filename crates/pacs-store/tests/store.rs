@@ -92,6 +92,7 @@ async fn s3_round_trip() {
     };
     let store = Store::s3(&config, "dicom").unwrap();
     round_trip(&store, 14).await;
+    ranges(&store, 15).await;
 }
 
 /// Parts of a stored file come back as they are in it, in the order asked.
