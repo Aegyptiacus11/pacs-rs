@@ -73,6 +73,18 @@ fn metadata_leaves_out_pixel_data() {
     assert_eq!(metadata["00280010"]["Value"][0], 128);
 }
 
+/// PS3.10 7.2: the value of Data Set Trailing Padding has no significance and is ignored by
+/// whoever reads the data set. The scanner's file ends with one.
+#[test]
+fn metadata_leaves_out_the_trailing_padding() {
+    let instance = Instance::from_bytes(&RealSeries::new(10, 1).slice_bytes(0)).unwrap();
+    assert!(
+        instance.to_json().unwrap().get("FFFCFFFC").is_some(),
+        "the file no longer ends with the padding this test is about"
+    );
+    assert!(instance.metadata_json().unwrap().get("FFFCFFFC").is_none());
+}
+
 #[test]
 fn level_attributes_are_split_by_level() {
     use pacs_core::levels;
