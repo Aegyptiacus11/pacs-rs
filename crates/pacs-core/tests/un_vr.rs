@@ -5,9 +5,10 @@ use std::borrow::Cow;
 
 use dicom_core::{Tag, VR};
 use dicom_dictionary_std::{tags, uids};
+use pacs_core::real::RealSeries;
 use pacs_core::synthetic::{
-    ITEM, RawFile, SEQUENCE_END, SyntheticSeries, UNDEFINED, even, implicit,
-    implicit_reference_sequence, item, un_sequence_file, un_study_uid_file,
+    ITEM, RawFile, SEQUENCE_END, UNDEFINED, even, implicit, implicit_reference_sequence, item,
+    un_sequence_file, un_study_uid_file,
 };
 use pacs_core::{Instance, wire};
 
@@ -304,7 +305,7 @@ fn native_pixel_data_in_un_reads_as_ow() {
 #[test]
 fn a_file_without_un_comes_back_as_the_same_bytes() {
     for bytes in [
-        SyntheticSeries::new(3, 1).slice_bytes(0),
+        RealSeries::new(3, 1).slice_bytes(0),
         RawFile::new(uids::IMPLICIT_VR_LITTLE_ENDIAN)
             .raw(&implicit((0x0020, 0x000D), &even("2.25.1")))
             .bytes(),

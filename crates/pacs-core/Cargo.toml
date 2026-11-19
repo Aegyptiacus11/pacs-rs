@@ -33,8 +33,8 @@ pacs-core = { path = ".", features = ["synthetic", "real"] }
 
 [[example]]
 name = "write_synthetic"
-required-features = ["synthetic"]
+required-features = ["synthetic", "real"]
 
 [[example]]
 name = "write_un_vr"
-required-features = ["synthetic"]
+required-features = ["synthetic", "real"]
