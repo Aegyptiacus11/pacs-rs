@@ -65,12 +65,23 @@ fn files(seed: u32, slices: u32) -> (tempfile::TempDir, Vec<PathBuf>, SyntheticS
     (dir, paths, series)
 }
 
+/// A port for a tool that is told where to listen. Not one the system gives out by itself
+/// (a listener bound to port 0 here, a tool's outgoing connection), which could take it
+/// between this check and the tool's start: one below that range, and a different one at
+/// each call.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    // 20000 to 29999 is under the ephemeral range of Linux, macOS and Windows; where this
+    // process starts in it depends on its ID, for two runs at once
+    let start = (std::process::id() % 5000) as u16 * 2;
+    for _ in 0..10_000 {
+        let port = 20_000 + (start + NEXT.fetch_add(1, Ordering::Relaxed)) % 10_000;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port between 20000 and 29999");
 }
 
 /// Wait until something listens on `port`.
