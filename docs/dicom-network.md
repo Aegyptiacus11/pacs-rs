@@ -48,16 +48,16 @@ to it, and a user when it sends a study on.
 | Message | What it asks | pacs-rs as provider | pacs-rs as user |
 |---|---|---|---|
 | C-ECHO | "are you there?" (PS3.4 Annex A) | yes | yes: `POST /modalities/{id}/echo` |
-| C-STORE | "keep this instance" (PS3.4 Annex B) | yes, into the archive | built, and nothing sends yet: [sending](dimse.md#sending) |
+| C-STORE | "keep this instance" (PS3.4 Annex B) | yes, into the archive | yes, when a C-MOVE asks it to send |
 | C-FIND | "which studies match?" (PS3.4 Annex C) | yes, to the AEs it knows: [being searched](dimse.md#being-searched) | yes: `GET /modalities/{id}/studies` |
-| C-MOVE | "send these studies to that AE title" (PS3.4 Section C.4.2) | not yet | yes: `POST /modalities/{id}/move` |
+| C-MOVE | "send these studies to that AE title" (PS3.4 Section C.4.2) | yes, to the destinations it is given: [being retrieved from](dimse.md#being-retrieved-from) | yes: `POST /modalities/{id}/move` |
 | C-GET | "send these studies to me, on this association" (PS3.4 Section C.4.3) | not yet | not yet |
 
 What is "not yet" is in the roadmap under [complete query and
 retrieve](roadmap.md#4-complete-query-and-retrieve). In short: today a scanner or a
-workstation can **send** to pacs-rs and **search** it, and pacs-rs can **search and pull
-from** another archive. Another system cannot yet pull from pacs-rs with these messages; it
-can over HTTP, with [DICOMweb](dicomweb.md).
+workstation can **send** to pacs-rs, **search** it and **pull from** it with C-MOVE, and
+pacs-rs can **search and pull from** another archive. C-GET, the pull that needs no second
+connection, is not there yet; [DICOMweb](dicomweb.md) does the same over HTTP.
 
 ### Why C-MOVE needs both sides configured
 

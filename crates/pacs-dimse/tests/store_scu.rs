@@ -4,111 +4,20 @@
 
 mod common;
 
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use common::storage::{Peer, storage_scp};
 use common::*;
 use dicom_dictionary_std::tags;
-use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::InMemDicomObject;
-use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::ServerAssociationOptions;
 use pacs_archive::{Archive, Compression};
 use pacs_core::synthetic::SyntheticSeries;
-use pacs_dimse::command::{Command, field, tag};
-use pacs_dimse::message::{self, DataSet, Incoming};
+use pacs_dimse::command::{field, tag};
 use pacs_dimse::{AeTitle, Originator, RemoteAe, SendError, Sender, Status};
 use pacs_index::Index;
 use pacs_store::Store;
 
 const JPEG_LS: &str = "1.2.840.10008.1.2.4.80";
-
-/// One C-STORE-RQ a peer received.
-struct Received {
-    command: Command,
-    transfer_syntax: String,
-    data_set: Vec<u8>,
-}
-
-impl Received {
-    fn object(&self) -> InMemDicomObject {
-        let ts = TransferSyntaxRegistry.get(&self.transfer_syntax).unwrap();
-        InMemDicomObject::read_dataset_with_ts(&*self.data_set, ts).unwrap()
-    }
-}
-
-/// What a peer does with the instances it is sent.
-#[derive(Clone, Copy)]
-enum Peer {
-    /// Answer each with the next of these statuses, Success once they are used up.
-    Answers(&'static [u16]),
-    /// Abort when the first one comes.
-    Aborts,
-}
-
-/// A Storage SCP called STORESCP that accepts one association, for `sop_classes` in
-/// `transfer_syntaxes`, and records each C-STORE-RQ until the association is released.
-async fn storage_scp(
-    sop_classes: &'static [&'static str],
-    transfer_syntaxes: &'static [&'static str],
-    peer: Peer,
-) -> (RemoteAe, Arc<Mutex<Vec<Received>>>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let received = Arc::new(Mutex::new(Vec::new()));
-    let record = received.clone();
-    tokio::spawn(async move {
-        let (socket, _) = listener.accept().await.unwrap();
-        let mut options = ServerAssociationOptions::new()
-            .ae_title("STORESCP")
-            .read_timeout(Duration::from_secs(5));
-        for sop_class in sop_classes {
-            options = options.with_abstract_syntax(*sop_class);
-        }
-        for ts in transfer_syntaxes {
-            options = options.with_transfer_syntax(*ts);
-        }
-        let Ok(mut association) = options.establish_async(socket).await else {
-            return;
-        };
-        let mut statuses = match peer {
-            Peer::Answers(statuses) => statuses.iter(),
-            Peer::Aborts => [].iter(),
-        };
-        loop {
-            let message = match message::receive(&mut association, 1 << 24).await {
-                Ok(Incoming::Message(message)) => message,
-                _ => return,
-            };
-            if matches!(peer, Peer::Aborts) {
-                let _ = association.abort().await;
-                return;
-            }
-            let transfer_syntax = association
-                .presentation_contexts()
-                .iter()
-                .find(|pc| pc.id == message.context_id)
-                .unwrap()
-                .transfer_syntax
-                .clone();
-            let DataSet::Received(data_set) = message.data else {
-                panic!("a C-STORE-RQ without a data set");
-            };
-            let status = statuses.next().copied().unwrap_or(0x0000);
-            let response = pacs_dimse::command::response(&message.command, Status(status), None);
-            record.lock().unwrap().push(Received {
-                command: message.command,
-                transfer_syntax,
-                data_set,
-            });
-            message::send(&mut association, message.context_id, &response, None)
-                .await
-                .unwrap();
-        }
-    });
-    let remote = format!("peer=STORESCP@127.0.0.1:{port}").parse().unwrap();
-    (remote, received)
-}
 
 /// An archive that compresses what it takes in (JPEG-LS lossless), or not.
 async fn archive_with(compression: Compression) -> Archive {

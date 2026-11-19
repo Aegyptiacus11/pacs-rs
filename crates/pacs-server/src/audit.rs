@@ -38,7 +38,8 @@
 //! | DICOM Instances Transferred | an association is over: one line per study stored through it by C-STORE, from the calling AE title to the called one |
 //! | Security Alert, Node Authentication | a connection that did not become an association: an AE title not recognized, the limit reached |
 //! | Query, of this server | a C-FIND it answered: the calling AE asks, with the Information Model as the SOP Class queried, the Identifier as sent and its transfer syntax |
-//! | Security Alert, Access Control Decision | a C-FIND from an AE this server does not answer the queries of |
+//! | DICOM Instances Transferred, from this server | a C-MOVE it answered: one line per study of what the destination stored, from the called AE title to the Move Destination, the calling AE as the requestor |
+//! | Security Alert, Access Control Decision | a C-FIND or a C-MOVE from an AE this server does not answer |
 //! | Query | a remote AE searched by C-FIND (`GET /modalities/{id}/studies`): this server asks, the remote AE answers, the caller is the requestor |
 //! | Begin Transferring DICOM Instances | a remote AE asked by C-MOVE to send studies here (`POST /modalities/{id}/move`), one line per study; their arrival is the first event of this table |
 //!
@@ -296,6 +297,37 @@ impl std::fmt::Debug for Audit {
     }
 }
 
+impl Audit {
+    /// The alert for an operation asked by an AE this server does not answer: an access
+    /// violation. A caller that keeps asking is one line a window.
+    fn not_answered(
+        &self,
+        trail: &Trail,
+        peer: &pacs_dimse::Peer,
+        asker: Participant,
+        operation: &str,
+        sop_class: &str,
+    ) {
+        let again = format!("{operation} refused|{}|{}", peer.address.ip(), peer.calling);
+        if trail.repeated(again, Instant::now()) {
+            return;
+        }
+        self.record(events::security_alert(
+            &trail.source,
+            SystemTime::now(),
+            ACCESS_CONTROL_DECISION,
+            Outcome::MinorFailure,
+            &trail.process,
+            Some(asker),
+            &format!("urn:oid:{sop_class}"),
+            &format!(
+                "{operation} refused: {} is not an AE this server answers the queries and retrievals of",
+                peer.calling
+            ),
+        ));
+    }
+}
+
 /// What DIMSE associations did: see the module's second table.
 impl pacs_dimse::Observer for Audit {
     fn queried(&self, peer: &pacs_dimse::Peer, query: &pacs_dimse::Queried<'_>) {
@@ -304,24 +336,8 @@ impl pacs_dimse::Observer for Audit {
         let node = peer.address.ip().to_string();
         let mut asker = application(&peer.calling, Some(AccessPoint::Ip(node.clone())));
         if query.status == pacs_dimse::Status::NOT_AUTHORIZED {
-            // an access violation is an alert, not a query (A.5.3.10, note); a caller
-            // that keeps asking is one line a window
-            let again = format!("query refused|{node}|{}", peer.calling);
-            if !trail.repeated(again, Instant::now()) {
-                self.record(events::security_alert(
-                    &trail.source,
-                    now,
-                    ACCESS_CONTROL_DECISION,
-                    Outcome::MinorFailure,
-                    &trail.process,
-                    Some(asker),
-                    &format!("urn:oid:{}", query.sop_class),
-                    &format!(
-                        "C-FIND refused: {} is not an AE this server answers the queries of",
-                        peer.calling
-                    ),
-                ));
-            }
+            // an access violation is an alert, not a query (A.5.3.10, note)
+            self.not_answered(trail, peer, asker, "C-FIND", query.sop_class);
             return;
         }
         use pacs_dimse::{Status, StatusClass};
@@ -359,6 +375,54 @@ impl pacs_dimse::Observer for Audit {
             query.transfer_syntax,
             query.identifier,
         ));
+    }
+
+    fn retrieved(&self, peer: &pacs_dimse::Peer, retrieval: &pacs_dimse::Retrieved<'_>) {
+        let Some(trail) = &self.0 else { return };
+        let now = SystemTime::now();
+        let node = peer.address.ip().to_string();
+        let mut asker = application(&peer.calling, Some(AccessPoint::Ip(node)));
+        if retrieval.status == pacs_dimse::Status::NOT_AUTHORIZED {
+            self.not_answered(trail, peer, asker, "C-MOVE", retrieval.sop_class);
+            return;
+        }
+        asker.is_requestor = true;
+        // what the destination stored: this server sent it, for the AE that asked
+        for study in retrieval.studies {
+            let sender = Participant::new(&trail.process, false)
+                .alternative(format!("AETITLES={}", peer.called));
+            let receiver = application(
+                retrieval.destination,
+                retrieval
+                    .destination_host
+                    .map(|host| AccessPoint::Machine(host.to_owned())),
+            );
+            let mut message = events::instances_transferred(
+                &trail.source,
+                now,
+                Action::Read,
+                Outcome::Success,
+                sender,
+                receiver,
+                &events::Study {
+                    study_instance_uid: study.study_instance_uid.clone(),
+                    patient_id: study.patient_id.clone(),
+                    patient_name: study.patient_name.clone(),
+                    sop_classes: study
+                        .sop_classes
+                        .iter()
+                        .map(|(uid, instances)| SopClass {
+                            uid: uid.clone(),
+                            instances: u64::from(*instances),
+                        })
+                        .collect(),
+                },
+            );
+            // "other participants that are known, especially third parties that are the
+            // requestor" (A.5.3.7): the AE that asked for the move
+            message.participants.push(asker.clone());
+            self.record(message);
+        }
     }
 
     fn received(&self, peer: &pacs_dimse::Peer, stored: Vec<Stored>) {

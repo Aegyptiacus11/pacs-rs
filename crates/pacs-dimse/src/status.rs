@@ -85,6 +85,15 @@ impl Status {
     /// Refused: Not authorized: the caller may not invoke the operation.
     pub const NOT_AUTHORIZED: Status = Status(0x0124);
 
+    // C-MOVE codes of PS3.4 Table C.4-2, beside Move Destination unknown, the Warning and
+    // the ones a C-FIND has too.
+    /// Refused: Out of resources (A701): unable to calculate the number of matches, the
+    /// index could not be read.
+    pub const UNABLE_TO_CALCULATE_MATCHES: Status = Status(0xA701);
+    /// Refused: Out of resources (A702): unable to perform sub-operations. No association
+    /// with the destination, or no instance that it stored.
+    pub const UNABLE_TO_PERFORM_SUB_OPERATIONS: Status = Status(0xA702);
+
     /// The class this code is in, by the convention of PS3.7 Annex C.
     pub fn class(self) -> StatusClass {
         match self.0 {
