@@ -12,6 +12,11 @@ use dicom_object::InMemDicomObject;
 /// Study Root Query/Retrieve Information Model - FIND (PS3.4 C.6.2.3).
 pub const STUDY_ROOT_FIND: &str = "1.2.840.10008.5.1.4.1.2.2.1";
 
+/// Patient Root Query/Retrieve Information Model - FIND, MOVE and GET (PS3.4 C.6.1.3).
+pub const PATIENT_ROOT_FIND: &str = "1.2.840.10008.5.1.4.1.2.1.1";
+pub const PATIENT_ROOT_MOVE: &str = "1.2.840.10008.5.1.4.1.2.1.2";
+pub const PATIENT_ROOT_GET: &str = "1.2.840.10008.5.1.4.1.2.1.3";
+
 /// Study Root Query/Retrieve Information Model - GET (PS3.4 C.6.2.3).
 pub const STUDY_ROOT_GET: &str = "1.2.840.10008.5.1.4.1.2.2.3";
 

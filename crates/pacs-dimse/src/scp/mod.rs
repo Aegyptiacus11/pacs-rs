@@ -1,6 +1,6 @@
 //! pacs-rs as an association acceptor: Verification SCP (PS3.4 Annex A), Storage SCP
 //! (PS3.4 Annex B) for the SOP classes of [`crate::sop_classes::STORAGE`], and Query and
-//! Retrieve SCP (PS3.4 Annex C) on the Study Root model.
+//! Retrieve SCP (PS3.4 Annex C) on the Patient Root and Study Root models.
 //!
 //! Every accepted AE title shares one set of presentation contexts; once an association is
 //! up, its called AE title picks where received instances go and which studies a query
@@ -177,6 +177,9 @@ impl Scp {
             .with_abstract_syntax(crate::query::STUDY_ROOT_FIND)
             .with_abstract_syntax(crate::scu::retrieve::STUDY_ROOT_MOVE)
             .with_abstract_syntax(crate::query::STUDY_ROOT_GET)
+            .with_abstract_syntax(crate::query::PATIENT_ROOT_FIND)
+            .with_abstract_syntax(crate::query::PATIENT_ROOT_MOVE)
+            .with_abstract_syntax(crate::query::PATIENT_ROOT_GET)
             .with_negotiation(Roles);
         for (uid, _) in crate::sop_classes::STORAGE {
             options = options.with_abstract_syntax(*uid);

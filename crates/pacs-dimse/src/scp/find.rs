@@ -1,6 +1,7 @@
-//! The Query SCP (PS3.4 C.4.1.3): a C-FIND on the Study Root Query/Retrieve Information
-//! Model (C.6.2), answered by the hierarchical search of C.4.1.3.1.1 with one Pending
-//! response per match, and ended by a C-CANCEL-FIND-RQ with status Cancel.
+//! The Query SCP (PS3.4 C.4.1.3): a C-FIND on the Patient Root or the Study Root
+//! Query/Retrieve Information Model (C.6.1, C.6.2), answered by the hierarchical search of
+//! C.4.1.3.1.1 with one Pending response per match, and ended by a C-CANCEL-FIND-RQ with
+//! status Cancel.
 //!
 //! - **What is read**: the Request Identifier's Query/Retrieve Level, the Unique Keys of
 //!   the levels above it, and the keys of its own level that pacs-rs keeps ([`Level`]).
@@ -11,6 +12,9 @@
 //!   empty value and multiple value matching are not negotiated.
 //! - **Studies** come from a cursor over the index, so their number costs no memory; a
 //!   study's series and a series' instances are read whole, then matched.
+//! - **A patient** is the studies with its Patient ID that the caller sees: found by any
+//!   of them, and described by the first one found. A study without a Patient ID belongs
+//!   to no patient of the Patient Root model, and is found by the Study Root model.
 
 use dicom_core::header::Header;
 use dicom_core::value::{DataSetSequence, Value as DicomValue};
@@ -30,7 +34,7 @@ use super::Request;
 use super::operation::{After, Interruption, Refusal, interruption, refusal};
 use crate::command::{self, Command, DATA_SET_PRESENT, tag};
 use crate::message::{self, DataSet, MessageError};
-use crate::query::STUDY_ROOT_FIND;
+use crate::query::{PATIENT_ROOT_FIND, STUDY_ROOT_FIND};
 use crate::status::Status;
 
 /// An attribute a level is searched on and answers with.
@@ -55,8 +59,78 @@ const fn attribute(tag: Tag, key: &'static str, vr: VR, kind: Kind) -> Attribute
     }
 }
 
-/// The keys of the Study level (PS3.4 Table C.6-5) that pacs-rs keeps: the Unique and the
-/// Required ones, and of the Optional ones those the index has or counts.
+/// The keys of the Patient level of the Patient Root model (PS3.4 Table C.6-1) that pacs-rs
+/// keeps.
+const PATIENT: &[Attribute] = &[
+    attribute(tags::PATIENT_NAME, "00100010", VR::PN, Kind::Name),
+    attribute(tags::PATIENT_ID, "00100020", VR::LO, Kind::Text),
+    attribute(tags::PATIENT_BIRTH_DATE, "00100030", VR::DA, Kind::Date),
+    attribute(tags::PATIENT_SEX, "00100040", VR::CS, Kind::Text),
+    attribute(
+        tags::NUMBER_OF_PATIENT_RELATED_STUDIES,
+        NUMBER_OF_PATIENT_RELATED_STUDIES,
+        VR::IS,
+        Kind::Number,
+    ),
+    attribute(
+        tags::NUMBER_OF_PATIENT_RELATED_SERIES,
+        NUMBER_OF_PATIENT_RELATED_SERIES,
+        VR::IS,
+        Kind::Number,
+    ),
+    attribute(
+        tags::NUMBER_OF_PATIENT_RELATED_INSTANCES,
+        NUMBER_OF_PATIENT_RELATED_INSTANCES,
+        VR::IS,
+        Kind::Number,
+    ),
+];
+
+const PATIENT_ID: &str = "00100020";
+const NUMBER_OF_PATIENT_RELATED_STUDIES: &str = "00201200";
+const NUMBER_OF_PATIENT_RELATED_SERIES: &str = "00201202";
+const NUMBER_OF_PATIENT_RELATED_INSTANCES: &str = "00201204";
+
+/// What is counted of a patient, not kept with any of its studies.
+const COUNTED_OF_A_PATIENT: [&str; 3] = [
+    NUMBER_OF_PATIENT_RELATED_STUDIES,
+    NUMBER_OF_PATIENT_RELATED_SERIES,
+    NUMBER_OF_PATIENT_RELATED_INSTANCES,
+];
+
+/// The keys of the Study level of the Patient Root model (PS3.4 Table C.6-2) that pacs-rs
+/// keeps: those of the Study Root model's, less what is the patient's.
+const STUDY_OF_A_PATIENT: &[Attribute] = &[
+    attribute(tags::STUDY_DATE, "00080020", VR::DA, Kind::Date),
+    attribute(tags::STUDY_TIME, "00080030", VR::TM, Kind::Time),
+    attribute(tags::ACCESSION_NUMBER, "00080050", VR::SH, Kind::Text),
+    attribute(tags::MODALITIES_IN_STUDY, "00080061", VR::CS, Kind::Text),
+    attribute(
+        tags::REFERRING_PHYSICIAN_NAME,
+        "00080090",
+        VR::PN,
+        Kind::Name,
+    ),
+    attribute(tags::STUDY_DESCRIPTION, "00081030", VR::LO, Kind::Text),
+    attribute(tags::STUDY_INSTANCE_UID, "0020000D", VR::UI, Kind::Uid),
+    attribute(tags::STUDY_ID, "00200010", VR::SH, Kind::Text),
+    attribute(
+        tags::NUMBER_OF_STUDY_RELATED_SERIES,
+        "00201206",
+        VR::IS,
+        Kind::Number,
+    ),
+    attribute(
+        tags::NUMBER_OF_STUDY_RELATED_INSTANCES,
+        "00201208",
+        VR::IS,
+        Kind::Number,
+    ),
+];
+
+/// The keys of the Study level of the Study Root model (PS3.4 Table C.6-5) that pacs-rs
+/// keeps: the Unique and the Required ones, and of the Optional ones those the index has
+/// or counts.
 const STUDY: &[Attribute] = &[
     attribute(tags::STUDY_DATE, "00080020", VR::DA, Kind::Date),
     attribute(tags::STUDY_TIME, "00080030", VR::TM, Kind::Time),
@@ -89,7 +163,7 @@ const STUDY: &[Attribute] = &[
     ),
 ];
 
-/// The keys of the Series level (PS3.4 Table C.6-3) that pacs-rs keeps.
+/// The keys of the Series level (PS3.4 Table C.6-3) that pacs-rs keeps, in both models.
 const SERIES: &[Attribute] = &[
     attribute(tags::MODALITY, "00080060", VR::CS, Kind::Text),
     attribute(tags::SERIES_DESCRIPTION, "0008103E", VR::LO, Kind::Text),
@@ -130,7 +204,8 @@ const SERIES: &[Attribute] = &[
     },
 ];
 
-/// The keys of the Composite Object Instance level (PS3.4 Table C.6-4) that pacs-rs keeps.
+/// The keys of the Composite Object Instance level (PS3.4 Table C.6-4) that pacs-rs keeps,
+/// in both models.
 const IMAGE: &[Attribute] = &[
     attribute(tags::SOP_CLASS_UID, "00080016", VR::UI, Kind::Uid),
     attribute(tags::SOP_INSTANCE_UID, "00080018", VR::UI, Kind::Uid),
@@ -141,40 +216,84 @@ const IMAGE: &[Attribute] = &[
     attribute(tags::BITS_ALLOCATED, "00280100", VR::US, Kind::Number),
 ];
 
-/// A level of the Study Root Query/Retrieve Information Model (PS3.4 C.6.2.1).
+/// A Query/Retrieve Information Model (PS3.4 C.6): what the hierarchy starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Model {
+    /// Patient, study, series, instance (C.6.1).
+    PatientRoot,
+    /// Study, series, instance, the patient's attributes being the study's (C.6.2).
+    StudyRoot,
+}
+
+impl Model {
+    /// The model a FIND SOP class is of.
+    fn of_find(sop_class: &str) -> Option<Model> {
+        match sop_class {
+            PATIENT_ROOT_FIND => Some(Model::PatientRoot),
+            STUDY_ROOT_FIND => Some(Model::StudyRoot),
+            _ => None,
+        }
+    }
+
+    /// What Query/Retrieve Level may be in this model, for an error.
+    pub(super) fn levels(self) -> &'static str {
+        match self {
+            Model::PatientRoot => {
+                "Query/Retrieve Level is PATIENT, STUDY, SERIES or IMAGE in the Patient Root model"
+            }
+            Model::StudyRoot => {
+                "Query/Retrieve Level is STUDY, SERIES or IMAGE in the Study Root model"
+            }
+        }
+    }
+}
+
+/// A level of a Query/Retrieve Information Model (PS3.4 C.6.1.1, C.6.2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Level {
+    Patient,
     Study,
     Series,
     Image,
 }
 
 impl Level {
-    /// By the value of Query/Retrieve Level (0008,0052), PS3.4 C.6.2.1.
-    pub(super) fn named(name: &str) -> Option<Level> {
-        match name {
-            "STUDY" => Some(Level::Study),
-            "SERIES" => Some(Level::Series),
-            "IMAGE" => Some(Level::Image),
+    /// By the value of Query/Retrieve Level (0008,0052) in `model`: the Study Root model
+    /// has no PATIENT level.
+    pub(super) fn named(model: Model, name: &str) -> Option<Level> {
+        match (name, model) {
+            ("PATIENT", Model::PatientRoot) => Some(Level::Patient),
+            ("STUDY", _) => Some(Level::Study),
+            ("SERIES", _) => Some(Level::Series),
+            ("IMAGE", _) => Some(Level::Image),
             _ => None,
         }
     }
 
     pub(super) fn name(self) -> &'static str {
         match self {
+            Level::Patient => "PATIENT",
             Level::Study => "STUDY",
             Level::Series => "SERIES",
             Level::Image => "IMAGE",
         }
     }
 
-    fn attributes(self) -> &'static [Attribute] {
-        match self {
-            Level::Study => STUDY,
-            Level::Series => SERIES,
-            Level::Image => IMAGE,
+    fn attributes(self, model: Model) -> &'static [Attribute] {
+        match (self, model) {
+            (Level::Patient, _) => PATIENT,
+            (Level::Study, Model::PatientRoot) => STUDY_OF_A_PATIENT,
+            (Level::Study, Model::StudyRoot) => STUDY,
+            (Level::Series, _) => SERIES,
+            (Level::Image, _) => IMAGE,
         }
     }
+}
+
+/// The Patient ID that is the Unique Key of the level above (PS3.4 C.4.1.2.1, C.4.2.1.4.1):
+/// one value, so no list, no wild card and not nothing. `None` when it is not that.
+pub(super) fn one_patient_id(value: &str) -> Option<&str> {
+    (!value.is_empty() && !value.contains(['\\', '*', '?'])).then_some(value)
 }
 
 /// An attribute a response carries.
@@ -194,6 +313,7 @@ struct Returned {
 struct Query {
     level: Level,
     /// The Unique Keys of the levels above, each a single value (C.4.1.2.1).
+    patient: Option<String>,
     study: Option<String>,
     series: Option<String>,
     keys: Vec<Key>,
@@ -233,7 +353,7 @@ fn asked(attribute: &Attribute, value: &str) -> Result<Option<Match>, Refusal> {
 }
 
 impl Query {
-    fn parse(identifier: &InMemDicomObject) -> Result<Query, Refusal> {
+    fn parse(identifier: &InMemDicomObject, model: Model) -> Result<Query, Refusal> {
         let mismatch = |comment: &str, tag: Tag| {
             refusal(
                 Status::IDENTIFIER_DOES_NOT_MATCH_SOP_CLASS,
@@ -250,12 +370,8 @@ impl Query {
                     tags::QUERY_RETRIEVE_LEVEL,
                 )
             })?;
-        let level = Level::named(&level).ok_or_else(|| {
-            mismatch(
-                "Query/Retrieve Level is STUDY, SERIES or IMAGE in the Study Root model",
-                tags::QUERY_RETRIEVE_LEVEL,
-            )
-        })?;
+        let level = Level::named(model, &level)
+            .ok_or_else(|| mismatch(model.levels(), tags::QUERY_RETRIEVE_LEVEL))?;
         // PS3.4 C.4.1.2.1: a single value in the Unique Key of each level above
         let unique = |tag: Tag, name: &str| -> Result<String, Refusal> {
             let value = identifier.get(tag).and_then(text).unwrap_or_default();
@@ -267,8 +383,24 @@ impl Query {
             }
             Ok(value)
         };
+        let patient = match (model, level) {
+            (Model::StudyRoot, _) | (_, Level::Patient) => None,
+            _ => {
+                let value = identifier
+                    .get(tags::PATIENT_ID)
+                    .and_then(text)
+                    .unwrap_or_default();
+                let one = one_patient_id(&value).ok_or_else(|| {
+                    mismatch(
+                        &format!("{} level needs one Patient ID", level.name()),
+                        tags::PATIENT_ID,
+                    )
+                })?;
+                Some(one.to_owned())
+            }
+        };
         let study = match level {
-            Level::Study => None,
+            Level::Patient | Level::Study => None,
             _ => Some(unique(tags::STUDY_INSTANCE_UID, "Study Instance UID")?),
         };
         let series = match level {
@@ -277,6 +409,7 @@ impl Query {
         };
         let mut query = Query {
             level,
+            patient,
             study,
             series,
             keys: Vec::new(),
@@ -285,8 +418,9 @@ impl Query {
         };
         for element in identifier {
             let tag = element.tag();
-            let above = (tag == tags::STUDY_INSTANCE_UID && level != Level::Study)
-                || (tag == tags::SERIES_INSTANCE_UID && level == Level::Image);
+            let above = (tag == tags::PATIENT_ID && query.patient.is_some())
+                || (tag == tags::STUDY_INSTANCE_UID && query.study.is_some())
+                || (tag == tags::SERIES_INSTANCE_UID && query.series.is_some());
             // not keys: how the Identifier is written and read (C.4.1.1.3.1), group
             // lengths, and private attributes, which may be ignored
             if above
@@ -298,7 +432,7 @@ impl Query {
             {
                 continue;
             }
-            let Some(attribute) = level.attributes().iter().find(|a| a.tag == tag) else {
+            let Some(attribute) = level.attributes(model).iter().find(|a| a.tag == tag) else {
                 query.unsupported = true;
                 continue;
             };
@@ -409,6 +543,9 @@ impl Query {
             self.level.name(),
         );
         put(&mut identifier, tags::RETRIEVE_AE_TITLE, VR::AE, called);
+        if let Some(patient) = &self.patient {
+            put(&mut identifier, tags::PATIENT_ID, VR::LO, patient);
+        }
         if let Some(study) = &self.study {
             put(&mut identifier, tags::STUDY_INSTANCE_UID, VR::UI, study);
         }
@@ -542,22 +679,130 @@ fn study_entity(study: pacs_index::Study) -> Value {
     entity
 }
 
+/// The patients of a query, one at a time: a patient is found by any of its studies, and
+/// given once.
+struct Patients {
+    studies: Box<StudyCursor>,
+    index: Index,
+    /// The Patient IDs already seen, given or not.
+    seen: std::collections::HashSet<String>,
+    /// Whether what is counted of a patient was asked for, to match or to have back.
+    counted: bool,
+    /// The keys on what is counted, which no study answers.
+    of_counts: Vec<Key>,
+}
+
+impl Patients {
+    async fn next(&mut self) -> Result<Option<Value>, pacs_index::Error> {
+        while let Some(study) = self.studies.next().await? {
+            let Some(patient_id) = pacs_index::first_value(&study.attributes, PATIENT_ID)
+                .filter(|id| !id.trim().is_empty())
+            else {
+                // no Patient ID, no patient of this model
+                continue;
+            };
+            if !self.seen.insert(patient_id.clone()) {
+                continue;
+            }
+            let mut entity = match study.attributes {
+                Value::Object(map) => map,
+                _ => Map::new(),
+            };
+            if self.counted {
+                // every study of the patient that the caller sees
+                let theirs = self
+                    .index
+                    .search_studies(&StudySearch {
+                        keys: vec![Key {
+                            tag: PATIENT_ID,
+                            kind: Kind::Text,
+                            asked: Match::Is(patient_id),
+                        }],
+                        ..StudySearch::default()
+                    })
+                    .await?;
+                let counts = [
+                    theirs.len() as i64,
+                    theirs.iter().map(|study| study.series_count).sum(),
+                    theirs.iter().map(|study| study.instance_count).sum(),
+                ];
+                for (tag, count) in COUNTED_OF_A_PATIENT.into_iter().zip(counts) {
+                    entity.insert(tag.into(), json!({"vr": "IS", "Value": [count]}));
+                }
+            }
+            let entity = Value::Object(entity);
+            if self
+                .of_counts
+                .iter()
+                .all(|key| key.asked.answered_by(key.kind, &entity, key.tag))
+            {
+                return Ok(Some(entity));
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// The matches of a query, one at a time.
 enum Matches {
+    Patients(Patients),
     Studies(Box<StudyCursor>),
     Listed(std::vec::IntoIter<Value>),
 }
 
 impl Matches {
     /// Start the hierarchical search (C.4.1.3.1.1): the entities of the query's level,
-    /// under the ones its Unique Keys name. A study the index does not show, or a series
-    /// that is not in it, has none.
+    /// under the ones its Unique Keys name. A study the index does not show, one that is
+    /// not the patient's, or a series that is not in the study, has none.
     async fn of(query: &Query, index: &Index) -> Result<Matches, pacs_index::Error> {
         let object = |attributes: Value| match attributes {
             Value::Object(map) => map,
             _ => Map::new(),
         };
+        // a range of dates and one of times are read apart without a negotiation
+        // (PS3.4 C.2.2.2.5.4)
+        let studies = |keys: Vec<Key>| {
+            Box::new(index.study_cursor(StudySearch {
+                keys,
+                combined_date_time: false,
+                ..StudySearch::default()
+            }))
+        };
+        // of the patient named above, when one is: exactly that Patient ID
+        let of_the_patient = query.patient.as_ref().map(|patient| Key {
+            tag: PATIENT_ID,
+            kind: Kind::Text,
+            asked: Match::Is(patient.clone()),
+        });
+        if let (Some(study), Some(patient)) = (&query.study, &query.patient) {
+            // a study under another patient than the one named is not under these keys
+            let theirs = index.study(study).await?.is_some_and(|found| {
+                pacs_index::first_value(&found.attributes, PATIENT_ID).as_deref()
+                    == Some(patient.as_str())
+            });
+            if !theirs {
+                return Ok(Matches::Listed(Vec::new().into_iter()));
+            }
+        }
         Ok(match (query.level, &query.study, &query.series) {
+            (Level::Patient, ..) => {
+                let (of_counts, of_studies): (Vec<Key>, Vec<Key>) = query
+                    .keys
+                    .iter()
+                    .cloned()
+                    .partition(|key| COUNTED_OF_A_PATIENT.contains(&key.tag));
+                let counted = query
+                    .returned
+                    .iter()
+                    .any(|returned| COUNTED_OF_A_PATIENT.contains(&returned.attribute.key));
+                Matches::Patients(Patients {
+                    studies: studies(of_studies),
+                    index: index.clone(),
+                    seen: std::collections::HashSet::new(),
+                    counted,
+                    of_counts,
+                })
+            }
             (Level::Series, Some(study), _) => {
                 let series = index.series(study, None).await?;
                 let entities = series.into_iter().map(|series| {
@@ -575,13 +820,11 @@ impl Matches {
                 let entities = instances.into_iter().map(|instance| instance.attributes);
                 Matches::listed(query, entities)
             }
-            _ => Matches::Studies(Box::new(index.study_cursor(StudySearch {
-                keys: query.keys.clone(),
-                // a range of dates and one of times are read apart without a negotiation
-                // (PS3.4 C.2.2.2.5.4)
-                combined_date_time: false,
-                ..StudySearch::default()
-            }))),
+            _ => {
+                let mut keys = query.keys.clone();
+                keys.extend(of_the_patient);
+                Matches::Studies(studies(keys))
+            }
         })
     }
 
@@ -594,6 +837,7 @@ impl Matches {
 
     async fn next(&mut self) -> Result<Option<Value>, pacs_index::Error> {
         match self {
+            Matches::Patients(patients) => patients.next().await,
             Matches::Studies(cursor) => Ok(cursor.next().await?.map(study_entity)),
             Matches::Listed(entities) => Ok(entities.next()),
         }
@@ -755,7 +999,14 @@ async fn prepare(
         .get(request.transfer_syntax)
         .ok_or_else(|| unreadable(format!("transfer syntax {}", request.transfer_syntax)))?;
     let identifier = crate::scu::read_identifier(&found.identifier, ts).map_err(unreadable)?;
-    let query = Query::parse(&identifier)?;
+    let model = Model::of_find(request.abstract_syntax).ok_or_else(|| {
+        refusal(
+            Status::SOP_CLASS_NOT_SUPPORTED,
+            format!("SOP Class {} has no C-FIND", request.abstract_syntax),
+            None,
+        )
+    })?;
+    let query = Query::parse(&identifier, model)?;
     let matches = Matches::of(&query, index).await.map_err(|e| {
         tracing::error!(error = %e, "C-FIND: the index failed");
         refusal(
@@ -769,7 +1020,7 @@ async fn prepare(
 
 /// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-FIND on.
 pub(super) fn is_find(sop_class: &str) -> bool {
-    sop_class == STUDY_ROOT_FIND
+    Model::of_find(sop_class).is_some()
 }
 
 #[cfg(test)]
@@ -791,10 +1042,32 @@ mod tests {
                 check(attribute.items);
             }
         }
-        for level in [Level::Study, Level::Series, Level::Image] {
-            check(level.attributes());
-            assert_eq!(Level::named(level.name()), Some(level));
+        for model in [Model::PatientRoot, Model::StudyRoot] {
+            for level in [Level::Study, Level::Series, Level::Image] {
+                check(level.attributes(model));
+                assert_eq!(Level::named(model, level.name()), Some(level));
+            }
         }
-        assert_eq!(Level::named("PATIENT"), None);
+        check(Level::Patient.attributes(Model::PatientRoot));
+        // the patient is a level of one model, and its attributes the study's in the other
+        assert_eq!(
+            Level::named(Model::PatientRoot, "PATIENT"),
+            Some(Level::Patient)
+        );
+        assert_eq!(Level::named(Model::StudyRoot, "PATIENT"), None);
+        let has = |model, tag: Tag| {
+            Level::Study
+                .attributes(model)
+                .iter()
+                .any(|attribute| attribute.tag == tag)
+        };
+        assert!(has(Model::StudyRoot, tags::PATIENT_NAME));
+        assert!(!has(Model::PatientRoot, tags::PATIENT_NAME));
+        assert!(!has(Model::PatientRoot, tags::PATIENT_ID));
+        // one Patient ID, as the Unique Key of a level above
+        assert_eq!(one_patient_id("P-1"), Some("P-1"));
+        for not_one in ["", "P-1\\P-2", "P-*", "P-?"] {
+            assert_eq!(one_patient_id(not_one), None, "{not_one}");
+        }
     }
 }

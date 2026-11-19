@@ -1,12 +1,14 @@
-//! The Retrieve SCP (PS3.4 C.4.2.3, C.4.3.3) on the Study Root Query/Retrieve Information
-//! Model (C.6.2). A C-MOVE's instances go to the Move Destination by C-STORE sub-operations
+//! The Retrieve SCP (PS3.4 C.4.2.3, C.4.3.3) on the Patient Root and the Study Root
+//! Query/Retrieve Information Models (C.6.1, C.6.2). A C-MOVE's instances go to the Move Destination by C-STORE sub-operations
 //! on another association, which pacs-rs opens as a Storage SCU ([`crate::scu::store`]); a
 //! C-GET's go to the requester on the association of the C-GET itself, on the presentation
 //! contexts for which it took the SCP role (PS3.7 D.3.3.4, PS3.4 C.5.3).
 //!
 //! - **What is sent**: every instance under the Unique Keys of the Identifier
-//!   (C.4.2.1.4.1, C.6.2.1.5): studies, the series of one study, or the instances of one
-//!   series, a list of UID at the level of the retrieval and one value above it.
+//!   (C.4.2.1.4.1, C.6.1.1.6, C.6.2.1.5): studies, the series of one study, or the
+//!   instances of one series, a list of UID at the level of the retrieval and one value
+//!   above it. In the Patient Root model every retrieval names its patient, and one at the
+//!   PATIENT level sends every study of that patient.
 //! - **Where**: for a C-MOVE, to a destination of the configuration, by its AE title; any
 //!   other is Refused: Move Destination unknown (A801).
 //! - **Responses**: a Pending one after each sub-operation with the Remaining, Completed,
@@ -21,16 +23,16 @@ use dicom_object::InMemDicomObject;
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use dicom_ul::association::{Association, AsyncAssociation};
 use dicom_ul::pdu::PresentationContextResultReason;
-use pacs_index::{Index, InstanceEntry, Kind, Match};
+use pacs_index::{Index, InstanceEntry, Key, Kind, Match, StudySearch};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::find::Level;
+use super::find::{Level, Model, one_patient_id};
 use super::operation::{After, Interruption, Refusal, interruption, refusal};
 use super::{Destination, Request};
 use crate::ae::AeTitle;
 use crate::command::{self, Command, DATA_SET_PRESENT, field, tag};
 use crate::message::{self, DataSet, Incoming, MessageError};
-use crate::query::STUDY_ROOT_GET;
+use crate::query::{PATIENT_ROOT_GET, PATIENT_ROOT_MOVE, STUDY_ROOT_GET};
 use crate::scu::retrieve::STUDY_ROOT_MOVE;
 use crate::scu::store::{Accepted, Originator, SendError, Sender, c_store_rq, encoded, stored};
 use crate::status::{Status, StatusClass};
@@ -38,18 +40,30 @@ use crate::{Config, RemoteAe};
 
 /// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-MOVE on.
 pub(super) fn is_move(sop_class: &str) -> bool {
-    sop_class == STUDY_ROOT_MOVE
+    matches!(sop_class, PATIENT_ROOT_MOVE | STUDY_ROOT_MOVE)
+}
+
+/// The model a MOVE or a GET SOP class is of.
+fn model_of(sop_class: &str) -> Option<Model> {
+    match sop_class {
+        PATIENT_ROOT_MOVE | PATIENT_ROOT_GET => Some(Model::PatientRoot),
+        STUDY_ROOT_MOVE | STUDY_ROOT_GET => Some(Model::StudyRoot),
+        _ => None,
+    }
 }
 
 /// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-GET on.
 pub(super) fn is_get(sop_class: &str) -> bool {
-    sop_class == STUDY_ROOT_GET
+    matches!(sop_class, PATIENT_ROOT_GET | STUDY_ROOT_GET)
 }
 
 /// What a retrieval asks for: the Unique Keys of its Identifier (PS3.4 C.4.2.1.4.1).
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Selection {
-    /// One study, or at the STUDY level any number.
+    /// In the Patient Root model, the patient whose studies these are.
+    patient: Option<String>,
+    /// One study, or at the STUDY level any number; none at the PATIENT level, which is
+    /// every study of the patient.
     studies: Vec<String>,
     /// At the SERIES level the series of the one study; at the IMAGE level one series.
     series: Vec<String>,
@@ -58,7 +72,7 @@ pub(super) struct Selection {
 }
 
 impl Selection {
-    pub(super) fn parse(identifier: &InMemDicomObject) -> Result<Selection, Refusal> {
+    pub(super) fn parse(identifier: &InMemDicomObject, model: Model) -> Result<Selection, Refusal> {
         let mismatch = |comment: String, tag: Tag| {
             refusal(
                 Status::IDENTIFIER_DOES_NOT_MATCH_SOP_CLASS,
@@ -73,12 +87,23 @@ impl Selection {
                 .map(|value| value.trim_matches([' ', '\0']).to_owned())
                 .unwrap_or_default()
         };
-        let level = Level::named(&text(tags::QUERY_RETRIEVE_LEVEL)).ok_or_else(|| {
-            mismatch(
-                "Query/Retrieve Level is STUDY, SERIES or IMAGE in the Study Root model".into(),
-                tags::QUERY_RETRIEVE_LEVEL,
-            )
-        })?;
+        let level = Level::named(model, &text(tags::QUERY_RETRIEVE_LEVEL))
+            .ok_or_else(|| mismatch(model.levels().into(), tags::QUERY_RETRIEVE_LEVEL))?;
+        // in the Patient Root model the patient is the Unique Key of the top level: one
+        // value, whatever is retrieved (C.4.2.1.4.1, note)
+        let patient = match model {
+            Model::StudyRoot => None,
+            Model::PatientRoot => {
+                let value = text(tags::PATIENT_ID);
+                let one = one_patient_id(&value).ok_or_else(|| {
+                    mismatch(
+                        format!("{} level needs one Patient ID", level.name()),
+                        tags::PATIENT_ID,
+                    )
+                })?;
+                Some(one.to_owned())
+            }
+        };
         // the Unique Key of the level retrieved may be a list of UID; of a level above it
         // is a single value (C.4.2.1.4.1, note)
         let uids = |tag: Tag, name: &str, several: bool| -> Result<Vec<String>, Refusal> {
@@ -96,13 +121,17 @@ impl Selection {
                 Err(e) => Err(mismatch(format!("{name}: {e}"), tag)),
             }
         };
-        let studies = uids(
-            tags::STUDY_INSTANCE_UID,
-            "Study Instance UID",
-            level == Level::Study,
-        )?;
+        let studies = match level {
+            // every study of the patient
+            Level::Patient => Vec::new(),
+            _ => uids(
+                tags::STUDY_INSTANCE_UID,
+                "Study Instance UID",
+                level == Level::Study,
+            )?,
+        };
         let series = match level {
-            Level::Study => Vec::new(),
+            Level::Patient | Level::Study => Vec::new(),
             _ => uids(
                 tags::SERIES_INSTANCE_UID,
                 "Series Instance UID",
@@ -114,33 +143,58 @@ impl Selection {
             _ => Vec::new(),
         };
         Ok(Selection {
+            patient,
             studies,
             series,
             instances,
         })
     }
 
-    /// The instances selected, as `index` shows them: a study it does not show, or a
-    /// series or an instance that is not under the keys above it, has none.
+    /// The studies selected that are there for `index` and, when a patient is named, are
+    /// that patient's: all of the patient's when no study is named.
+    async fn studies(&self, index: &Index) -> Result<Vec<String>, pacs_index::Error> {
+        let Some(patient) = &self.patient else {
+            return Ok(self.studies.clone());
+        };
+        let theirs = index
+            .search_studies(&StudySearch {
+                keys: vec![Key {
+                    tag: "00100020",
+                    kind: Kind::Text,
+                    asked: Match::Is(patient.clone()),
+                }],
+                ..StudySearch::default()
+            })
+            .await?;
+        Ok(theirs
+            .into_iter()
+            .map(|study| study.study_instance_uid)
+            .filter(|uid| self.studies.is_empty() || self.studies.contains(uid))
+            .collect())
+    }
+
+    /// The instances selected, as `index` shows them: a study it does not show or that is
+    /// another patient's than the one named, or a series or an instance that is not under
+    /// the keys above it, has none.
     pub(super) async fn instances(
         &self,
         index: &Index,
     ) -> Result<Vec<InstanceEntry>, pacs_index::Error> {
+        let studies = self.studies(index).await?;
         let mut selected = Vec::new();
+        let Some(study) = studies.first() else {
+            return Ok(selected);
+        };
         if !self.instances.is_empty() {
             for instance in &self.instances {
-                selected.extend(
-                    index
-                        .instance(&self.studies[0], &self.series[0], instance)
-                        .await?,
-                );
+                selected.extend(index.instance(study, &self.series[0], instance).await?);
             }
         } else if !self.series.is_empty() {
             for series in &self.series {
-                selected.extend(index.instances(&self.studies[0], series, None).await?);
+                selected.extend(index.instances(study, series, None).await?);
             }
         } else {
-            for study in &self.studies {
+            for study in &studies {
                 for series in index.series(study, None).await? {
                     selected.extend(
                         index
@@ -353,7 +407,14 @@ fn selection(
         .get(request.transfer_syntax)
         .ok_or_else(|| unreadable(format!("transfer syntax {}", request.transfer_syntax)))?;
     let identifier = crate::scu::read_identifier(&bytes, ts).map_err(unreadable)?;
-    Selection::parse(&identifier)
+    let model = model_of(request.abstract_syntax).ok_or_else(|| {
+        refusal(
+            Status::SOP_CLASS_NOT_SUPPORTED,
+            format!("SOP Class {} has no {operation}", request.abstract_syntax),
+            None,
+        )
+    })?;
+    Selection::parse(&identifier, model)
 }
 
 /// The instances a retrieval sends, as `index` shows them; an index that fails is Refused:
@@ -847,16 +908,17 @@ mod tests {
             tags::SERIES_INSTANCE_UID,
             tags::SOP_INSTANCE_UID,
         );
-        let studies = Selection::parse(&identifier("STUDY", &[(study, "1.2\\1.3\\1.2")])).unwrap();
+        let parse = |identifier: &InMemDicomObject| Selection::parse(identifier, Model::StudyRoot);
+        let studies = parse(&identifier("STUDY", &[(study, "1.2\\1.3\\1.2")])).unwrap();
         assert_eq!(studies.studies, ["1.2", "1.3"]);
         assert!(studies.series.is_empty() && studies.instances.is_empty());
-        let series_of = Selection::parse(&identifier(
+        let series_of = parse(&identifier(
             "SERIES",
             &[(study, "1.2"), (series, "1.2.1\\1.2.2")],
         ))
         .unwrap();
         assert_eq!(series_of.series, ["1.2.1", "1.2.2"]);
-        let images = Selection::parse(&identifier(
+        let images = parse(&identifier(
             "IMAGE",
             &[
                 (study, "1.2"),
@@ -901,10 +963,61 @@ mod tests {
                 instance,
             ),
         ] {
-            let refused = Selection::parse(&bad).unwrap_err();
+            let refused = parse(&bad).unwrap_err();
             assert_eq!(refused.status, Status::IDENTIFIER_DOES_NOT_MATCH_SOP_CLASS);
             assert_eq!(refused.offending, Some(offending), "{}", refused.comment);
         }
+    }
+
+    /// PS3.4 C.6.1.1.6: in the Patient Root model a retrieval names its patient, by one
+    /// Patient ID, and may be of the patient whole.
+    #[test]
+    fn the_unique_keys_of_a_retrieval_in_the_patient_root_model() {
+        let (patient, study, series) = (
+            tags::PATIENT_ID,
+            tags::STUDY_INSTANCE_UID,
+            tags::SERIES_INSTANCE_UID,
+        );
+        let parse =
+            |identifier: &InMemDicomObject| Selection::parse(identifier, Model::PatientRoot);
+        let whole = parse(&identifier("PATIENT", &[(patient, "P-1")])).unwrap();
+        assert_eq!(whole.patient.as_deref(), Some("P-1"));
+        assert!(whole.studies.is_empty() && whole.series.is_empty());
+        let studies = parse(&identifier(
+            "STUDY",
+            &[(patient, "P-1"), (study, "1.2\\1.3")],
+        ))
+        .unwrap();
+        assert_eq!(studies.studies, ["1.2", "1.3"]);
+        let one = parse(&identifier(
+            "SERIES",
+            &[(patient, "P-1"), (study, "1.2"), (series, "1.2.1")],
+        ))
+        .unwrap();
+        assert_eq!((one.patient.as_deref(), one.series.len()), (Some("P-1"), 1));
+
+        for (bad, offending) in [
+            // no patient, at any level
+            (identifier("PATIENT", &[]), patient),
+            (identifier("STUDY", &[(study, "1.2")]), patient),
+            // one patient, not a list, not a pattern
+            (identifier("PATIENT", &[(patient, "P-1\\P-2")]), patient),
+            (identifier("PATIENT", &[(patient, "P-*")]), patient),
+            (identifier("STUDY", &[(patient, "P-1")]), study),
+        ] {
+            let refused = parse(&bad).unwrap_err();
+            assert_eq!(refused.status, Status::IDENTIFIER_DOES_NOT_MATCH_SOP_CLASS);
+            assert_eq!(refused.offending, Some(offending), "{}", refused.comment);
+        }
+        // the Study Root model has no PATIENT level, and asks for no patient
+        let refused = Selection::parse(
+            &identifier("PATIENT", &[(patient, "P-1")]),
+            Model::StudyRoot,
+        )
+        .unwrap_err();
+        assert_eq!(refused.offending, Some(tags::QUERY_RETRIEVE_LEVEL));
+        let without = Selection::parse(&identifier("STUDY", &[(study, "1.2")]), Model::StudyRoot);
+        assert_eq!(without.unwrap().patient, None);
     }
 
     #[test]
