@@ -60,6 +60,24 @@ in `PACS_TEST_DCMTK_BIN`) and a Python with pynetdicom (`PACS_TEST_PYTHON`, defa
 cargo test -p pacs-dimse --test interop -- --ignored
 ```
 
+## Test data
+
+The tests of query and retrieve over DIMSE store, search and send **real DICOM**: two files
+made by scanners, a CT and an MR, taken unchanged from pydicom's test data
+(`crates/pacs-core/tests/data/pydicom`, with their origin and terms). They are read by
+`pacs_core::real::RealSeries` (feature `real`, for tests only). To get several patients,
+studies and series out of one image, it writes the file under other identifiers: the UIDs,
+the Patient ID, the Accession Number, the Study ID, the series and instance numbers, and
+what a test sets by name (a patient's name, a study's date, a modality). The pixel data and
+every other attribute are the scanner's, and the tests compare what arrives with those
+pixels. A test that searches thousands of studies and retrieves none fills the index with
+the file's header alone.
+
+The sample study of `docs/sample` is for the documentation, not for tests: its pixels are
+real, but its DICOM headers were written by a script. Older tests use
+`pacs_core::synthetic::SyntheticSeries`, which makes small images up; their conversion is
+separate work.
+
 ## TLS to Postgres
 
 `the_index_over_tls` (`crates/pacs-server/tests/server.rs`) needs a Postgres that speaks TLS

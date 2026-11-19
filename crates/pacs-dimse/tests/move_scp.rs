@@ -12,7 +12,7 @@ use common::*;
 use dicom_core::{Tag, VR};
 use dicom_dictionary_std::tags;
 use pacs_archive::Archive;
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_deid::{Keys, Profile};
 use pacs_dimse::command::{Command, NO_DATA_SET, field, tag};
 use pacs_dimse::message::{self, Incoming};
@@ -45,13 +45,13 @@ async fn viewer(addr: std::net::SocketAddr, called: &str) -> Client {
 
 /// Doe's study of a CT series (seed 601, two slices) and an MR one (602, three), and
 /// Roe's CT (603, one).
-async fn two_studies(archive: &Archive) -> [SyntheticSeries; 3] {
+async fn two_studies(archive: &Archive) -> [RealSeries; 3] {
     let series = [
-        SyntheticSeries::new(601, 2).with_patient("Doe^Jane", None),
-        SyntheticSeries::new(602, 3)
+        RealSeries::new(601, 2).with_patient("Doe^Jane", None),
+        RealSeries::new(602, 3)
             .in_study(601, 2)
             .with_patient("Doe^Jane", None),
-        SyntheticSeries::new(603, 1).with_patient("Roe^Richard", None),
+        RealSeries::new(603, 1).with_patient("Roe^Richard", None),
     ];
     for one in &series {
         ingest(archive, one).await;
@@ -64,7 +64,7 @@ fn keys(level: &str, keys: &[(Tag, &str)]) -> dicom_object::InMemDicomObject {
     identifier(level, &keys)
 }
 
-fn study(series: &SyntheticSeries) -> dicom_object::InMemDicomObject {
+fn study(series: &RealSeries) -> dicom_object::InMemDicomObject {
     keys("STUDY", &[(tags::STUDY_INSTANCE_UID, &series.study_uid())])
 }
 
@@ -179,7 +179,7 @@ async fn series_instances_and_several_studies_are_selected_by_their_unique_keys(
         (moved.status(), uids)
     };
     let study_uid = ct.study_uid();
-    let of = |series: &SyntheticSeries, slices: std::ops::Range<u32>| -> Vec<String> {
+    let of = |series: &RealSeries, slices: std::ops::Range<u32>| -> Vec<String> {
         slices.map(|slice| series.instance_uid(slice)).collect()
     };
 
@@ -465,35 +465,10 @@ async fn a_destination_that_does_not_answer_is_a702_with_every_instance_failed()
 async fn what_the_destination_does_not_take_fails_and_the_move_ends_in_a_warning() {
     let archive = archive().await;
     // a study of a CT series and an MR series: SOP classes CT and MR
-    let ct = SyntheticSeries::new(611, 2);
+    let ct = RealSeries::new(611, 2);
     ingest(&archive, &ct).await;
-    let mut mr_files = Vec::new();
-    let mr = SyntheticSeries::new(612, 2).in_study(611, 2);
-    for slice in 0..2 {
-        // the same slices under the MR Image Storage SOP class
-        let mut object = dicom_object::from_reader(&*mr.slice_bytes(slice)).unwrap();
-        object.put(dicom_core::DataElement::new(
-            tags::SOP_CLASS_UID,
-            VR::UI,
-            dicom_core::PrimitiveValue::from(MR),
-        ));
-        let meta = dicom_object::FileMetaTableBuilder::new()
-            .transfer_syntax(EXPLICIT_VR_LE)
-            .media_storage_sop_class_uid(MR)
-            .media_storage_sop_instance_uid(mr.instance_uid(slice))
-            .build()
-            .unwrap();
-        let mut bytes = Vec::new();
-        object
-            .into_inner()
-            .with_exact_meta(meta)
-            .write_all(&mut bytes)
-            .unwrap();
-        mr_files.push(bytes);
-    }
-    for file in mr_files {
-        archive.ingest(file.into()).await.unwrap();
-    }
+    let mr = RealSeries::mr(612, 2).in_study(611, 2);
+    ingest(&archive, &mr).await;
 
     // a destination that takes CT only: the MR instances are not sent
     let (destination, received) = storage_scp(&[CT], &[EXPLICIT_VR_LE], Peer::Answers(&[])).await;
@@ -657,10 +632,10 @@ async fn a_cancel_stops_the_sub_operations() {
 #[tokio::test]
 async fn a_project_ae_title_sends_only_its_project() {
     let archive = archive().await;
-    let received_as_is = SyntheticSeries::new(621, 2).with_patient("Identified^Ida", None);
+    let received_as_is = RealSeries::new(621, 2).with_patient("Identified^Ida", None);
     ingest(&archive, &received_as_is).await;
     let liver = archive.clone().for_project("liver-2026");
-    let in_liver = SyntheticSeries::new(622, 2).with_patient("PSEUDO-1", None);
+    let in_liver = RealSeries::new(622, 2).with_patient("PSEUDO-1", None);
     ingest(&liver, &in_liver).await;
     let (destination, received) = storage_scp(ALL, &[EXPLICIT_VR_LE], Peer::Answers(&[])).await;
     let project = Project {

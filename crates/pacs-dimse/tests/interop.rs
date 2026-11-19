@@ -15,6 +15,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
 use common::*;
+use pacs_core::real::RealSeries;
 use pacs_core::synthetic::SyntheticSeries;
 use pacs_dimse::{AeTitle, RemoteAe, StudyQuery};
 
@@ -64,12 +65,23 @@ fn files(seed: u32, slices: u32) -> (tempfile::TempDir, Vec<PathBuf>, SyntheticS
     (dir, paths, series)
 }
 
+/// A port for a tool that is told where to listen. Not one the system gives out by itself
+/// (a listener bound to port 0 here, a tool's outgoing connection), which could take it
+/// between this check and the tool's start: one below that range, and a different one at
+/// each call.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    // 20000 to 29999 is under the ephemeral range of Linux, macOS and Windows; where this
+    // process starts in it depends on its ID, for two runs at once
+    let start = (std::process::id() % 5000) as u16 * 2;
+    for _ in 0..10_000 {
+        let port = 20_000 + (start + NEXT.fetch_add(1, Ordering::Relaxed)) % 10_000;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port between 20000 and 29999");
 }
 
 /// Wait until something listens on `port`.
@@ -684,16 +696,16 @@ fn answering(callers: &[&str]) -> pacs_dimse::Config {
 }
 
 /// Doe's CT of two series and Roe's MR, in `archive`.
-async fn two_studies(archive: &pacs_archive::Archive) -> [SyntheticSeries; 3] {
+async fn two_studies(archive: &pacs_archive::Archive) -> [RealSeries; 3] {
     let series = [
-        SyntheticSeries::new(401, 2)
+        RealSeries::new(401, 2)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(402, 3)
+        RealSeries::new(402, 3)
             .in_study(401, 2)
             .with_patient("Doe^Jane", None)
             .at("20260105", "100000"),
-        SyntheticSeries::new(403, 1)
+        RealSeries::new(403, 1)
             .with_patient("Roe^Richard", None)
             .at("20260106", "120000")
             .of_modality("MR"),
@@ -786,7 +798,7 @@ async fn dcmtk_findscu_queries_the_three_levels() {
     for (tag, expected) in [
         (tags::STUDY_INSTANCE_UID, doe.study_uid()),
         (tags::PATIENT_NAME, "Doe^Jane".into()),
-        (tags::PATIENT_ID, "SYN401".into()),
+        (tags::PATIENT_ID, "NEMA-401".into()),
         (tags::STUDY_DATE, "20260105".into()),
         (tags::MODALITIES_IN_STUDY, "CT".into()),
         (tags::NUMBER_OF_STUDY_RELATED_INSTANCES, "5".into()),
@@ -928,7 +940,7 @@ async fn dcmtk_findscu_cancels_in_the_middle() {
     const STUDIES: u32 = 2500;
     let archive = archive().await;
     for seed in 0..STUDIES {
-        ingest(&archive, &SyntheticSeries::new(30_000 + seed, 1)).await;
+        index_only(&archive, &RealSeries::new(30_000 + seed, 1)).await;
     }
     let server = start(answering(&["FINDSCU"]), archive).await;
     let addr = gate(server, 2048, 2).await;
@@ -957,7 +969,7 @@ async fn pynetdicom_queries_the_three_levels() {
     let [doe, report, _] = two_studies(&archive).await;
     ingest(
         &archive,
-        &SyntheticSeries::new(404, 1).with_patient("Benaïssa^Amel", Some("ISO_IR 192")),
+        &RealSeries::new(404, 1).with_patient("Benaïssa^Amel", Some("ISO_IR 192")),
     )
     .await;
     let addr = start(answering(&["PYNETDICOM"]), archive).await;
@@ -1005,7 +1017,7 @@ names = [str(i.PatientName) for s, i in assoc.send_c_find(ds, FIND) if s.Status 
 assert names == ["Benaïssa^Amel"], names
 
 # a key pacs-rs does not have: left out, and the status says so
-found, last = find(assoc, QueryRetrieveLevel="STUDY", PatientID="SYN401", StudyInstanceUID="",
+found, last = find(assoc, QueryRetrieveLevel="STUDY", PatientID="NEMA-401", StudyInstanceUID="",
                    AdmittingDiagnosesDescription="")
 assert last == 0x0000 and [s for s, _ in found] == [0xFF01], (found, last)
 assert "AdmittingDiagnosesDescription" not in found[0][1], found[0][1]
@@ -1020,7 +1032,7 @@ found, last = find(assoc, QueryRetrieveLevel="IMAGE", StudyInstanceUID=study,
                    SeriesInstanceUID=second, SOPInstanceUID="", InstanceNumber="", Rows=None)
 assert last == 0x0000, hex(last)
 assert [i.InstanceNumber for _, i in found] == [1, 2, 3], found
-assert all(i.Rows == 4 and i.StudyInstanceUID == study for _, i in found), found
+assert all(i.Rows == 128 and i.StudyInstanceUID == study for _, i in found), found
 
 # a SERIES query without its study: the Identifier does not match the SOP class
 found, last = find(assoc, QueryRetrieveLevel="SERIES", SeriesInstanceUID="")
@@ -1055,15 +1067,12 @@ assoc.release()
 async fn compressed_series(
     seed: u32,
     slices: u32,
-) -> (
-    SyntheticSeries,
-    Vec<(pacs_index::InstanceEntry, bytes::Bytes)>,
-) {
+) -> (RealSeries, Vec<(pacs_index::InstanceEntry, bytes::Bytes)>) {
     let archive = pacs_archive::Archive::new(
         pacs_store::Store::memory(),
         pacs_index::Index::in_memory().await.unwrap(),
     );
-    let series = SyntheticSeries::new(seed, slices);
+    let series = RealSeries::new(seed, slices);
     ingest(&archive, &series).await;
     let entries = archive
         .index()
@@ -1264,7 +1273,7 @@ def on_store(event):
     assert event.context.transfer_syntax == ImplicitVRLittleEndian
     ds = event.dataset
     ds.file_meta = event.file_meta
-    assert ds.Rows == 4 and ds.Columns == 4, (ds.Rows, ds.Columns)
+    assert ds.Rows == 128 and ds.Columns == 128, (ds.Rows, ds.Columns)
     # the pixels as pydicom reads them, 16 bits little endian, for the test to compare
     raw = ds.PixelData
     values = [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)]
@@ -1301,14 +1310,14 @@ ae.start_server(("127.0.0.1", port), block=True, evt_handlers=[(evt.EVT_C_STORE,
 
 /// An archive that compresses (JPEG-LS lossless) with Doe's study in it: a series of two
 /// slices and one of three.
-async fn archive_to_retrieve_from() -> (pacs_archive::Archive, [SyntheticSeries; 2]) {
+async fn archive_to_retrieve_from() -> (pacs_archive::Archive, [RealSeries; 2]) {
     let archive = pacs_archive::Archive::new(
         pacs_store::Store::memory(),
         pacs_index::Index::in_memory().await.unwrap(),
     );
     let series = [
-        SyntheticSeries::new(91, 2).with_patient("Doe^Jane", None),
-        SyntheticSeries::new(92, 3)
+        RealSeries::new(91, 2).with_patient("Doe^Jane", None),
+        RealSeries::new(92, 3)
             .in_study(91, 2)
             .with_patient("Doe^Jane", None),
     ];
@@ -1334,7 +1343,7 @@ fn retrieving(caller: &str, destination: &str, port: u16) -> pacs_dimse::Config 
 }
 
 /// The pixels each instance of `series` must have, by SOP Instance UID, sorted.
-fn expected_pixels(series: &[SyntheticSeries]) -> Vec<(String, Vec<u16>)> {
+fn expected_pixels(series: &[RealSeries]) -> Vec<(String, Vec<u16>)> {
     let mut expected: Vec<(String, Vec<u16>)> = series
         .iter()
         .flat_map(|one| {
@@ -1728,7 +1737,7 @@ assoc.release()
 async fn dcmtk_tools_query_and_retrieve_on_the_patient_root_model() {
     use dicom_dictionary_std::tags;
     let (archive, series) = archive_to_retrieve_from().await;
-    let other = SyntheticSeries::new(93, 1).with_patient("Roe^Richard", None);
+    let other = RealSeries::new(93, 1).with_patient("Roe^Richard", None);
     ingest(&archive, &other).await;
     let receiving = free_port();
     let mut config = retrieving("DCMTK", "DCMTK", receiving);
@@ -1833,7 +1842,7 @@ async fn dcmtk_tools_query_and_retrieve_on_the_patient_root_model() {
 #[ignore = "needs pynetdicom"]
 async fn pynetdicom_queries_and_retrieves_on_the_patient_root_model() {
     let (archive, series) = archive_to_retrieve_from().await;
-    let other = SyntheticSeries::new(94, 1).with_patient("Roe^Richard", None);
+    let other = RealSeries::new(94, 1).with_patient("Roe^Richard", None);
     ingest(&archive, &other).await;
     let addr = start(answering(&["PYNETDICOM"]), archive).await;
     let script = r#"

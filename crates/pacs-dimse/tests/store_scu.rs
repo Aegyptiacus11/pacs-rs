@@ -11,7 +11,7 @@ use common::*;
 use dicom_dictionary_std::tags;
 use dicom_object::InMemDicomObject;
 use pacs_archive::{Archive, Compression};
-use pacs_core::synthetic::SyntheticSeries;
+use pacs_core::real::RealSeries;
 use pacs_dimse::command::{field, tag};
 use pacs_dimse::{AeTitle, Originator, RemoteAe, SendError, Sender, Status};
 use pacs_index::Index;
@@ -27,7 +27,7 @@ async fn archive_with(compression: Compression) -> Archive {
 /// What the index says of `series`' instances, and their stored files.
 async fn stored(
     archive: &Archive,
-    series: &SyntheticSeries,
+    series: &RealSeries,
 ) -> Vec<(pacs_index::InstanceEntry, bytes::Bytes)> {
     ingest(archive, series).await;
     let entries = archive
@@ -98,7 +98,7 @@ fn pixels(object: &InMemDicomObject) -> Vec<u16> {
 #[tokio::test]
 async fn an_instance_goes_as_stored_when_the_peer_takes_its_syntax() {
     let archive = archive_with(Compression::JpegLs).await;
-    let series = SyntheticSeries::new(501, 2);
+    let series = RealSeries::new(501, 2);
     let files = stored(&archive, &series).await;
     assert_eq!(files[0].0.transfer_syntax_uid, JPEG_LS);
     let (remote, received) =
@@ -139,7 +139,7 @@ async fn an_instance_goes_as_stored_when_the_peer_takes_its_syntax() {
 #[tokio::test]
 async fn a_compressed_instance_is_decoded_for_a_peer_that_takes_only_the_default_syntax() {
     let archive = archive_with(Compression::JpegLs).await;
-    let series = SyntheticSeries::new(502, 2).with_patient("Doe^Jane", None);
+    let series = RealSeries::new(502, 2).with_patient("Doe^Jane", None);
     let files = stored(&archive, &series).await;
     let (remote, received) = storage_scp(&[CT], &[IMPLICIT_VR_LE], Peer::Answers(&[])).await;
     let originator = Originator {
@@ -185,7 +185,7 @@ async fn a_compressed_instance_is_decoded_for_a_peer_that_takes_only_the_default
 #[tokio::test]
 async fn an_uncompressed_instance_is_written_in_the_syntax_the_peer_takes() {
     let archive = archive_with(Compression::Off).await;
-    let series = SyntheticSeries::new(503, 1);
+    let series = RealSeries::new(503, 1);
     let files = stored(&archive, &series).await;
     assert_eq!(files[0].0.transfer_syntax_uid, EXPLICIT_VR_LE);
     let (remote, received) = storage_scp(&[CT], &[IMPLICIT_VR_LE], Peer::Answers(&[])).await;
@@ -201,7 +201,10 @@ async fn an_uncompressed_instance_is_written_in_the_syntax_the_peer_takes() {
     assert_eq!(received[0].transfer_syntax, IMPLICIT_VR_LE);
     let object = received[0].object();
     assert_eq!(pixels(&object), series.pixels(0, 0));
-    assert_eq!(object.get(tags::ROWS).unwrap().to_int::<u16>().unwrap(), 4);
+    assert_eq!(
+        object.get(tags::ROWS).unwrap().to_int::<u16>().unwrap(),
+        128
+    );
 }
 
 /// PS3.4 C.4.2.3.1: an instance whose SOP class the peer accepted no context for is not
@@ -210,7 +213,7 @@ async fn an_uncompressed_instance_is_written_in_the_syntax_the_peer_takes() {
 #[tokio::test]
 async fn what_the_peer_does_not_take_fails_alone() {
     let archive = archive_with(Compression::Off).await;
-    let ct = SyntheticSeries::new(504, 3);
+    let ct = RealSeries::new(504, 3);
     let mut files = stored(&archive, &ct).await;
     // an instance of a SOP class the peer does not have, between the others
     let mut mr = files[0].clone();
@@ -250,7 +253,7 @@ async fn what_the_peer_does_not_take_fails_alone() {
 #[tokio::test]
 async fn a_peer_that_cannot_be_sent_to_is_an_error() {
     let archive = archive_with(Compression::Off).await;
-    let files = stored(&archive, &SyntheticSeries::new(505, 2)).await;
+    let files = stored(&archive, &RealSeries::new(505, 2)).await;
 
     let (takes_mr_only, _) = storage_scp(&[MR], &[EXPLICIT_VR_LE], Peer::Answers(&[])).await;
     // an association with no presentation context accepted is not one (dicom-ul ends it)
@@ -282,7 +285,7 @@ async fn a_peer_that_cannot_be_sent_to_is_an_error() {
 #[tokio::test]
 async fn a_series_sent_to_another_pacs_rs_arrives_whole() {
     let here = archive_with(Compression::JpegLs).await;
-    let series = SyntheticSeries::new(506, 3);
+    let series = RealSeries::new(506, 3);
     let files = stored(&here, &series).await;
     let there = archive().await;
     let addr = start(config(), there.clone()).await;
