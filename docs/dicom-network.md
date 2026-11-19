@@ -48,7 +48,7 @@ to it, and a user when it sends a study on.
 | Message | What it asks | pacs-rs as provider | pacs-rs as user |
 |---|---|---|---|
 | C-ECHO | "are you there?" (PS3.4 Annex A) | yes | yes: `POST /modalities/{id}/echo` |
-| C-STORE | "keep this instance" (PS3.4 Annex B) | yes, into the archive | not yet |
+| C-STORE | "keep this instance" (PS3.4 Annex B) | yes, into the archive | built, and nothing sends yet: [sending](dimse.md#sending) |
 | C-FIND | "which studies match?" (PS3.4 Annex C) | yes, to the AEs it knows: [being searched](dimse.md#being-searched) | yes: `GET /modalities/{id}/studies` |
 | C-MOVE | "send these studies to that AE title" (PS3.4 Section C.4.2) | not yet | yes: `POST /modalities/{id}/move` |
 | C-GET | "send these studies to me, on this association" (PS3.4 Section C.4.3) | not yet | not yet |
