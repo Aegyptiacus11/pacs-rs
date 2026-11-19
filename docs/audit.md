@@ -59,6 +59,8 @@ About DIMSE and the remote AEs:
 |---|---|
 | DICOM Instances Transferred, to the server | an association is over: one line per study stored through it by C-STORE, from the calling AE title to the called one, with the number of instances of each SOP class |
 | Security Alert, Node Authentication | a connection that did not become an association: an AE title that is not recognized, the limit of associations reached. Once per address and reason in 15 minutes |
+| Query, of this server | a C-FIND it answered: the calling AE title asks, the called one answers; with the Information Model as the SOP Class queried, the Identifier as it was sent and its transfer syntax (A.5.3.10). Written when the Identifier was refused too, as a failure |
+| Security Alert, Access Control Decision | a C-FIND from an AE title the server does not answer the queries of. Once per address and AE title in 15 minutes |
 | Query, of a remote AE | `GET /modalities/{id}/studies` (C-FIND): this server asks, the remote AE answers, the caller is the requestor. Written when the remote AE fails too, as a failure |
 | Begin Transferring DICOM Instances | `POST /modalities/{id}/move` (C-MOVE): the remote AE is asked to send studies here, one line per study. Their arrival is the first event of this table |
 

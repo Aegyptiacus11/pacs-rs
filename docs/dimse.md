@@ -4,7 +4,8 @@ New to the protocol? [DICOM: the network](dicom-network.md) explains the words u
 
 Off unless `PACS_DIMSE_LISTEN` names an address. What works now is steps 1 to 4 of
 [the plan for hospital interfaces](interop.md), a research PACS that pulls studies from a
-hospital's PACS and de-identifies them on ingest:
+hospital's PACS and de-identifies them on ingest, and the first part of step 8: other
+applications can search pacs-rs.
 
 - **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the AEs of
   `PACS_DIMSE_REMOTES`, through `POST /modalities/{id}/echo`, to test a hospital link.
@@ -29,6 +30,8 @@ hospital's PACS and de-identifies them on ingest:
   `Progress` in percent and the Remaining, Completed, Failed and Warning counts of the latest
   Pending response; `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ with the next one. Jobs are
   kept in memory, the latest hundred finished ones with them; a restart forgets them.
+- **C-FIND SCP**, Study Root, at the STUDY, SERIES and IMAGE levels: [Being
+  searched](#being-searched) below.
 - **C-STORE SCP** for the 173 Storage SOP Classes of PS3.4 Table B.5-1 (DICOM 2026d), in any
   transfer syntax dicom-rs reads. Each data set is kept in the transfer syntax it came in, with
   file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
@@ -54,12 +57,79 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 | `C002` Cannot understand | the UIDs contradict the archive (an instance already in another series) |
 | `0122` SOP Class not supported | a SOP class pacs-rs does not have |
 | `0212` Mistyped argument | a SOP class not the one agreed for the presentation context |
-| `0211` Unrecognized operation | an operation pacs-rs does not provide (C-FIND, C-MOVE, C-GET for now) |
+| `0211` Unrecognized operation | an operation pacs-rs does not provide (C-MOVE, C-GET for now), or one the SOP class does not have |
 
-Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`) and pynetdicom 3.0.4,
+Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
-into a project shows there de-identified. Not yet: Patient Root, C-GET, C-STORE SCU. The order is
-in [the hospital interfaces plan](interop.md).
+into a project shows there de-identified. Not yet: retrieving from pacs-rs (C-MOVE and C-GET
+as SCP), Patient Root, C-GET as SCU, C-STORE SCU. The order is in [the hospital interfaces
+plan](interop.md).
+
+## Being searched
+
+A viewer or a workstation searches pacs-rs with C-FIND on the Study Root Query/Retrieve
+Information Model (PS3.4 C.6.2), as it searches any archive:
+
+```bash
+findscu -S -aet VIEWER -aec PACSRS -k QueryRetrieveLevel=STUDY \
+  -k "PatientName=DOE*" -k StudyDate=20260101-20260131 -k StudyInstanceUID pacs.example 11112
+```
+
+- **Who is answered**: the AE titles of `PACS_DIMSE_REMOTES`. Another caller gets `0124`
+  Refused: Not authorized, and can still send and echo. An AE title is a claim, not a
+  proof: who may connect at all is for [TLS](#dimse-over-tls) with client certificates to
+  settle.
+- **What is seen** depends on the AE title that is called, since DIMSE has no accounts.
+  pacs-rs's own AE title (and the extra ones) shows every study. A
+  [project's](de-identification.md) AE title shows the studies of that project and no
+  other, as an account [limited to that project](login.md#rights-per-project) sees them
+  over HTTP: a study outside it is not found, at any level.
+- **The search** is the hierarchical one (PS3.4 C.4.1.3.1.1): studies; a study's series,
+  with its Study Instance UID; a series' instances, with both UIDs. Relational queries are
+  not negotiated.
+- **Matching** is the same as [QIDO-RS](dicomweb.md#searching) does, by the same code
+  (PS3.4 C.2.2.2): single value, list of UID, universal, wild card (`*`, `?`), range, and
+  sequence matching. Names match without regard to case, the rest with; dates and times by
+  their meaning. A range of dates and a range of times are read apart. Empty value and
+  multiple value matching are not negotiated: two values in a key that is not a UID are
+  refused.
+- **One Pending response per match**, each with the keys that were asked for, Query/Retrieve
+  Level, the Unique Keys of the levels above, and Retrieve AE Title, which is the AE title
+  that was called. A key the entity has no value for comes back empty. Text is answered in
+  UTF-8 (Specific Character Set `ISO_IR 192`) when it is not plain ASCII, whatever the
+  files were written in.
+- **Studies are read from a cursor over the index**, a page of rows at a time, so a search
+  that matches every study of a large archive costs no more memory than a small one. A
+  study's series and a series' instances are read whole, then matched.
+- **C-CANCEL-FIND-RQ** is looked for between two responses, and ends the search with status
+  Cancel.
+- **The [audit trail](audit.md#what-is-recorded)** has each search as a Query, with the
+  Identifier as it was sent.
+
+| Level | Keys |
+|---|---|
+| STUDY | Study Instance UID, Study Date, Study Time, Accession Number, Patient's Name, Patient ID, Study ID; and Modalities in Study, Referring Physician's Name, Study Description, Patient's Birth Date, Patient's Sex, Number of Study Related Series, Number of Study Related Instances |
+| SERIES | Series Instance UID, Modality, Series Number; and Series Description, Number of Series Related Instances, Performed Procedure Step Start Date and Time, Request Attributes Sequence (Scheduled Procedure Step ID, Requested Procedure ID) |
+| IMAGE | SOP Instance UID, Instance Number; and SOP Class UID, Number of Frames, Rows, Columns, Bits Allocated |
+
+Each level has its Unique and Required Keys (PS3.4 Tables C.6-5, C.6-3 and C.6-4) and the
+Optional ones listed after "and". Any other key is left out of the responses, which then
+have status `FF01` instead of `FF00`: the caller filters on it itself (PS3.4 C.4.1.2.1).
+
+C-FIND statuses (PS3.4 Table C.4-1, PS3.7 9.1.2.1.6); a Failure has an Error Comment, and
+names the Offending Element when there is one:
+
+| Status | When |
+|---|---|
+| `FF00` Pending | a match, every key asked for supported |
+| `FF01` Pending | a match; a key that was asked for is not one pacs-rs has at this level |
+| `0000` Success | every match has been sent; alone when nothing matches |
+| `FE00` Cancel | the search was cancelled |
+| `0124` Refused: Not authorized | the calling AE title is not one of `PACS_DIMSE_REMOTES` |
+| `A700` Refused: Out of resources | the Identifier is larger than `PACS_MAX_UPLOAD_BYTES` |
+| `A900` Data Set does not match SOP Class | no Query/Retrieve Level, or one that is not STUDY, SERIES or IMAGE; no single value in the Unique Key of a level above; no Identifier |
+| `C000` Unable to process | the Identifier cannot be read; a value that is not a match for its key (a date that is not one, a wild card in a UID, two values, a range of times across midnight); a sequence key of several items |
+| `C001` Unable to process | the index could not be searched |
 
 ## DIMSE over TLS
 

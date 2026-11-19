@@ -237,7 +237,10 @@ there.
   users.
 
 What this does not cover: DIMSE has no accounts, so whoever may open an association to a
-project's AE title may send to it.
+project's AE title may send to it. Searching over DIMSE is bounded by the AE title that is
+called instead: a project's shows that project's studies and no other, and only the AE
+titles the server is configured with are answered ([being
+searched](dimse.md#being-searched)).
 
 ## Not yet
 
