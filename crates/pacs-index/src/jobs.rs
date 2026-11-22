@@ -93,6 +93,18 @@ impl Index {
         Ok(id)
     }
 
+    /// Say which operation a job is: a retrieval that gave way from C-MOVE to C-GET.
+    pub async fn job_kind(&self, id: i64, kind: &str) -> Result<(), Error> {
+        let mut tx = self.begin_write().await?;
+        sqlx::query("UPDATE jobs SET kind = $1 WHERE id = $2")
+            .bind(kind)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn job(&self, id: i64) -> Result<Option<StoredJob>, Error> {
         let row = sqlx::query(select("WHERE id = $1"))
             .bind(id)

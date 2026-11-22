@@ -62,12 +62,12 @@ C.2.2.2.6) added to the [one matcher](dicomweb.md#searching) it shares with QIDO
 (`PACS_DIMSE_MOVE_DESTINATIONS`) and a move to any other is refused with status A801; a
 C-GET sends on the association that asks, by SCP/SCU role selection. Both are on the two
 models, and send with a C-STORE SCU that decodes for a peer that does not take the stored
-transfer syntax. What
-remains:
+transfer syntax. As SCU, [C-FIND, C-MOVE and C-GET](dimse.md) on both models: an archive of
+Patient Root only is searched patients first, and a C-MOVE the archive refuses gives way
+to a C-GET. What remains:
 
 | Item | Done when |
 |---|---|
-| C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |
 | Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a retrieval makes it send) |
 | Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |
 | A service per SOP class | the SCP finds its handler for each SOP class in a registry, so a new service is added without touching the association loop |

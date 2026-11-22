@@ -80,6 +80,8 @@ pub struct Move {
 pub struct Moved {
     /// `Success`, or `Warning` when some instances failed.
     pub status: String,
+    /// `C-MOVE`, or `C-GET` when the move gave way to one.
+    pub method: String,
     /// Instances sent, as the remote AE counted them; `null` when it gave no count.
     #[schema(required)]
     pub completed: Option<u16>,
@@ -111,7 +113,7 @@ pub struct Started {
 pub struct Job {
     #[serde(rename = "ID")]
     pub id: String,
-    /// `C-MOVE`.
+    /// `C-MOVE`, or `C-GET` once a move gave way to one.
     pub r#type: String,
     /// The id of the remote AE asked.
     pub remote: String,

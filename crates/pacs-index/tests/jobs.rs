@@ -19,6 +19,9 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
             ("Running", studies.clone())
         );
         assert_eq!(job.patient_id.as_deref(), Some("NEMA-1"));
+        // a move that gave way to a get says so
+        index.job_kind(id, "C-GET").await.unwrap();
+        assert_eq!(index.job(id).await.unwrap().unwrap().kind, "C-GET");
         assert_eq!(
             (job.restarts, job.cancel_asked, job.finished_ms),
             (0, false, None)

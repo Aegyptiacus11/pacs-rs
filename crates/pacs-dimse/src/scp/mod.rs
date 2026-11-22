@@ -11,7 +11,7 @@
 mod find;
 mod operation;
 mod retrieve;
-mod store;
+pub(crate) mod store;
 
 use operation::After;
 

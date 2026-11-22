@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let audit = pacs_server::audit::open_audit(&settings)?;
     pacs_server::checks::spawn_due_checks(archive.clone(), settings.check_files_days);
     pacs_server::trash::spawn_emptying(archive.clone());
-    pacs_server::spawn_job_sweeps(&settings, archive.index())?;
+    pacs_server::spawn_job_sweeps(&settings, &archive, &audit)?;
     let app = app_with_audit(archive.clone(), &settings, login, audit.clone())?;
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;
     if let Some(metrics) = settings.metrics_listen {

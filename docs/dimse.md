@@ -30,18 +30,32 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   counts. Both models are proposed, Study Root used when the archive takes it; an archive of
   Patient Root only names a study under its patient (PS3.4 C.4.2.2.1), so the request gives
   the studies' `PatientID` too (a search's matches carry it), and without it the move is 400
-  saying so. 502 when the remote AE fails, saying when it does not know pacs-rs as a destination
-  (status A801: register pacs-rs's AE title, host and port there); 409 when pacs-rs is not
-  listening for DIMSE; a `Warning` header when the remote AE sent nothing, as it does for a
-  study it does not have. With `"Asynchronous": true` it answers 202 at once with a job:
-  `GET /jobs/{id}` shows `State` (`Running`, `Success`, `Warning`, `Cancelled`, `Failure`),
-  `Progress` in percent and the Remaining, Completed, Failed and Warning counts of the latest
-  Pending response; `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ with the next one. Jobs are
-  kept in the index, the latest hundred finished ones with them. A restart takes up the moves
-  that were running, from the start (what had arrived stays, and comes again as already
-  stored); one taken up three times, whose remote AE is no longer configured, or that can no
-  longer arrive here (no `PACS_DIMSE_LISTEN`) ends `Failure` with the reason in `Error`.
-  `Restarts` counts the starts that took it up.
+  saying so. A `Warning` header when the remote AE sent nothing, as it does for a study it does
+  not have. With `"Asynchronous": true` it answers 202 at once with a job: `GET /jobs/{id}`
+  shows `State` (`Running`, `Success`, `Warning`, `Cancelled`, `Failure`), `Progress` in percent
+  and the Remaining, Completed, Failed and Warning counts of the latest Pending response;
+  `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ (or C-CANCEL-GET-RQ) with the next one. Jobs
+  are kept in the index, the latest hundred finished ones with them. A restart takes up the
+  moves that were running, from the start (what had arrived stays, and comes again as already
+  stored); one taken up three times, or whose remote AE is no longer configured, ends `Failure`
+  with the reason in `Error`. `Restarts` counts the starts that took it up.
+- **C-GET SCU**, where the C-MOVE cannot be made: when the remote AE does not know pacs-rs as a
+  destination (status A801), takes no C-MOVE, or pacs-rs is not listening for DIMSE. The same
+  request asks for the studies by C-GET (PS3.4 C.4.3.2) and they come back on the association
+  that asks, pacs-rs being the SCP of the storage SOP classes by SCP/SCU Role Selection (PS3.7
+  D.3.3.4); each instance goes through the same checks, statuses and ingest as one the C-STORE
+  SCP receives, into a project's de-identification when the request names one, and the audit
+  trail has them as received from the remote AE. The answer's `Method`, and a job's `Type`,
+  say `C-GET`. One association carries 128 presentation contexts at most: two for the GET
+  models, then the storage SOP classes a hospital holds most (CT, MR, PET, NM, CR, DX, MG, US,
+  XA, secondary captures, segmentations, RT objects, structured reports, presentation states,
+  encapsulated documents), the images among them proposed compressed too (JPEG-LS, JPEG,
+  JPEG 2000, RLE), then the rest of PS3.4 Table B.5-1 in the uncompressed transfer syntaxes
+  until none is left. An instance of a class left out, or stored in a compression its context
+  was not proposed with and that the archive does not convert, is counted by the archive as a
+  failed sub-operation. 502 when the remote AE fails by both, saying when it does not know
+  pacs-rs as a destination (A801: register pacs-rs's AE title, host and port there, or let it
+  answer C-GET).
 - **C-FIND SCP**, Patient Root and Study Root, at every level of each: [Being
   searched](#being-searched) below.
 - **C-MOVE SCP** and **C-GET SCP**, on both models and at the same levels, with the
@@ -75,8 +89,8 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`, `movescu`, `getscu`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
-into a project shows there de-identified. Not yet: C-GET as SCU. The order is in [the
-hospital interfaces plan](interop.md).
+into a project shows there de-identified. The order is in [the hospital interfaces
+plan](interop.md).
 
 ## Being retrieved from
 

@@ -606,26 +606,45 @@ pub fn process_env(name: &str) -> Option<String> {
 /// `stale_after` (see `modalities::jobs`). How many start again.
 pub async fn resume_jobs(
     settings: &Settings,
-    index: &pacs_index::Index,
+    archive: &Archive,
     stale_after: std::time::Duration,
 ) -> anyhow::Result<usize> {
-    let config = std::sync::Arc::new(dimse_config(settings)?);
-    Ok(
-        modalities::jobs::take_up_stale(
-            index,
-            config,
-            settings.dimse_listen.is_some(),
-            stale_after,
-        )
-        .await?,
-    )
+    let retriever = retriever(settings, archive, None)?;
+    Ok(modalities::jobs::take_up_stale(archive.index(), retriever, stale_after).await?)
 }
 
-/// Look for moves left running for the life of the server (see `modalities::jobs`).
-pub fn spawn_job_sweeps(settings: &Settings, index: &pacs_index::Index) -> anyhow::Result<()> {
-    let config = std::sync::Arc::new(dimse_config(settings)?);
-    modalities::jobs::spawn_sweeps(index.clone(), config, settings.dimse_listen.is_some());
+/// Look for moves left running for the life of the server (see `modalities::jobs`), what a
+/// C-GET of theirs brings written to `audit`.
+pub fn spawn_job_sweeps(
+    settings: &Settings,
+    archive: &Archive,
+    audit: &audit::Audit,
+) -> anyhow::Result<()> {
+    let observer: Option<std::sync::Arc<dyn pacs_dimse::Observer>> = audit
+        .is_on()
+        .then(|| std::sync::Arc::new(audit.clone()) as _);
+    let retriever = retriever(settings, archive, observer)?;
+    modalities::jobs::spawn_sweeps(archive.index().clone(), retriever);
     Ok(())
+}
+
+/// What retrievals from remote AEs go through: the DIMSE settings, and where a C-GET stores
+/// what it brings. Projects whose secret is missing are kept as that reason, so that only a
+/// retrieval into one of them fails.
+fn retriever(
+    settings: &Settings,
+    archive: &Archive,
+    observer: Option<std::sync::Arc<dyn pacs_dimse::Observer>>,
+) -> anyhow::Result<std::sync::Arc<modalities::retriever::Retriever>> {
+    let projects =
+        projects::open_projects_from_env(settings, archive).map_err(|e| format!("{e:#}"));
+    Ok(std::sync::Arc::new(modalities::retriever::Retriever::new(
+        dimse_config(settings)?,
+        settings.dimse_listen.is_some(),
+        archive.clone(),
+        projects,
+        observer,
+    )))
 }
 
 /// The store `location` names (`file:` or `s3://`), with the S3 settings and keys.
@@ -940,10 +959,12 @@ pub fn app_with_audit(
         .into_iter()
         .map(|p| (p.profile.name, p.ae_title))
         .collect();
+    let observer: Option<std::sync::Arc<dyn pacs_dimse::Observer>> = audit
+        .is_on()
+        .then(|| std::sync::Arc::new(audit.clone()) as _);
     let rest =
         pacs_rest::router(archive.clone(), settings.max_upload_bytes).merge(modalities::router(
-            dimse.clone(),
-            settings.dimse_listen.is_some(),
+            retriever(settings, &archive, observer)?,
             project_titles.clone(),
             archive.index().clone(),
         ));

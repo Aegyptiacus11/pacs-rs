@@ -1,5 +1,6 @@
-//! `POST /modalities/{id}/move`: a remote AE asked, by C-MOVE, to send studies to pacs-rs,
-//! where they arrive through its C-STORE SCP like any other.
+//! `POST /modalities/{id}/move`: studies brought in from a remote AE, by C-MOVE through
+//! pacs-rs's C-STORE SCP like any other instance, or by C-GET on the association that asks
+//! ([`super::retriever`]).
 
 use super::schema::{Error, Move, Moved, Started};
 use std::sync::Arc;
@@ -19,11 +20,12 @@ use super::Remotes;
 
 /// Brings studies in from a remote AE.
 ///
-/// A C-MOVE: the remote AE is asked to send the studies to pacs-rs, which must be listening
-/// for DIMSE and be known to that AE as a destination. They arrive through pacs-rs's own
-/// C-STORE, as any instance sent to it; sent to a project, they are de-identified on the
-/// way in. A `Warning` header says when the remote AE sent nothing, as it does for a study
-/// it does not have.
+/// A C-MOVE: the remote AE is asked to send the studies to pacs-rs, and they arrive through
+/// pacs-rs's own C-STORE, as any instance sent to it. When the remote AE does not know
+/// pacs-rs as a destination, takes no C-MOVE, or pacs-rs is not listening for DIMSE, a C-GET
+/// instead, the studies coming back on the association that asks; `Method` says which was
+/// made. Sent to a project, they are de-identified on the way in. A `Warning` header says
+/// when the remote AE sent nothing, as it does for a study it does not have.
 #[utoipa::path(
     post,
     path = "/modalities/{id}/move",
@@ -36,8 +38,7 @@ use super::Remotes;
         (status = 400, description = "The body names no valid Study Instance UID, or a project that is not one.", body = Error),
         (status = 403, description = "The account is limited to some projects and `Project` is not one of them.", body = Error),
         (status = 404, description = "No remote AE has this id; the body is empty."),
-        (status = 409, description = "pacs-rs is not listening for DIMSE, so nothing could arrive.", body = Error),
-        (status = 502, description = "The remote AE could not be reached or failed; `Details` says when it does not know pacs-rs as a destination.", body = Error)
+        (status = 502, description = "The remote AE could not be reached or failed, by C-MOVE and C-GET alike; `Details` says why.", body = Error)
     )
 )]
 pub(super) async fn move_studies(
@@ -97,14 +98,6 @@ pub(super) async fn move_studies(
             return RestError::bad_request("Bad request", "PatientID is a string").into_response();
         }
     };
-    if !remotes.receiving {
-        return RestError::Status {
-            status: StatusCode::CONFLICT,
-            message: "pacs-rs is not listening for DIMSE".into(),
-            details: Some("set PACS_DIMSE_LISTEN so the remote AE can send the studies".into()),
-        }
-        .into_response();
-    }
     if let Some(bad) = studies.iter().find(|u| !pacs_core::is_valid_uid(u)) {
         return RestError::bad_request("Bad request", format!("{bad:?} is not a UID"))
             .into_response();
@@ -141,22 +134,22 @@ pub(super) async fn move_studies(
             .await;
     }
     let started = Instant::now();
-    let result = pacs_dimse::move_studies(
-        remote,
-        &config.ae_title,
-        patient_id.as_deref(),
-        &studies,
-        &destination,
-        config.timeout,
-        config.move_timeout,
-        |_| std::ops::ControlFlow::Continue(()),
-    )
-    .await;
+    let (result, method) = remotes
+        .retriever
+        .retrieve(
+            remote,
+            patient_id.as_deref(),
+            &studies,
+            &destination,
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .await;
     match result {
         Ok(outcome) => {
             let p = outcome.progress;
             let mut response = Json(json!({
                 "Status": status_name(outcome.status),
+                "Method": method.name(),
                 "Completed": p.completed,
                 "Failed": p.failed,
                 "Warning": p.warning,
@@ -179,10 +172,10 @@ pub(super) async fn move_studies(
         }
         Err(MoveError::Request(e)) => RestError::bad_request("Bad request", e).into_response(),
         Err(e) => {
-            tracing::info!(remote = %id, error = %e, "C-MOVE failed");
+            tracing::info!(remote = %id, error = %e, operation = method.name(), "a retrieval failed");
             RestError::Status {
                 status: StatusCode::BAD_GATEWAY,
-                message: format!("C-MOVE from {id} failed"),
+                message: format!("{} from {id} failed", method.name()),
                 details: Some(e.to_string()),
             }
             .into_response()

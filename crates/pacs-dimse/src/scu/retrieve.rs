@@ -78,7 +78,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    fn of(command: &Command) -> Self {
+    pub(super) fn of(command: &Command) -> Self {
         let count = |element| command.us(element).ok();
         Progress {
             remaining: count(tag::NUMBER_OF_REMAINING_SUB_OPERATIONS),
@@ -89,7 +89,7 @@ impl Progress {
     }
 
     /// The final response's counts, each one it leaves out taken from the last Pending.
-    fn or(self, earlier: Progress) -> Progress {
+    pub(super) fn or(self, earlier: Progress) -> Progress {
         Progress {
             remaining: self.remaining,
             completed: self.completed.or(earlier.completed),
@@ -319,7 +319,7 @@ pub fn retrieve_identifier(patient_id: Option<&str>, study_uids: &[String]) -> I
     identifier
 }
 
-fn failed_list(
+pub(super) fn failed_list(
     bytes: &[u8],
     ts: &dicom_encoding::TransferSyntax,
 ) -> Result<Vec<String>, MoveError> {

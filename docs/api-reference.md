@@ -828,11 +828,12 @@ Permission, when the login is on: `remote`.
 
 Brings studies in from a remote AE.
 
-A C-MOVE: the remote AE is asked to send the studies to pacs-rs, which must be listening
-for DIMSE and be known to that AE as a destination. They arrive through pacs-rs's own
-C-STORE, as any instance sent to it; sent to a project, they are de-identified on the
-way in. A `Warning` header says when the remote AE sent nothing, as it does for a study
-it does not have.
+A C-MOVE: the remote AE is asked to send the studies to pacs-rs, and they arrive through
+pacs-rs's own C-STORE, as any instance sent to it. When the remote AE does not know
+pacs-rs as a destination, takes no C-MOVE, or pacs-rs is not listening for DIMSE, a C-GET
+instead, the studies coming back on the association that asks; `Method` says which was
+made. Sent to a project, they are de-identified on the way in. A `Warning` header says
+when the remote AE sent nothing, as it does for a study it does not have.
 
 Permission, when the login is on: `remote`.
 
@@ -848,8 +849,7 @@ Permission, when the login is on: `remote`.
 | 400 | [Error](#error) | The body names no valid Study Instance UID, or a project that is not one. |
 | 403 | [Error](#error) | The account is limited to some projects and `Project` is not one of them. |
 | 404 | nothing | No remote AE has this id; the body is empty. |
-| 409 | [Error](#error) | pacs-rs is not listening for DIMSE, so nothing could arrive. |
-| 502 | [Error](#error) | The remote AE could not be reached or failed; `Details` says when it does not know pacs-rs as a destination. |
+| 502 | [Error](#error) | The remote AE could not be reached or failed, by C-MOVE and C-GET alike; `Details` says why. |
 
 ### `GET /modalities/{id}/studies`
 
@@ -1541,7 +1541,7 @@ A move in the background, or one that is over. Jobs are kept in the index, the l
 | `Restarts` | integer | How many starts of the server took it up again, it having been running when the server stopped. |
 | `State` | string | `Running`, `Success`, `Warning`, `Cancelled` or `Failure`. |
 | `StudyInstanceUIDs` | list of string |  |
-| `Type` | string | `C-MOVE`. |
+| `Type` | string | `C-MOVE`, or `C-GET` once a move gave way to one. |
 | `Warning` | integer or null |  |
 
 ### Kept
@@ -1586,6 +1586,7 @@ How a move ended.
 | `ElapsedMs` | integer |  |
 | `Failed` | integer or null |  |
 | `FailedSOPInstanceUIDs` | list of string | The instances the remote AE said it could not send. |
+| `Method` | string | `C-MOVE`, or `C-GET` when the move gave way to one. |
 | `Status` | string | `Success`, or `Warning` when some instances failed. |
 | `Warning` | integer or null |  |
 

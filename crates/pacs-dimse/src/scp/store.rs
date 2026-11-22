@@ -71,7 +71,7 @@ impl Destination {
 
 /// A C-STORE: the data set and the request's UIDs checked against each other, then the
 /// instance handed to `destination`, with the statuses of PS3.4 Table B.2-1.
-pub(super) async fn store(
+pub(crate) async fn store(
     request: &Request<'_>,
     command: &Command,
     data: DataSet,

@@ -29,6 +29,7 @@ pub use scp::{Destination, Observer, Peer, Queried, Retrieved, Scp, SentStudy};
 pub use scu::ConnectError;
 pub use scu::echo::{EchoError, echo};
 pub use scu::find::{FindError, FindOutcome, find_studies};
+pub use scu::get::get_studies;
 pub use scu::retrieve::{MoveError, MoveOutcome, Progress, move_studies};
 pub use scu::store::{Accepted, Originator, SendError, Sender};
 pub use status::{Status, StatusClass};
