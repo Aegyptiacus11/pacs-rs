@@ -95,7 +95,7 @@ fn value_at(instance: &Instance, path: &str) -> Result<Vec<u8>, ApiError> {
         ))
     };
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
-    if parts.len() % 2 == 0 {
+    if parts.len().is_multiple_of(2) {
         return Err(bad());
     }
     let tag = |text: &str| {
