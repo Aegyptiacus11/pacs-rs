@@ -117,6 +117,59 @@ Behind a proxy that serves pacs-rs under a prefix, set `PACS_AUTH_COOKIE_PATH` t
 `/auth` as the browser sees it (`/pacs/auth`). The cookie is `Secure`: over plain HTTP on
 localhost, `PACS_AUTH_COOKIE_SECURE=false` lets a browser keep it.
 
+## Signing in through a provider
+
+With `PACS_OIDC_ISSUER` set, people sign in through the hospital's OpenID provider (Keycloak,
+Microsoft Entra ID, Rauthy and the like), by the authorization code flow of OpenID Connect
+Core 1.0 with PKCE. The provider is then **the only way in**: no password signs anyone in,
+the first administrator's included, `POST /auth/login`, `POST /auth/password` and new users
+with a password are refused, and so is `POST /auth/token` (tools get their tokens from the
+provider too).
+
+```bash
+PACS_AUTH=true \
+PACS_AUTH_SECRET="$(openssl rand -hex 32)" \
+PACS_OIDC_ISSUER=https://idp.example.org/realms/hospital \
+PACS_OIDC_CLIENT_ID=pacs \
+PACS_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc-client \
+PACS_OIDC_REDIRECT_URL=https://pacs.example.org/auth/oidc/callback \
+PACS_OIDC_ADMINS=it-lead@example.org \
+pacs-server
+```
+
+At the provider, the client is confidential (it has a secret), its redirect URI is
+`PACS_OIDC_REDIRECT_URL`, and it may use the authorization code flow with PKCE (`S256`).
+
+| Request | | |
+|---|---|---|
+| `GET /auth/methods` | | `{"password": false, "provider": true}`: what the sign-in page offers |
+| `GET /auth/oidc/start?next=<page>` | | to the provider's sign-in page |
+| `GET /auth/oidc/callback` | the provider's answer | to the web interface, signed in, with the refresh cookie |
+
+- **Accounts.** Whoever the provider lets through gets an account at their first sign-in,
+  with the role `PACS_OIDC_ROLE` (`reader`); an administrator changes it under
+  [Users](#users) like any other, and a deactivated account is refused. An account is the
+  provider's issuer and the person's subject identifier there, the only key OpenID Connect
+  says is stable: a new email at the provider changes nothing. Its login is the email when
+  the provider says it verified it, else the provider's user name.
+- **Administrators.** The addresses of `PACS_OIDC_ADMINS` get the role `admin` at sign-in,
+  only when the provider says it verified them. A verified email also links an account made
+  before the provider was set, with the same login, so its role and projects stay.
+- **What is checked.** The state against the cookie set at the start, then the code
+  exchanged with the PKCE verifier and the client's secret, then the ID token: signed with a
+  key the provider publishes (never a shared secret, never unsigned), its issuer the
+  provider's, its audience this client (and `azp` this client when there are several), not
+  expired, its nonce the one sent. Any failure lands on the sign-in page with
+  `?signin_error=` and the reason (`expired`, `refused`, `provider`, `token`, `account`), and
+  is in the [audit trail](audit.md) with the detail.
+- **The provider's settings** come from its discovery document at start; a provider that
+  cannot be reached, or names itself otherwise than `PACS_OIDC_ISSUER`, stops the start. Its
+  keys are fetched again when a token names one not seen yet, so a key rotation needs no
+  restart. Its URLs are HTTPS, or plain HTTP to `localhost` only.
+- After the callback, the session is the one a password would give: the refresh cookie,
+  then access tokens from `POST /auth/refresh`. Signing out ends it here, not at the
+  provider.
+
 ## Users
 
 For a role with `users`.
@@ -244,5 +297,4 @@ searched](dimse.md#being-searched), [being retrieved from](dimse.md#being-retrie
 
 ## Not yet
 
-- Signing in through an identity provider (OpenID Connect).
 - Sending the [audit trail](audit.md) to a repository.
