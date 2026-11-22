@@ -30,6 +30,7 @@ pub mod auth_schema;
 pub mod checks;
 pub mod consistency;
 mod dimse_tls;
+pub mod forward;
 pub mod limits;
 pub mod metrics;
 mod modalities;
@@ -141,6 +142,18 @@ pub struct Settings {
     /// `pacs_server::trash`. 0: deleted at once.
     #[arg(long, env = "PACS_TRASH_DAYS", default_value_t = 30)]
     pub trash_days: u64,
+
+    /// Rules that forward what arrives to other AEs, comma-separated, each
+    /// `destination[:Key=value|value;Key=value]`: the destination a remote AE of
+    /// PACS_DIMSE_MOVE_DESTINATIONS by its id, the keys among PatientID, PatientName,
+    /// AccessionNumber, StudyDescription, StudyID, ReferringPhysicianName, Modality,
+    /// SeriesDescription and Project (see `pacs_server::forward`). None by default.
+    #[arg(long, env = "PACS_FORWARD", value_delimiter = ',')]
+    pub forward: Vec<forward::ForwardRule>,
+
+    /// Seconds a study stays quiet, no instance of it stored, before the rules forward it.
+    #[arg(long, env = "PACS_FORWARD_AFTER", default_value_t = 30)]
+    pub forward_after: u64,
 
     /// Check a stored file against the index again once its last check is this many days old,
     /// in the background, one file at a time. 0: no scheduled checks.
@@ -707,7 +720,63 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
         .with_overwrite(settings.overwrite_instances)
         .with_compression(settings.compression.into())
         .with_read_limit(settings.max_read_bytes)
-        .with_trash(settings.trash_days))
+        .with_trash(settings.trash_days)
+        .with_forwarding(!settings.forward.is_empty()))
+}
+
+/// The forwarding rules of the settings, each to a remote AE studies may be sent to.
+pub fn forward_rules(settings: &Settings) -> anyhow::Result<Vec<forward::ForwardRule>> {
+    let config = dimse_config(settings)?;
+    for rule in &settings.forward {
+        if config.remote(&rule.destination).is_none() {
+            bail!(
+                "PACS_FORWARD sends to {}, which is not a remote AE of PACS_DIMSE_REMOTES",
+                rule.destination
+            );
+        }
+        if !config.move_destinations.contains(&rule.destination) {
+            bail!(
+                "PACS_FORWARD sends to {}, which is not in PACS_DIMSE_MOVE_DESTINATIONS",
+                rule.destination
+            );
+        }
+    }
+    Ok(settings.forward.clone())
+}
+
+/// Forward the studies quiet for `PACS_FORWARD_AFTER` now, by the rules: how many jobs of
+/// sending started (see [`forward`]).
+pub async fn forward_now(settings: &Settings, archive: &Archive) -> anyhow::Result<usize> {
+    let rules = forward_rules(settings)?;
+    Ok(forward::forward_due(
+        archive.index(),
+        retriever(settings, archive, None)?,
+        &rules,
+        std::time::Duration::from_secs(settings.forward_after),
+    )
+    .await?)
+}
+
+/// Forward studies by the rules for the life of the server; nothing without rules.
+pub fn spawn_forwarding(
+    settings: &Settings,
+    archive: &Archive,
+    audit: &audit::Audit,
+) -> anyhow::Result<()> {
+    let rules = forward_rules(settings)?;
+    if rules.is_empty() {
+        return Ok(());
+    }
+    let observer: Option<std::sync::Arc<dyn pacs_dimse::Observer>> = audit
+        .is_on()
+        .then(|| std::sync::Arc::new(audit.clone()) as _);
+    forward::spawn_forwarding(
+        archive.index().clone(),
+        retriever(settings, archive, observer)?,
+        rules,
+        std::time::Duration::from_secs(settings.forward_after),
+    );
+    Ok(())
 }
 
 /// The DIMSE side's configuration, from the settings. A remote AE named twice is an error.
