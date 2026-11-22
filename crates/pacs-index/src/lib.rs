@@ -44,6 +44,7 @@ mod audited;
 mod checks;
 mod clients;
 mod delete;
+mod forward;
 mod jobs;
 pub mod matching;
 mod protocols;
@@ -104,6 +105,9 @@ pub struct NewInstance {
     pub keep_existing: bool,
     /// The project the instance came in through; none when it is stored as received.
     pub project: Option<String>,
+    /// Its study is to be forwarded by a rule once quiet: noted in the same write
+    /// ([`Index::claim_forwards`]).
+    pub forward: bool,
     patient_id: Option<String>,
     patient_name: Option<String>,
     study_date: Option<String>,
@@ -134,6 +138,12 @@ impl NewInstance {
     /// The same instance, to be recorded only if it is not indexed yet.
     pub fn keeping_existing(mut self, keep: bool) -> Self {
         self.keep_existing = keep;
+        self
+    }
+
+    /// The same instance, its study to be forwarded by a rule when `forward`.
+    pub fn forwarded(mut self, forward: bool) -> Self {
+        self.forward = forward;
         self
     }
 
@@ -173,6 +183,7 @@ impl NewInstance {
             sha256: None,
             keep_existing: false,
             project: None,
+            forward: false,
             patient_id: instance.string(tags::PATIENT_ID),
             patient_name: instance.string(tags::PATIENT_NAME),
             study_date: instance.string(tags::STUDY_DATE),
@@ -614,6 +625,16 @@ impl Index {
         .bind(new.sha256.as_ref().map(|_| now_ms()))
         .execute(&mut *tx)
         .await?;
+        if new.forward {
+            sqlx::query(
+                "INSERT INTO forward_due (study_instance_uid, touched_ms) VALUES ($1, $2)
+                 ON CONFLICT (study_instance_uid) DO UPDATE SET touched_ms = excluded.touched_ms",
+            )
+            .bind(&new.study_instance_uid)
+            .bind(now_ms())
+            .execute(&mut *tx)
+            .await?;
+        }
 
         tx.commit().await?;
         Ok(match existing {
