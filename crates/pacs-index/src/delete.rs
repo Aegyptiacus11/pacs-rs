@@ -231,6 +231,7 @@ impl Index {
         };
         let remaining_ancestor = prune(conn, parents).await?;
         crate::labels::drop_orphans(conn).await?;
+        crate::metadata::drop_orphans(conn).await?;
         tx.commit().await?;
         Ok(Some(Deleted {
             object_keys: keys_sql,

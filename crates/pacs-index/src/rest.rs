@@ -104,6 +104,9 @@ pub struct RestInstance {
     pub transfer_syntax_uid: String,
     pub object_key: String,
     pub size_bytes: i64,
+    pub sop_class_uid: String,
+    /// When its stored file was received, `YYYYMMDDTHHMMSS` in UTC.
+    pub reception_date: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +130,7 @@ macro_rules! instance_query {
                     se.study_instance_uid, se.public_id AS parent_series,
                     st.public_id AS parent_study, st.patient_public_id AS parent_patient,
                     i.main_tags, i.instance_number, i.transfer_syntax_uid, i.object_key,
-                    i.size_bytes
+                    i.size_bytes, i.sop_class_uid, i.received_ms
                FROM instances i
                JOIN series se USING (series_instance_uid)
                JOIN studies st ON st.study_instance_uid = se.study_instance_uid ",
@@ -173,6 +176,8 @@ fn instance(row: AnyRow) -> Result<RestInstance, Error> {
         transfer_syntax_uid: row.try_get("transfer_syntax_uid")?,
         object_key: row.try_get("object_key")?,
         size_bytes: row.try_get("size_bytes")?,
+        sop_class_uid: row.try_get("sop_class_uid")?,
+        reception_date: last_update_text(row.try_get("received_ms")?),
     })
 }
 
