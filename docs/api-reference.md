@@ -930,6 +930,40 @@ Permission, when the login is on: `remote`.
 | 404 | nothing | No job has this id; the body is empty. |
 | 409 | [Error](#error) | The job is over already. |
 
+## Integrity
+
+Each stored file checked against the size and SHA-256 the index took when it was stored. Only for a role with `users`.
+
+### `GET /tools/check-files`
+
+Where the checks of the stored files stand, and the files that failed.
+
+Permission, when the login is on: `users`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Status](#status) | The counts, the last whole-archive check, and every file whose last check failed. |
+
+### `POST /tools/check-files`
+
+Checks stored files against the index now.
+
+With a `StudyInstanceUID`, that study's files are read and compared before the answer. Without one, the whole archive is checked in the background, one check at a time; `GET /tools/check-files` says how it went.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| the body | | [CheckRequest](#checkrequest) | The study to check, or nothing for the whole archive. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Summary](#summary) | The study was checked. |
+| 202 | nothing | The whole archive is being checked. |
+| 404 | nothing | No such study. |
+| 409 | nothing | A whole-archive check is running already. |
+| 503 | nothing | The store or the index did not answer: nothing was found wrong, nothing was checked to the end. |
+
 ## Signing in
 
 With `PACS_AUTH=true`: sessions for people, and what a signed-in account may ask about itself.
@@ -1291,6 +1325,14 @@ A data set in DICOM JSON (PS3.18 Annex F): its attributes by tag, each with its 
 
 object.
 
+### CheckRequest
+
+What to check.
+
+| Field | Type | |
+|---|---|---|
+| `StudyInstanceUID` | string or null, optional | One study, checked before the answer. Absent: the whole archive, in the background. |
+
 ### ClientUpdate
 
 What to change of a tool. What is left out stays as it is.
@@ -1371,6 +1413,27 @@ Why a request was refused. An unknown identifier is a 404 with no body instead.
 | `HttpError` | string | The status in words, such as `Bad Request`. |
 | `HttpStatus` | integer | The status as a number. |
 | `Message` | string | What kind of failure, such as `Bad file format` or `Not supported yet`. |
+
+### FailedFile
+
+A file whose last check failed.
+
+| Field | Type | |
+|---|---|---|
+| `SOPInstanceUID` | string | The instance. |
+| `SeriesInstanceUID` | string | Its series. |
+| `StudyInstanceUID` | string | Its study. |
+| `checked_ms` | integer | When it was found, in milliseconds since the Unix epoch. |
+| `failure` | string | What was wrong. |
+
+### Failure
+
+A file that failed its check.
+
+| Field | Type | |
+|---|---|---|
+| `SOPInstanceUID` | string | The instance whose file it is. |
+| `failure` | string | What was wrong: changed (another SHA-256), a size other than the index's, or missing from the store. |
 
 ### Find
 
@@ -1625,6 +1688,19 @@ How much a patient or a study holds. The sizes are of the files as stored; the f
 | `UncompressedSize` | string |  |
 | `UncompressedSizeMB` | integer |  |
 
+### Status
+
+Where the checks stand.
+
+| Field | Type | |
+|---|---|---|
+| `failed` | integer | Files whose last check failed. |
+| `failures` | list of [FailedFile](#failedfile) | Every file whose last check failed. |
+| `files` | integer | Stored files. |
+| `last_sweep` | [Sweep](#sweep) or null, optional | The last whole-archive check started on request, since the server started. |
+| `never_checked` | integer | Stored before hashes were kept, and not checked since. |
+| `running` | boolean | Whether a whole-archive check started on request is running. |
+
 ### Stored
 
 What became of a file sent to `POST /instances`.
@@ -1659,6 +1735,27 @@ A study.
 Identifiers, or with `expand` the studies themselves.
 
 list of string or list of [Study](#study).
+
+### Summary
+
+What a check of several files found.
+
+| Field | Type | |
+|---|---|---|
+| `checked` | integer | Files checked. |
+| `failures` | list of [Failure](#failure) | The files that failed, by SOP Instance UID, with what was wrong. |
+
+### Sweep
+
+The last whole-archive check started on request.
+
+| Field | Type | |
+|---|---|---|
+| `checked` | integer | Files checked. |
+| `error` | string or null, optional | Why it stopped before the end, when it did: the store or the index not answering. |
+| `failed` | integer | Files that failed. |
+| `finished_ms` | integer or null, optional | When it ended; `null` while it runs. |
+| `started_ms` | integer | When it started, in milliseconds since the Unix epoch. |
 
 ### Token
 
