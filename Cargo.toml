@@ -34,9 +34,12 @@ http-body-util = "0.1.5"
 hyper-util = { version = "0.1.21", features = ["http1", "http2", "server-auto", "server-graceful", "service", "tokio"] }
 # jxl-rs, the libjxl project's JPEG XL decoder.
 jxl = "0.8.0"
+# the OpenID provider's tokens, checked with the keys it publishes (rust_crypto: pure Rust,
+# the same build as jwt-sessions')
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["rust_crypto"] }
 # The login: access JWTs and rotating refresh tokens, with its axum routes and its store on
 # the index's own database.
-jwt-sessions = { git = "https://github.com/Aegyptiacus11/jwt-sessions-rs", rev = "a43ecba210caf055f27955cd17845d14816386b6", features = ["axum", "sqlx"] }
+jwt-sessions = { git = "https://github.com/Aegyptiacus11/jwt-sessions-rs", rev = "24aba3ee63c98dcfe3cb09f15498408ccf908e1e", features = ["axum", "sqlx"] }
 memchr = "2.8.3"
 mimalloc = { version = "0.1.52", default-features = false }
 object_store = { version = "0.14.2", features = ["aws"] }
@@ -54,6 +57,7 @@ reqwest = { version = "0.13.5", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha1 = "0.11.0"
+url = "2.5.8"
 sha2 = "0.11.1"
 # tls-rustls-ring-webpki: TLS to Postgres (PACS_INDEX_TLS), with the web's root certificates
 # built in for a server whose certificate needs no PACS_INDEX_CA_FILE

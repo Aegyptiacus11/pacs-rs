@@ -63,6 +63,13 @@ See [Login](login.md).
 | `PACS_AUTH_COOKIE_SECURE` | `true` | send the refresh cookie over HTTPS only |
 | `PACS_AUTH_COOKIE_PATH` | the path of `/auth` | the cookie's path as the browser sees it, behind a proxy that adds a prefix |
 | `PACS_AUTH_ISSUER` | `pacs-rs` | the name this server gives itself in the access tokens of [tools](login.md#tools): their `iss` and `aud` |
+| `PACS_OIDC_ISSUER` | | sign people in through this [OpenID provider](login.md#signing-in-through-a-provider) instead of with passwords: its issuer, exactly as its discovery document names it |
+| `PACS_OIDC_CLIENT_ID` | | this server's client id at the provider |
+| `PACS_OIDC_CLIENT_SECRET` | | the client's secret at the provider; environment only, or `..._FILE` |
+| `PACS_OIDC_REDIRECT_URL` | | this server's `/auth/oidc/callback` as the browser reaches it, registered at the provider |
+| `PACS_OIDC_SCOPES` | `openid email profile` | the scopes asked for at sign-in, `openid` among them |
+| `PACS_OIDC_ROLE` | `reader` | the role of an account made at its first sign-in |
+| `PACS_OIDC_ADMINS` | | email addresses, comma-separated, that get the role `admin` when the provider says it verified them |
 
 ## Audit trail
 

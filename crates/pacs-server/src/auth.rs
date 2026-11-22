@@ -158,6 +158,9 @@ pub fn is_open(method: &Method, path: &str) -> bool {
                 | "/auth/refresh"
                 | "/auth/logout"
                 | "/auth/token"
+                | "/auth/methods"
+                | "/auth/oidc/start"
+                | "/auth/oidc/callback"
         )
         // the web interface's files, which hold nothing of the archive; its API is not open
         || (method == Method::GET && path.starts_with("/ui/") && !path.starts_with("/ui/api/"))
@@ -263,7 +266,17 @@ pub struct Login {
     cookie: CookieSettings,
     /// The names of the projects of `PACS_PROJECTS`: what an account can be limited to.
     projects: Arc<Vec<String>>,
+    /// The OpenID provider people sign in through, when `PACS_OIDC_ISSUER` is set: then no
+    /// password signs anyone in.
+    provider: Option<crate::oidc::Provider>,
+    /// Signs the state cookie of a sign-in through the provider: a key of its own, derived
+    /// from the sessions' secret, so that it passes for no other token.
+    oidc_states: AccessTokens,
 }
+
+/// The answer to a password where the provider is the only way in.
+const PROVIDER_ONLY: &str =
+    "This server signs people in through its OpenID provider, not with a password";
 
 /// How long a download token is good for: time for the browser to start the download.
 const DOWNLOAD_TOKEN_SECONDS: u64 = 60;
@@ -354,7 +367,19 @@ pub async fn open_login(
         tracing::info!(purged, "expired refresh tokens dropped");
     }
 
-    if index.user_count().await? == 0 {
+    let provider = match &settings.oidc_issuer {
+        Some(issuer) => Some(open_provider(settings, issuer, &env).await?),
+        None => None,
+    };
+    if let Some(provider) = &provider {
+        if index.role(provider.role()).await?.is_none() {
+            anyhow::bail!(
+                "PACS_OIDC_ROLE: there is no role {:?} (the roles are under /roles)",
+                provider.role()
+            );
+        }
+        tracing::info!(issuer = %provider.issuer(), "people sign in through the OpenID provider only");
+    } else if index.user_count().await? == 0 {
         let password = crate::secret("PACS_ADMIN_PASSWORD", &env)?.context(
             "PACS_AUTH is on and there is no user yet: PACS_ADMIN_PASSWORD (or \
              PACS_ADMIN_PASSWORD_FILE) must hold the first administrator's password",
@@ -378,6 +403,10 @@ pub async fn open_login(
         .context("the clients' access tokens")?
         .with_issuer(issuer.clone())
         .with_audience(issuer.clone());
+    let oidc_states = AccessTokens::new(&format!("{secret}\noidc-state"))
+        .context("the sign-in state")?
+        .with_ttl(crate::oidc::STATE_TTL)
+        .context("the sign-in state")?;
     let sessions = Arc::new(Auth::new(IndexUsers(index.clone()), access, refresh));
     Ok(Some(Login {
         sessions,
@@ -392,7 +421,57 @@ pub async fn open_login(
                 .map(|project| project.profile.name)
                 .collect(),
         ),
+        provider,
+        oidc_states,
     }))
+}
+
+/// The provider of `PACS_OIDC_ISSUER`, with the rest of its settings, discovered.
+async fn open_provider(
+    settings: &Settings,
+    issuer: &str,
+    env: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<crate::oidc::Provider> {
+    let needed = |value: &Option<String>, name: &str| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .with_context(|| format!("PACS_OIDC_ISSUER is set: {name} must be set too"))
+    };
+    let client_id = needed(&settings.oidc_client_id, "PACS_OIDC_CLIENT_ID")?;
+    let redirect_url = needed(&settings.oidc_redirect_url, "PACS_OIDC_REDIRECT_URL")?;
+    let client_secret = crate::secret("PACS_OIDC_CLIENT_SECRET", &env)?.context(
+        "PACS_OIDC_ISSUER is set: PACS_OIDC_CLIENT_SECRET (or PACS_OIDC_CLIENT_SECRET_FILE) \
+         must hold the client's secret at the provider",
+    )?;
+    let mut admins = Vec::new();
+    for admin in &settings.oidc_admins {
+        let admin = admin.trim().to_lowercase();
+        if admin.is_empty() {
+            continue;
+        }
+        if !admin.contains('@') || admin.chars().any(char::is_whitespace) {
+            anyhow::bail!("PACS_OIDC_ADMINS: {admin:?} is not an email address");
+        }
+        admins.push(admin);
+    }
+    crate::oidc::Provider::discover(crate::oidc::ProviderSettings {
+        issuer: issuer.trim().to_owned(),
+        client_id,
+        client_secret,
+        redirect_url,
+        scopes: settings
+            .oidc_scopes
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        role: settings.oidc_role.trim().to_owned(),
+        admins,
+    })
+    .await
+    .context("PACS_OIDC_ISSUER")
 }
 
 /// A request refused: `{"detail": ...}`, with the Bearer challenge on a 401.
@@ -563,6 +642,9 @@ async fn bound(
 
 async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> Response {
     let (method, path) = (request.method().clone(), request.uri().path().to_owned());
+    if login.provider.is_some() && method == Method::POST && path == "/auth/login" {
+        return refused(StatusCode::FORBIDDEN, PROVIDER_ONLY).into_response();
+    }
     if is_open(&method, &path) {
         return next.run(request).await;
     }
@@ -905,6 +987,9 @@ async fn change_password(
     Extension(user): Extension<SignedIn>,
     change: Result<Json<PasswordChange>, JsonRejection>,
 ) -> Result<Response, Refusal> {
+    if login.provider.is_some() {
+        return Err(refused(StatusCode::FORBIDDEN, PROVIDER_ONLY));
+    }
     let change = body(change)?;
     check_new_password(&change.new_password).map_err(unprocessable)?;
     if change.current_password.len() > MAX_PASSWORD_BYTES {
@@ -1006,6 +1091,12 @@ async fn create_user(
     State(login): State<Login>,
     new: Result<Json<NewUser>, JsonRejection>,
 ) -> Result<Response, Refusal> {
+    if login.provider.is_some() {
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "This server signs people in through its OpenID provider: an account is made at its first sign-in",
+        ));
+    }
     let new = body(new)?;
     let name = normal_login(&new.login).map_err(unprocessable)?;
     let role = known_role(&login, &new.role).await?;
@@ -1059,6 +1150,9 @@ async fn update_user(
     update: Result<Json<UserUpdate>, JsonRejection>,
 ) -> Result<Response, Refusal> {
     let update = body(update)?;
+    if login.provider.is_some() && update.password.is_some() {
+        return Err(refused(StatusCode::FORBIDDEN, PROVIDER_ONLY));
+    }
     let role = match update.role.as_deref() {
         Some(role) => Some(known_role(&login, role).await?),
         None => None,
@@ -1454,6 +1548,12 @@ async fn token(
     headers: axum::http::HeaderMap,
     form: Result<Form<Vec<(String, String)>>, FormRejection>,
 ) -> Response {
+    if login.provider.is_some() {
+        return token_error(
+            "unauthorized_client",
+            "tools get their access tokens from this server's OpenID provider",
+        );
+    }
     let Ok(Form(form)) = form else {
         return token_error(
             "invalid_request",
@@ -1817,6 +1917,241 @@ pub(crate) fn api() -> OpenApi {
     api
 }
 
+/// A sign-in through the provider, as the audit trail records it: who the provider said it
+/// was (or nothing, when it got no further), and whether they were let in.
+#[derive(Debug, Clone)]
+pub struct ProviderSignIn {
+    pub login: String,
+    pub accepted: bool,
+    pub detail: Option<String>,
+}
+
+/// What the sign-in page offers.
+async fn methods(State(login): State<Login>) -> Json<Value> {
+    let provider = login.provider.is_some();
+    Json(json!({ "password": !provider, "provider": provider }))
+}
+
+impl Login {
+    /// The state cookie of a sign-in through the provider, scoped to `/auth/oidc` (behind the
+    /// proxy's prefix when there is one); `max_age` 0 removes it.
+    fn state_cookie(&self, value: &str, max_age: u64) -> String {
+        let base = self.cookie.path.as_deref().unwrap_or("/auth");
+        let mut cookie = format!(
+            "{}={value}; Max-Age={max_age}; Path={}/oidc; HttpOnly; SameSite=Lax",
+            crate::oidc::STATE_COOKIE,
+            base.trim_end_matches('/')
+        );
+        if self.cookie.secure {
+            cookie.push_str("; Secure");
+        }
+        cookie
+    }
+
+    /// Check what the provider sent back and give the session: the user's id and login, the
+    /// session, and the web interface's path to land on.
+    async fn provider_session(
+        &self,
+        provider: &crate::oidc::Provider,
+        headers: &axum::http::HeaderMap,
+        back: crate::oidc::Callback,
+        login_name: &mut String,
+    ) -> Result<(jwt_sessions::Session, String), crate::oidc::Failure> {
+        use crate::oidc::Failure;
+        let state = crate::oidc::cookie(headers, crate::oidc::STATE_COOKIE)
+            .and_then(|token| self.oidc_states.verify(token).ok())
+            .ok_or(Failure::State)?;
+        let field = |name: &str| {
+            state
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        if back.state.as_deref() != Some(field("state").as_str()) || field("state").is_empty() {
+            return Err(Failure::State);
+        }
+        if let Some(error) = back.error {
+            // RFC 6749 4.1.2.1: an ASCII code; anything else is not repeated
+            let error: String = error
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .take(64)
+                .collect();
+            return Err(Failure::Refused(format!("the provider answered {error}")));
+        }
+        let code = back
+            .code
+            .filter(|code| !code.is_empty())
+            .ok_or_else(|| Failure::Refused("no code".into()))?;
+        let id_token = provider.exchange(&code, &field("verifier")).await?;
+        let identity = provider.identity(&id_token, &field("nonce")).await?;
+        let (name, vouched) = identity.login();
+        let name = normal_login(&name)
+            .map_err(|e| Failure::Account(format!("the login {name:?}: {e}")))?;
+        *login_name = name.clone();
+        let admin = vouched && provider.is_admin(&name);
+        let role = if admin { ADMIN_ROLE } else { provider.role() };
+        let internal =
+            |what: &str, e: &dyn std::fmt::Display| Failure::Internal(format!("{what}: {e}"));
+        if self
+            .index
+            .role(role)
+            .await
+            .map_err(|e| internal("reading a role", &e))?
+            .is_none()
+        {
+            return Err(Failure::Account(format!("the role {role} is gone")));
+        }
+        let id = new_id().map_err(|e| internal("making a user id", &e))?;
+        // no password ever matches this account's
+        let unmatchable = crate::oidc::random(32).map_err(|e| internal("random bytes", &e))?;
+        let hash = hashed(unmatchable)
+            .await
+            .map_err(|e| internal("hashing", &e))?;
+        let (user, link) = self
+            .index
+            .provider_user(&pacs_index::ProviderUser {
+                issuer: provider.issuer(),
+                subject: &identity.subject,
+                id: &id,
+                login: &name,
+                password_hash: &hash,
+                role,
+                link_by_login: vouched,
+            })
+            .await
+            .map_err(|e| match e {
+                pacs_index::Error::Conflict(detail) => Failure::Account(detail),
+                e => internal("finding the account", &e),
+            })?;
+        *login_name = user.login.clone();
+        if admin && user.role != ADMIN_ROLE {
+            let change = UserChange {
+                role: Some(ADMIN_ROLE.into()),
+                ..UserChange::default()
+            };
+            self.index
+                .update_user(&user.id, &change, ADMIN_ROLE)
+                .await
+                .map_err(|e| internal("making an administrator", &e))?;
+        }
+        let session = self.sessions.start(&user.id).await.map_err(|e| match e {
+            jwt_sessions::AuthError::InvalidCredentials => {
+                Failure::Account("the account is deactivated".into())
+            }
+            e => internal("starting a session", &e),
+        })?;
+        tracing::info!(login = %user.login, ?link, "signed in through the OpenID provider");
+        Ok((session, field("next")))
+    }
+}
+
+/// Starts a sign-in through the provider: to its sign-in page, with a state cookie.
+async fn oidc_start(
+    State(login): State<Login>,
+    axum::extract::Query(start): axum::extract::Query<crate::oidc::Start>,
+) -> Response {
+    let Some(provider) = &login.provider else {
+        return refused(StatusCode::NOT_FOUND, "This server has no OpenID provider")
+            .into_response();
+    };
+    let made = (|| -> anyhow::Result<(String, String, String)> {
+        Ok((
+            crate::oidc::random(32)?,
+            crate::oidc::random(32)?,
+            // RFC 7636 4.1: 43 to 128 characters
+            crate::oidc::random(48)?,
+        ))
+    })();
+    let (state, nonce, verifier) = match made {
+        Ok(made) => made,
+        Err(e) => return internal("starting a sign-in", e).into_response(),
+    };
+    let mut claims = serde_json::Map::new();
+    claims.insert("state".into(), state.clone().into());
+    claims.insert("nonce".into(), nonce.clone().into());
+    claims.insert("verifier".into(), verifier.clone().into());
+    claims.insert(
+        "next".into(),
+        crate::oidc::landing(start.next.as_deref()).into(),
+    );
+    let token = match login.oidc_states.issue("sign-in", &claims) {
+        Ok(token) => token,
+        Err(e) => return internal("starting a sign-in", e).into_response(),
+    };
+    let cookie = login.state_cookie(&token, crate::oidc::STATE_TTL.as_secs());
+    let to = provider.authorization_url(&state, &nonce, &crate::oidc::challenge(&verifier));
+    crate::oidc::see_other(&to, &[cookie])
+}
+
+/// Where the provider sends the browser back: the session, then the web interface.
+async fn oidc_callback(
+    State(login): State<Login>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(back): axum::extract::Query<crate::oidc::Callback>,
+) -> Response {
+    let Some(provider) = &login.provider else {
+        return refused(StatusCode::NOT_FOUND, "This server has no OpenID provider")
+            .into_response();
+    };
+    let clear = login.state_cookie("", 0);
+    let mut name = String::new();
+    // from /auth/oidc/callback, wherever a proxy mounts the server
+    let (mut response, accepted, detail) = match login
+        .provider_session(provider, &headers, back, &mut name)
+        .await
+    {
+        Ok((session, next)) => {
+            let refresh = login.cookie.set_cookie(
+                &session.refresh_token,
+                login.sessions.refresh.ttl().as_secs(),
+                "/auth",
+            );
+            match refresh {
+                Ok(refresh) => (
+                    crate::oidc::see_other(&format!("../../ui/{next}"), &[clear, refresh]),
+                    true,
+                    None,
+                ),
+                Err(e) => return internal("the refresh cookie", e).into_response(),
+            }
+        }
+        Err(failure) => {
+            if matches!(
+                failure,
+                crate::oidc::Failure::Internal(_) | crate::oidc::Failure::Provider(_)
+            ) {
+                tracing::error!(
+                    reason = failure.reason(),
+                    detail = failure.detail(),
+                    "a sign-in through the provider failed"
+                );
+            } else {
+                tracing::info!(
+                    reason = failure.reason(),
+                    detail = failure.detail(),
+                    "a sign-in through the provider was refused"
+                );
+            }
+            (
+                crate::oidc::see_other(
+                    &format!("../../ui/?signin_error={}", failure.reason()),
+                    &[clear],
+                ),
+                false,
+                Some(failure.detail().to_owned()),
+            )
+        }
+    };
+    response.extensions_mut().insert(ProviderSignIn {
+        login: name,
+        accepted,
+        detail,
+    });
+    response
+}
+
 impl Login {
     /// The sign-in routes (`/auth/login`, `/auth/refresh`, `/auth/logout`,
     /// `/auth/logout-all`), `GET /auth/me`, `POST /auth/password`, `/users`, `/roles`, `POST /auth/token` and
@@ -1825,7 +2160,12 @@ impl Login {
         let sessions: Router = auth_router(self.sessions.clone(), self.cookie.clone())
             .context("the refresh cookie")?;
         let (own, _) = described().with_state(self.clone()).split_for_parts();
-        Ok(sessions.merge(own))
+        let provider: Router = Router::new()
+            .route("/auth/methods", axum::routing::get(methods))
+            .route("/auth/oidc/start", axum::routing::get(oidc_start))
+            .route("/auth/oidc/callback", axum::routing::get(oidc_callback))
+            .with_state(self.clone());
+        Ok(sessions.merge(own).merge(provider))
     }
 
     /// Put the guard before every route of `app`.

@@ -30,6 +30,7 @@ pub mod auth_schema;
 mod dimse_tls;
 pub mod limits;
 mod modalities;
+pub mod oidc;
 pub mod projects;
 mod protocols;
 mod scope;
@@ -138,6 +139,36 @@ pub struct Settings {
     /// and audience (`aud`), and what a tool may name as `resource` when it asks for one.
     #[arg(long, env = "PACS_AUTH_ISSUER", default_value = "pacs-rs")]
     pub auth_issuer: String,
+
+    /// Sign in through this OpenID provider (its issuer, exactly as its discovery document
+    /// names it) instead of with passwords: see `pacs_server::oidc`. Needs PACS_AUTH, and
+    /// PACS_OIDC_CLIENT_ID, PACS_OIDC_CLIENT_SECRET (or ..._FILE) and PACS_OIDC_REDIRECT_URL.
+    /// With it, no password signs anyone in.
+    #[arg(long, env = "PACS_OIDC_ISSUER")]
+    pub oidc_issuer: Option<String>,
+
+    /// This server's client id at the provider.
+    #[arg(long, env = "PACS_OIDC_CLIENT_ID")]
+    pub oidc_client_id: Option<String>,
+
+    /// Where the provider sends the browser back: this server's `/auth/oidc/callback` as the
+    /// browser reaches it, e.g. `https://pacs.example.org/auth/oidc/callback`. Registered as
+    /// a redirect URI of the client at the provider.
+    #[arg(long, env = "PACS_OIDC_REDIRECT_URL")]
+    pub oidc_redirect_url: Option<String>,
+
+    /// The scopes asked for at sign-in, space-separated; `openid` among them.
+    #[arg(long, env = "PACS_OIDC_SCOPES", default_value = "openid email profile")]
+    pub oidc_scopes: String,
+
+    /// The role of an account made at its first sign-in through the provider.
+    #[arg(long, env = "PACS_OIDC_ROLE", default_value = "reader")]
+    pub oidc_role: String,
+
+    /// Email addresses, comma-separated, whose accounts get the role admin when they sign in
+    /// through the provider and the provider says it verified the address. None by default.
+    #[arg(long, env = "PACS_OIDC_ADMINS", value_delimiter = ',')]
+    pub oidc_admins: Vec<String>,
 
     /// Seconds a client has to send a request's head (see `pacs_server::limits`); 0: no
     /// limit.
