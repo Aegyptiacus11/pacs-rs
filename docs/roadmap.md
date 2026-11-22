@@ -47,11 +47,8 @@ Built: [settings in a file](settings.md#in-a-file), checked whole at start, a [r
 check](running.md), `/readyz`, that fails when the index or the store does not answer, and [metrics](running.md#metrics) for Prometheus: requests, associations,
 instances stored, storage used and errors, and the [Server page](web-interface.md) of the web
 interface: associations as they open and close, jobs, storage, the quarantine and the last
-errors. What remains:
-
-| Item | Done when |
-|---|---|
-| Deployment guide | the pages for a real installation, [behind a proxy](reverse-proxy.md) and [backing up and upgrading](backup.md), are joined by what is missing: Postgres and S3 set up from nothing, and sizing |
+errors, and a [deployment guide](deployment.md): Postgres and S3 from nothing, and sizing.
+Nothing remains of this milestone.
 
 ## 4. Complete query and retrieve
 
