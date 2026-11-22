@@ -29,6 +29,8 @@ pub enum Error {
     Backend(#[from] object_store::Error),
     #[error("no random bytes for a storage key: {0}")]
     Random(String),
+    #[error("reading the file to store: {0}")]
+    Io(std::io::Error),
 }
 
 /// An S3-compatible bucket.
@@ -187,6 +189,49 @@ impl Store {
         self.backend
             .put(&Path::from(object_key.as_str()), bytes.into())
             .await?;
+        Ok(object_key)
+    }
+
+    /// [`Store::put_new`] of the file at `path`, read and sent a part at a time so that
+    /// memory does not grow with its size; each part goes to `seen` as it is read (to hash
+    /// it, say). Returns the key. A part that cannot be sent abandons the upload.
+    pub async fn put_new_file(
+        &self,
+        key: &InstanceKey,
+        path: &std::path::Path,
+        mut seen: impl FnMut(&[u8]),
+    ) -> Result<String, Error> {
+        use tokio::io::AsyncReadExt;
+        const PART: usize = 8 << 20;
+        let mut suffix = [0u8; 8];
+        getrandom::fill(&mut suffix).map_err(|e| Error::Random(e.to_string()))?;
+        let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+        let fixed = self.key_for(key)?;
+        let object_key = format!("{}.{suffix}.dcm", fixed.trim_end_matches(".dcm"));
+        let mut file = tokio::fs::File::open(path).await.map_err(Error::Io)?;
+        let upload = self
+            .backend
+            .put_multipart(&Path::from(object_key.as_str()))
+            .await?;
+        let mut writer = object_store::WriteMultipart::new_with_chunk_size(upload, PART);
+        let mut buffer = vec![0u8; PART];
+        loop {
+            let read = match file.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(e) => {
+                    writer.abort().await?;
+                    return Err(Error::Io(e));
+                }
+            };
+            seen(&buffer[..read]);
+            // at most two parts on their way at once: memory stays a few parts' worth
+            if let Err(e) = writer.wait_for_capacity(2).await {
+                return Err(e.into());
+            }
+            writer.write(&buffer[..read]);
+        }
+        writer.finish().await?;
         Ok(object_key)
     }
 
