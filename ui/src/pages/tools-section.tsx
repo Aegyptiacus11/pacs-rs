@@ -30,12 +30,14 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, url } from "@/lib/api";
+import { throughProvider } from "@/lib/session";
 import { summary, useRoles, type Permission, type RoleInfo } from "@/lib/roles";
 import { limitLabel, ProjectsChoice, ProjectsDialog, useProjects, type Projects } from "@/pages/projects-choice";
 import { Field, RoleChoice } from "@/pages/users-page";
 
 type Tool = { id: string; name: string; role: string; created_by: string; created_ms: number; last_token_ms: number | null; projects: Projects };
-type NewTool = Tool & { secret: string };
+/** With an OpenID provider the tool has no secret here: the provider gives its tokens. */
+type NewTool = Tool & { secret?: string };
 
 const day = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
 const moment = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -73,6 +75,7 @@ function Secret({ label, value }: { label: string; value: string }) {
 function AddTool({ open, roles, projects, onClose }: { open: boolean; roles: RoleInfo[]; projects: string[]; onClose: () => void }) {
   const queries = useQueryClient();
   const [name, setName] = useState("");
+  const [clientId, setClientId] = useState("");
   const [chosen, setRole] = useState<string | null>(null);
   const role = chosen ?? roles[0]?.id ?? "";
   const [seen, setSeen] = useState<Projects>(null);
@@ -82,6 +85,7 @@ function AddTool({ open, roles, projects, onClose }: { open: boolean; roles: Rol
   useEffect(() => {
     if (!open) return;
     setName("");
+    setClientId("");
     setRole(null);
     setSeen(null);
     setError(null);
@@ -89,16 +93,25 @@ function AddTool({ open, roles, projects, onClose }: { open: boolean; roles: Rol
   }, [open]);
   const close = onClose;
   const add = useMutation({
-    mutationFn: () => api<NewTool>("clients", { method: "POST", ...json({ name: name.trim(), role, projects: seen }) }),
+    mutationFn: () =>
+      api<NewTool>("clients", {
+        method: "POST",
+        ...json({ name: name.trim(), role, projects: seen, ...(throughProvider ? { client_id: clientId.trim() } : {}) }),
+      }),
     onSuccess: (tool) => {
       queries.invalidateQueries({ queryKey: ["clients"] });
-      setMade(tool);
+      // nothing to copy when the provider holds the secret
+      if (tool.secret === undefined) {
+        toast.success(`${tool.name} added`);
+        close();
+      } else setMade(tool);
     },
     onError: (e) => setError(e instanceof Error ? e.message : "The tool was not added."),
   });
   function submit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) return setError("Enter a name.");
+    if (throughProvider && !clientId.trim()) return setError("Enter the tool's client ID at your organisation's sign-in.");
     setError(null);
     add.mutate();
   }
@@ -114,7 +127,7 @@ function AddTool({ open, roles, projects, onClose }: { open: boolean; roles: Rol
               <DialogDescription>Copy the secret now: it is shown this once, and the server does not keep it.</DialogDescription>
             </DialogHeader>
             <Secret label="ID" value={made.id} />
-            <Secret label="Secret" value={made.secret} />
+            <Secret label="Secret" value={made.secret ?? ""} />
             <Secret label="Token address" value={url("auth/token")} />
             <p className="text-sm text-muted-foreground">
               The tool posts <code className="font-mono text-xs">grant_type=client_credentials</code> to the token address, with the ID and the secret as HTTP
@@ -130,8 +143,17 @@ function AddTool({ open, roles, projects, onClose }: { open: boolean; roles: Rol
           <form onSubmit={submit} className="grid gap-4" noValidate>
             <DialogHeader>
               <DialogTitle>Add a tool</DialogTitle>
-              <DialogDescription>A viewer, a script or a pipeline that connects without a person signing in.</DialogDescription>
+              <DialogDescription>
+                {throughProvider
+                  ? "A viewer, a script or a pipeline that gets its access tokens from your organisation's sign-in, as a client there."
+                  : "A viewer, a script or a pipeline that connects without a person signing in."}
+              </DialogDescription>
             </DialogHeader>
+            {throughProvider && (
+              <Field label="Client ID at your organisation's sign-in">
+                <Input autoComplete="off" spellCheck={false} maxLength={128} value={clientId} onChange={(e) => (setClientId(e.target.value), setError(null))} />
+              </Field>
+            )}
             <Field label="Name">
               <Input autoComplete="off" autoFocus maxLength={60} placeholder="Nightly pipeline" value={name} onChange={(e) => (setName(e.target.value), setError(null))} />
             </Field>
@@ -200,7 +222,9 @@ export function ToolsSection() {
         <div>
           <h2 className="text-base font-semibold tracking-tight">Tools</h2>
           <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-            Programs that connect without a person signing in: a viewer, a script, a pipeline. Each one has its own secret and a role; it never manages users.
+            {throughProvider
+              ? "Programs that connect without a person signing in: a viewer, a script, a pipeline. Each one is a client at your organisation's sign-in, with a role here; it never manages users."
+              : "Programs that connect without a person signing in: a viewer, a script, a pipeline. Each one has its own secret and a role; it never manages users."}
           </p>
         </div>
         <Button size="sm" onClick={() => setAdding(true)}>
@@ -303,7 +327,11 @@ export function ToolsSection() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>Its secret stops working at once, and so do the access tokens it already has. This cannot be undone.</AlertDialogDescription>
+            <AlertDialogDescription>
+              {throughProvider
+                ? "Its access tokens stop working here at once. This cannot be undone."
+                : "Its secret stops working at once, and so do the access tokens it already has. This cannot be undone."}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
