@@ -1,6 +1,5 @@
-use clap::Parser;
 use pacs_server::{
-    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve_dimse_audited,
+    StorageLocation, app_with_audit, dimse_config, open_archive, serve_dimse_audited,
     shutdown_signal,
 };
 use tracing_subscriber::EnvFilter;
@@ -26,7 +25,14 @@ async fn main() -> anyhow::Result<()> {
             .init();
     }
 
-    let settings = Settings::parse();
+    let settings = match pacs_server::load_settings(std::env::args_os()) {
+        Ok(settings) => settings,
+        // --help and --version are answers, not failures
+        Err(e) => match e.downcast::<clap::Error>() {
+            Ok(e) => e.exit(),
+            Err(e) => return Err(e),
+        },
+    };
     if settings.healthcheck {
         std::process::exit(if pacs_server::healthy(settings.listen).await {
             0
