@@ -15,9 +15,11 @@ mod engine;
 pub mod keys;
 pub mod profile;
 mod quarantine;
+pub mod replaced;
 pub mod table;
 
 pub use action::Action;
 pub use engine::{Outcome, deidentify, explain};
 pub use keys::Keys;
 pub use profile::{Opt, Override, Profile, ProfileError, Quarantine, TagPattern};
+pub use replaced::replaced_uids;
