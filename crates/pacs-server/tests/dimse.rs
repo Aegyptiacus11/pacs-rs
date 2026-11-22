@@ -1789,3 +1789,157 @@ async fn without_dimse_a_study_is_got() {
         2
     );
 }
+
+/// A pacs-rs that receives, as ARCHIVE2: its archive and DIMSE port.
+async fn receiving_archive(dir: &Path) -> (pacs_archive::Archive, u16) {
+    let settings = settings_in(dir, &["--dimse-ae-title", "ARCHIVE2"]);
+    let archive = open_archive(&settings).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(serve_dimse(
+        listener,
+        archive.clone(),
+        dimse_config(&settings).unwrap(),
+        Vec::new(),
+        std::future::pending(),
+    ));
+    (archive, port)
+}
+
+fn store_request(id: &str, body: &str) -> Request<Body> {
+    Request::post(format!("/modalities/{id}/store"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_owned()))
+        .unwrap()
+}
+
+/// `POST /modalities/{id}/store`: a study of this archive sent to a destination by
+/// C-STORE, at once or as a job; the audit trail has who sent what, of which patient, to
+/// whom.
+#[tokio::test]
+async fn a_study_is_sent_to_a_destination() {
+    use pacs_server::app_with_audit;
+    use pacs_server::audit::open_audit;
+
+    let there_dir = tempfile::tempdir().unwrap();
+    let (there, port) = receiving_archive(there_dir.path()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("second=ARCHIVE2@127.0.0.1:{port}");
+    let settings = audited_settings(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-move-destinations",
+            "second",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let first = RealSeries::new(961, 3).with_patient("DOE^JANE", None);
+    let second = RealSeries::new(962, 2).with_patient("ROE^RICHARD", None);
+    for series in [&first, &second] {
+        for bytes in series.all_bytes() {
+            archive.ingest(bytes.into()).await.unwrap();
+        }
+    }
+    let app = app_with_audit(archive, &settings, None, open_audit(&settings).unwrap()).unwrap();
+
+    let body = format!(r#"{{"StudyInstanceUID": "{}"}}"#, first.study_uid());
+    let (status, answer) = send(&app, store_request("second", &body)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    described::<Moved>(&answer);
+    assert_eq!(answer["Method"], "C-STORE");
+    assert_eq!(answer["Status"], "Success");
+    assert_eq!(
+        (answer["Completed"].as_u64(), answer["Failed"].as_u64()),
+        (Some(3), Some(0))
+    );
+    let arrived = there
+        .index()
+        .instances(&first.study_uid(), &first.series_uid(), None)
+        .await
+        .unwrap();
+    assert_eq!(arrived.len(), 3);
+    let lines = audit_lines(dir.path(), 1).await;
+    let begun = lines
+        .iter()
+        .find(|line| line.contains("110102"))
+        .unwrap_or_else(|| panic!("no Begin Transferring:\n{lines:#?}"));
+    has(
+        begun,
+        &[
+            "AlternativeUserID=\"AETITLES=PACSRS\" UserIsRequestor=\"false\"><RoleIDCode csd-code=\"110153\"",
+            "<ActiveParticipant UserID=\"ARCHIVE2\"",
+            &format!("ParticipantObjectID=\"{}\"", first.study_uid()),
+            "<ParticipantObjectName>DOE^JANE</ParticipantObjectName>",
+        ],
+    );
+
+    // as a job
+    let body = format!(
+        r#"{{"StudyInstanceUID": ["{}"], "Asynchronous": true}}"#,
+        second.study_uid()
+    );
+    let (status, started) = send(&app, store_request("second", &body)).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let job = job_over(&app, started["Path"].as_str().unwrap()).await;
+    assert_eq!(job["State"], "Success", "{job}");
+    assert_eq!(job["Type"], "C-STORE");
+    assert_eq!(job["Completed"], 2);
+    assert_eq!(
+        there
+            .index()
+            .instances(&second.study_uid(), &second.series_uid(), None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+/// Only to a destination, only what is in the archive, only a list of UIDs.
+#[tokio::test]
+async fn a_send_refuses_what_cannot_be_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            "second=ARCHIVE2@127.0.0.1:9,reader=READER@127.0.0.1:9",
+            "--dimse-move-destinations",
+            "second",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let series = RealSeries::new(971, 1);
+    for bytes in series.all_bytes() {
+        archive.ingest(bytes.into()).await.unwrap();
+    }
+    let app = app(archive, &settings).unwrap();
+    let study = format!(r#"{{"StudyInstanceUID": "{}"}}"#, series.study_uid());
+    for (id, body, expected) in [
+        ("reader", study.as_str(), StatusCode::CONFLICT),
+        ("nobody", study.as_str(), StatusCode::NOT_FOUND),
+        (
+            "second",
+            r#"{"StudyInstanceUID": "2.25.404"}"#,
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "second",
+            r#"{"StudyInstanceUID": "not a uid"}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "second",
+            r#"{"StudyInstanceUID": []}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        ("second", "{}", StatusCode::BAD_REQUEST),
+        // a destination that cannot be reached
+        ("second", study.as_str(), StatusCode::BAD_GATEWAY),
+    ] {
+        let (status, answer) = send(&app, store_request(id, body)).await;
+        assert_eq!(status, expected, "{id} {body}: {answer}");
+    }
+}
