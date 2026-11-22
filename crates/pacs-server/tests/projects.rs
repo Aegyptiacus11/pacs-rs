@@ -205,6 +205,23 @@ async fn an_instance_sent_to_a_project_is_served_de_identified() {
         .unwrap();
     assert_eq!(project, Some(Some("liver-2026".into())));
 
+    // the way back is recorded, for a result made on the copy
+    let replaced = [
+        keys.uid(&series.study_uid()),
+        keys.uid(&series.series_uid()),
+        keys.uid(&series.instance_uid(0)),
+    ];
+    let originals = index.original_uids("liver-2026", &replaced).await.unwrap();
+    assert_eq!(originals[&replaced[0]], series.study_uid());
+    assert_eq!(originals[&replaced[1]], series.series_uid());
+    assert_eq!(originals[&replaced[2]], series.instance_uid(0));
+    let original = index
+        .original_study("liver-2026", &replaced[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.patient["PatientID"], series.patient_id().as_str());
+
     // The audit trail names what the archive holds, the pseudonyms: who the patient was is
     // not written there either.
     let mut audited = String::new();

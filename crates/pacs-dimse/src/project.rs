@@ -3,6 +3,9 @@
 //! archive. The identified instance is held in memory while that happens and never stored;
 //! one the profile quarantines goes to the quarantine store when the deployment has one,
 //! and is refused otherwise.
+//!
+//! What each copy replaced is recorded in the index ([`pacs_index::OriginalStudy`] and the
+//! UID pairs), so that a result made on the copy can be sent back to the original study.
 
 use bytes::Bytes;
 use dicom_object::{FileMetaTableBuilder, InMemDicomObject, OpenFileOptions};
@@ -44,6 +47,8 @@ pub enum ProjectError {
     Write(String),
     #[error(transparent)]
     Ingest(#[from] IngestError),
+    #[error("what the copy replaced cannot be recorded: {0}")]
+    Originals(String),
     #[error("the quarantine store did not take the instance: {0}")]
     Quarantine(#[from] pacs_store::Error),
 }
@@ -61,7 +66,18 @@ impl Project {
                 .map_err(|e| ProjectError::Read(e.to_string()))??;
         drop(reading); // the ingest takes its own: held here, both could wait on each other.
         match done {
-            Done::Deidentified(bytes) => {
+            Done::Deidentified(bytes, originals) => {
+                // before the copy: once a copy is there, a result may be made on it
+                self.archive
+                    .index()
+                    .record_originals(
+                        &self.profile.name,
+                        &originals.uids,
+                        &originals.replaced_study,
+                        &originals.study,
+                    )
+                    .await
+                    .map_err(|e| ProjectError::Originals(e.to_string()))?;
                 self.archive.ingest(Bytes::from(bytes)).await?;
                 Ok(Received::Stored)
             }
@@ -83,8 +99,15 @@ impl Project {
 }
 
 enum Done {
-    Deidentified(Vec<u8>),
+    Deidentified(Vec<u8>, Originals),
     Quarantined(String),
+}
+
+/// What one de-identified instance replaced.
+struct Originals {
+    uids: Vec<(String, String)>,
+    replaced_study: String,
+    study: pacs_index::OriginalStudy,
 }
 
 /// The de-identified file: the data set by the profile, in the transfer syntax it came in,
@@ -102,7 +125,17 @@ fn deidentify_file(file: &[u8], profile: &Profile, keys: &Keys) -> Result<Done, 
         .transfer_syntax()
         .trim_end_matches('\0')
         .to_owned();
-    let dataset: &InMemDicomObject = &object;
+    let original = pacs_core::Instance {
+        key: pacs_core::InstanceKey {
+            study_instance_uid: String::new(),
+            series_instance_uid: String::new(),
+            sop_instance_uid: String::new(),
+            sop_class_uid: String::new(),
+            transfer_syntax_uid: transfer_syntax.clone(),
+        },
+        object,
+    };
+    let dataset: &InMemDicomObject = &original.object;
     let deidentified = match pacs_deid::deidentify(dataset, profile, keys) {
         Outcome::Quarantined(reason) => return Ok(Done::Quarantined(reason)),
         Outcome::Deidentified(object) => *object,
@@ -114,6 +147,14 @@ fn deidentify_file(file: &[u8], profile: &Profile, keys: &Keys) -> Result<Done, 
             .and_then(|e| e.to_str().ok())
             .map(|s| s.trim_end_matches(['\0', ' ']).to_owned())
             .unwrap_or_default()
+    };
+    let originals = Originals {
+        uids: pacs_deid::replaced_uids(dataset, &deidentified, keys),
+        replaced_study: uid(dicom_dictionary_std::tags::STUDY_INSTANCE_UID),
+        study: pacs_index::OriginalStudy {
+            patient: original.main_tags(pacs_core::main_tags::PATIENT),
+            study: original.main_tags(pacs_core::main_tags::STUDY),
+        },
     };
     let meta = FileMetaTableBuilder::new()
         .transfer_syntax(transfer_syntax)
@@ -127,5 +168,5 @@ fn deidentify_file(file: &[u8], profile: &Profile, keys: &Keys) -> Result<Done, 
         .map_err(|e| ProjectError::Write(e.to_string()))?
         .write_all(&mut out)
         .map_err(|e| ProjectError::Write(e.to_string()))?;
-    Ok(Done::Deidentified(out))
+    Ok(Done::Deidentified(out, originals))
 }
