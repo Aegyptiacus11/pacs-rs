@@ -110,7 +110,7 @@ backup up, and again after an upgrade that changes the index.
    starts, before it serves anything.
 
 ```bash
-PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.10.0 docker compose up -d --wait
+PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.11.0 docker compose up -d --wait
 ```
 
 Name the version, as above, rather than `latest`: the server then changes when you decide.
