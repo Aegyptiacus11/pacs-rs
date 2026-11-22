@@ -34,7 +34,8 @@ everything. Nothing remains of this milestone.
 Built: [checksums](integrity.md), each stored file's SHA-256 in the index, checked on a
 schedule, on request and from the command line, and [the store and the index
 compared](integrity.md#the-store-and-the-index-compared) by one command that repairs on
-request. What remains:
+request, and [upgrades](backup.md#upgrading) tested on the index every release since 0.5.2
+wrote, on SQLite and Postgres. What remains:
 
 | Item | Done when |
 |---|---|
@@ -42,7 +43,6 @@ request. What remains:
 | Deletion that can be undone | a deleted study stays recoverable for a set time before its files go |
 | Several processes on one index | uploads and deletions stay correct with two servers on one Postgres ([REST API](rest-api.md)) |
 | Jobs that outlive a restart | moves in the background are in the index, and resume or fail clearly after a restart ([DIMSE](dimse.md)) |
-| Upgrades | every release migrates the index of the one before, tested on a copy of each schema version |
 
 ## 3. Operable
 
