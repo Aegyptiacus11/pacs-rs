@@ -1,4 +1,4 @@
-// Hash routes: #/studies[?patient=ID][&open=STUDY], #/patients[?open=PATIENT], #/settings[/users|roles|tools|account|about],
+// Hash routes: #/studies[?patient=ID][&open=STUDY], #/patients[?open=PATIENT], #/server, #/settings[/users|roles|tools|account|about],
 // #/view/STUDY[/SERIES][?compare=STUDY]: without a series the viewer hangs the study by
 // protocol; with another study, the two side by side.
 
@@ -10,6 +10,7 @@ export type Route =
   | { page: "studies"; patient: string | null; open: string | null }
   | { page: "patients"; open: string | null }
   | { page: "settings"; section: SettingsSection | null }
+  | { page: "server" }
   | { page: "view"; study: string; series: string | null; compare: string | null };
 
 function parse(): Route {
@@ -20,6 +21,7 @@ function parse(): Route {
   const settings = /^\/settings(?:\/(users|roles|tools|account|about))?$/.exec(path);
   if (settings) return { page: "settings", section: (settings[1] as SettingsSection) ?? null };
   if (path === "/patients") return { page: "patients", open: params.get("open") };
+  if (path === "/server") return { page: "server" };
   return { page: "studies", patient: params.get("patient"), open: params.get("open") };
 }
 
@@ -46,6 +48,7 @@ export const href = {
     if (open) q.set("open", open);
     return `#/studies${q.size ? `?${q}` : ""}`;
   },
+  server: () => "#/server",
   patients: (open?: string | null) => (open ? `#/patients?open=${encodeURIComponent(open)}` : "#/patients"),
   view: (study: string, series?: string | null, compare?: string | null) =>
     (series ? `#/view/${study}/${series}` : `#/view/${study}`) + (compare ? `?compare=${encodeURIComponent(compare)}` : ""),

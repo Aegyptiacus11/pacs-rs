@@ -37,6 +37,7 @@ pub mod oidc;
 pub mod projects;
 mod protocols;
 mod scope;
+mod server_page;
 pub mod trash;
 mod ui;
 mod worklist;
@@ -787,6 +788,11 @@ pub fn app_with_audit(
     let index = archive.index().clone();
     let audit_index = index.clone();
     let ready_archive = archive.clone();
+    let page_archive = archive.clone();
+    let quarantine = match &settings.quarantine {
+        Some(location) => Some(open_store(location, settings).context("opening PACS_QUARANTINE")?),
+        None => None,
+    };
     let checks = checks::router(archive.clone()).merge(trash::router(archive.clone()));
     let dicomweb = pacs_dicomweb::router(
         archive,
@@ -817,7 +823,9 @@ pub fn app_with_audit(
                 &path,
                 login.is_some(),
                 login.as_ref().is_some_and(auth::Login::has_provider),
+                settings.trash_days,
             ))
+            .merge(server_page::router(page_archive, quarantine))
             .merge(protocols::router(index.clone()))
             .merge(annotations::router(index.clone()))
             .merge(worklist::router(index));

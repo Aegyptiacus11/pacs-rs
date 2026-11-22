@@ -114,6 +114,8 @@ async function get(url: URL) {
 export function useStudyPage(query: StudyQuery) {
   return useQuery({
     queryKey: ["studies", "page", query],
+    // studies arrive while the list is open
+    refetchInterval: 20_000,
     queryFn: async () => {
       const body = await get(search(query));
       return { total: Number(body.Total), studies: (body.Studies as any[]).map(fromList) };
@@ -126,6 +128,8 @@ export function useStudyPage(query: StudyQuery) {
 export function useStudySummary(filters: StudyFilters) {
   return useQuery({
     queryKey: ["studies", "summary", filters],
+    // studies arrive while the list is open
+    refetchInterval: 20_000,
     queryFn: async (): Promise<StudySummary> => {
       const s = (await get(search({ ...filters, limit: 1 }, { summary: "true" }))).Summary;
       return {
@@ -145,6 +149,8 @@ export function useStudySummary(filters: StudyFilters) {
 export function useStudyFacets(patient: string | null) {
   return useQuery({
     queryKey: ["studies", "facets", patient],
+    // studies arrive while the list is open
+    refetchInterval: 20_000,
     queryFn: async (): Promise<StudyFacets> => {
       const url = new URL("api/studies/facets", location.href);
       url.hash = "";

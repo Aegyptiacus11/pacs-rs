@@ -21,6 +21,7 @@ import { formatDate, formatTime, initials, isoDate, personName, plural, sexAge }
 import { go, href } from "@/lib/route";
 import { deleteStudies, usePatientPage, usePatientStudies, useRefreshStudies, useStudySeries, type Patient, type PatientQuery, type Study } from "@/lib/studies";
 import { cn } from "@/lib/utils";
+import { afterDelete } from "@/lib/config";
 
 const SORTS: [PatientQuery["sort"], boolean, string][] = [
   ["last", true, "Latest study first"],
@@ -176,12 +177,13 @@ export function PatientsPage({ open }: { open: string | null }) {
         )}
       </section>
 
-      {/* beside the list on a wide screen; over the whole page on a narrower one, once a patient is chosen */}
-      <aside
-        aria-label="The chosen patient"
-        className={cn("overflow-y-auto bg-card lg:static lg:block lg:w-[400px] lg:shrink-0 lg:border-l", current ? "fixed inset-0 z-30" : "hidden")}
-      >
-        {current ? (
+      {/* only once a patient is chosen, so the list keeps the whole width until then: beside it
+          on a wide screen, a sheet over its right side on a narrower one, the whole page on a phone */}
+      {current && (
+        <aside
+          aria-label="The chosen patient"
+          className="fixed inset-0 z-30 overflow-y-auto bg-card lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[440px] lg:border-l lg:shadow-2xl xl:static xl:shrink-0 xl:shadow-none"
+        >
           <PatientRecord
             onClose={() => setCurrent(null)}
             key={current}
@@ -192,18 +194,8 @@ export function PatientsPage({ open }: { open: string | null }) {
               refresh();
             }}
           />
-        ) : (
-          <div className="grid h-full place-items-center p-10 text-center">
-            <div>
-              <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full border bg-card">
-                <Users className="size-5 text-muted-foreground" strokeWidth={1.75} />
-              </div>
-              <div className="font-medium">Choose a patient</div>
-              <p className="mt-1 max-w-xs text-sm text-muted-foreground">Their record shows every study they have, newest first, with the series of each; tick two to compare them side by side.</p>
-            </div>
-          </div>
-        )}
-      </aside>
+        </aside>
+      )}
     </div>
   );
 }
@@ -265,7 +257,7 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
                 setPending({
                   ids: list.map((s) => s.id),
                   title: "Delete this patient?",
-                  description: `${personName(who.name)} (${who.patientId || "no ID"}) and all ${plural(list.length, "study", "studies")}, ${plural(instances, "image")}, will be removed from storage. This can't be undone.`,
+                  description: `${personName(who.name)} (${who.patientId || "no ID"}) and all ${plural(list.length, "study", "studies")}, ${plural(instances, "image")}, ${afterDelete}`,
                 })
               }
             >

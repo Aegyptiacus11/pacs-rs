@@ -16,7 +16,8 @@ applyTheme();
 // the session, if this browser has one; the app shows a spinner until it is known
 void restore();
 
-const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } } });
+// back on the page, the archive may have changed: what is shown is asked again
+const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: true, retry: 1 } } });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -10,6 +10,7 @@ import { PatientsPage } from "@/pages/patients-page";
 import { SignInPage } from "@/pages/sign-in-page";
 import { StudiesPage } from "@/pages/studies-page";
 import { SettingsPage } from "@/pages/settings-page";
+import { ServerPage } from "@/pages/server-page";
 
 // Cornerstone loads only when a series is opened
 const ViewerPage = lazy(() => import("@/viewer/viewer-page").then((m) => ({ default: m.ViewerPage })));
@@ -45,6 +46,8 @@ export function App() {
         <main className="min-h-0 flex-1 overflow-hidden">
           {route.page === "settings" ? (
             <SettingsPage section={route.section} />
+          ) : route.page === "server" ? (
+            <ServerPage />
           ) : route.page === "patients" ? (
             <PatientsPage open={route.open} />
           ) : (

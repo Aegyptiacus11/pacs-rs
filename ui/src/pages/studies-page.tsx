@@ -62,6 +62,7 @@ import {
   type StudySummary,
 } from "@/lib/studies";
 import { cn } from "@/lib/utils";
+import { afterDelete } from "@/lib/config";
 
 /** A custom range: ISO dates (yyyy-mm-dd) from the date fields, either end open. */
 type Span = { from: string; to: string };
@@ -548,10 +549,15 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         )}
       </section>
 
-      {/* beside the list on a wide screen; over the whole page on a narrower one, once a study is chosen */}
+      {/* Beside the list on a wide screen, with the archive's summary until a study is chosen.
+          Narrower, the list keeps the whole width: a chosen study opens as a sheet over its
+          right side (over the whole page on a phone), and the summary is left out. */}
       <aside
         aria-label="The chosen study"
-        className={cn("overflow-y-auto bg-card lg:static lg:block lg:w-[400px] lg:shrink-0 lg:border-l", shown ? "fixed inset-0 z-30" : "hidden")}
+        className={cn(
+          "overflow-y-auto bg-card xl:static xl:block xl:w-[380px] xl:shrink-0 xl:border-l xl:shadow-none",
+          shown ? "fixed inset-0 z-30 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[400px] lg:border-l lg:shadow-2xl" : "hidden",
+        )}
       >
         {shown ? (
           <StudyPane key={shown.id} study={shown} onPick={setCurrent} onClose={() => setCurrent(null)} onDelete={setPending} />
@@ -578,7 +584,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                 setPending({
                   ids: selected.map((s) => s.id),
                   title: `Delete ${plural(selected.length, "study", "studies")}?`,
-                  description: `${selected.reduce((n, s) => n + s.instances, 0).toLocaleString()} images from ${plural(new Set(selected.map((s) => s.patient)).size, "patient")} will be removed from storage. This can't be undone.`,
+                  description: `${selected.reduce((n, s) => n + s.instances, 0).toLocaleString()} images from ${plural(new Set(selected.map((s) => s.patient)).size, "patient")} ${afterDelete}`,
                 })
               }
             >
@@ -827,7 +833,7 @@ function deleteOne(s: Study): PendingDelete {
   return {
     ids: [s.id],
     title: "Delete this study?",
-    description: `${s.description || "The study"} of ${personName(s.name)} (${formatDate(s.date)}): ${plural(s.instances, "image")} will be removed from storage. This can't be undone.`,
+    description: `${s.description || "The study"} of ${personName(s.name)} (${formatDate(s.date)}): ${plural(s.instances, "image")} ${afterDelete}`,
   };
 }
 
@@ -874,7 +880,7 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
           onDelete({
             ids: theirs.map((x) => x.id),
             title: "Delete this patient?",
-            description: `${personName(s.name)} (${s.patientId || "no ID"}) and all ${plural(theirs.length, "study", "studies")}, ${plural(theirs.reduce((n, x) => n + x.instances, 0), "image")}, will be removed from storage. This can't be undone.`,
+            description: `${personName(s.name)} (${s.patientId || "no ID"}) and all ${plural(theirs.length, "study", "studies")}, ${plural(theirs.reduce((n, x) => n + x.instances, 0), "image")}, ${afterDelete}`,
           })
         }
       >

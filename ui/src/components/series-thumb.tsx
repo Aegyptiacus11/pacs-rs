@@ -76,7 +76,7 @@ export function SeriesThumb({ series, studyUid, className }: { series: any; stud
   return (
     <div ref={box} className={cn("relative aspect-square overflow-hidden rounded-md bg-black", className)}>
       <canvas ref={canvas} className={cn("size-full transition-opacity duration-300", state === "ready" ? "opacity-100" : "opacity-0")} />
-      {state === "waiting" && <div className="absolute inset-0 animate-pulse bg-neutral-900" />}
+      {state === "waiting" && <div className="absolute inset-0 animate-pulse bg-muted" />}
       {state === "none" && <div className="absolute inset-0 grid place-items-center text-[11px] text-neutral-500">No preview</div>}
     </div>
   );

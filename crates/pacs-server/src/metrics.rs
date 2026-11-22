@@ -48,17 +48,94 @@ pub async fn count_requests(request: Request, next: Next) -> Response {
     response
 }
 
-/// A logging layer that counts what is logged at ERROR, by the crate it came from.
+/// A warning or an error the server logged, as the administration page lists it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Logged {
+    pub time_ms: i64,
+    /// `WARN` or `ERROR`.
+    pub level: &'static str,
+    /// The module that logged it.
+    pub target: String,
+    /// What it says.
+    pub message: String,
+    /// Its fields, as `name=value`, space-separated.
+    pub fields: String,
+}
+
+/// Warnings and errors kept, the latest last.
+const KEPT_LOGGED: usize = 100;
+static LOGGED: LazyLock<Mutex<std::collections::VecDeque<Logged>>> = LazyLock::new(Mutex::default);
+
+/// The warnings and errors logged lately, the latest first.
+pub fn logged() -> Vec<Logged> {
+    LOGGED
+        .lock()
+        .map(|kept| kept.iter().rev().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The message of an event, then its other fields.
+#[derive(Default)]
+struct Text {
+    message: String,
+    fields: String,
+}
+
+impl tracing::field::Visit for Text {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            let _ = write!(self.message, "{value:?}");
+        } else {
+            let _ = write!(self.fields, " {}={value:?}", field.name());
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message.push_str(value);
+        } else {
+            let _ = write!(self.fields, " {}={value}", field.name());
+        }
+    }
+}
+
+/// A logging layer that counts what is logged at ERROR, by the crate it came from, and keeps
+/// the latest warnings and errors for the administration page.
 pub struct CountErrors;
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CountErrors {
     fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
-        if *event.metadata().level() == tracing::Level::ERROR {
-            let target = event.metadata().target();
+        let level = *event.metadata().level();
+        if level > tracing::Level::WARN {
+            return;
+        }
+        let target = event.metadata().target();
+        if level == tracing::Level::ERROR {
             let krate = target.split("::").next().unwrap_or(target).to_owned();
             if let Ok(mut errors) = ERRORS.lock() {
                 *errors.entry(krate).or_default() += 1;
             }
+        }
+        let mut text = Text::default();
+        event.record(&mut text);
+        let time_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        if let Ok(mut kept) = LOGGED.lock() {
+            if kept.len() == KEPT_LOGGED {
+                kept.pop_front();
+            }
+            kept.push_back(Logged {
+                time_ms,
+                level: if level == tracing::Level::ERROR {
+                    "ERROR"
+                } else {
+                    "WARN"
+                },
+                target: target.to_owned(),
+                message: text.message,
+                fields: text.fields.trim_start().to_owned(),
+            });
         }
     }
 }
