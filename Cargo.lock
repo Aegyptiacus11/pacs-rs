@@ -2211,6 +2211,7 @@ name = "pacs-dimse"
 version = "0.14.0"
 dependencies = [
  "bytes",
+ "clap",
  "dicom-core",
  "dicom-dictionary-std",
  "dicom-encoding",

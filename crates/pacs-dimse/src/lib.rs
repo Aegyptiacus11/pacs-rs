@@ -21,6 +21,8 @@ pub mod scp;
 pub mod scu;
 pub mod sop_classes;
 pub mod status;
+#[cfg(feature = "tools")]
+pub mod tools;
 
 pub use ae::{AeError, AeTitle, ClientTls, RemoteAe};
 pub use project::{Project, ProjectError, Received};

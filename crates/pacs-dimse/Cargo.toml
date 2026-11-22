@@ -9,6 +9,8 @@ repository.workspace = true
 
 [dependencies]
 bytes = "1.12.1"
+# the command-line tools only (feature `tools`)
+clap = { version = "4.6.7", features = ["derive"], optional = true }
 dicom-dictionary-std = "0.10.0"
 dicom-encoding = "0.10.1"
 dicom-object = "0.10.0"
@@ -32,6 +34,44 @@ tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "net", "rt-
 tracing = "0.1.44"
 # a large C-STORE's data set written to disk as it arrives (Config::spool)
 tempfile = "3.27.0"
+
+[features]
+# storescu, storescp, findscu, movescu, getscu and echoscu, for sites without DCMTK
+tools = ["dep:clap"]
+
+[[bin]]
+name = "echoscu"
+path = "src/bin/echoscu.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "storescu"
+path = "src/bin/storescu.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "storescp"
+path = "src/bin/storescp.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "findscu"
+path = "src/bin/findscu.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "movescu"
+path = "src/bin/movescu.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "getscu"
+path = "src/bin/getscu.rs"
+required-features = ["tools"]
+
+[[test]]
+name = "tools"
+required-features = ["tools"]
 
 [dev-dependencies]
 pacs-core = { path = "../pacs-core", features = ["real"] }
