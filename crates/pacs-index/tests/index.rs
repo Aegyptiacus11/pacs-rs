@@ -333,3 +333,29 @@ async fn a_study_keeps_the_project_of_its_first_instance() {
         assert_eq!(study.instance_count, 2);
     }
 }
+
+/// Every SQLite connection waits a minute for the write lock, not the driver's 5 s: many
+/// writes at once on a slow disk wait their turn instead of failing "database is locked".
+#[tokio::test]
+async fn sqlite_writers_wait_their_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = Index::open(dir.path().join("index.sqlite")).await.unwrap();
+    // more than the pool holds at once, so that new connections are made too
+    let mut tasks = Vec::new();
+    for _ in 0..20 {
+        let index = index.clone();
+        tasks.push(tokio::spawn(async move {
+            let waits: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+                .fetch_one(index.pool())
+                .await
+                .unwrap();
+            waits
+        }));
+    }
+    for task in tasks {
+        assert_eq!(
+            task.await.unwrap(),
+            i64::from(pacs_index::SQLITE_BUSY_TIMEOUT_MS)
+        );
+    }
+}
