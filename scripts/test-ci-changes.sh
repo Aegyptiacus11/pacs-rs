@@ -23,7 +23,6 @@ expect false true "the web interface only" ui/src/App.tsx ui/package-lock.json u
 expect true false "a crate" crates/pacs-core/src/lib.rs
 expect true false "the lock file" Cargo.lock
 expect true false "a path nobody listed" something/new.txt
-expect true false "the CMake toolchain file" cmake/msvc-static-crt.cmake
 expect true true "a crate and the web interface" docs/dimse.md crates/pacs-dimse/src/lib.rs ui/index.html
 expect true true "the workflow itself" .github/workflows/ci.yml
 expect true true "this filter" README.md scripts/ci-changes.sh

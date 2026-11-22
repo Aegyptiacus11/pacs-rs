@@ -59,7 +59,7 @@ database only narrows what it is asked about.
 
 ## Compression and transcoding
 
-Uncompressed pixel data is stored as **JPEG-LS lossless** (`1.2.840.10008.1.2.4.80`, CharLS):
+Uncompressed pixel data is stored as **JPEG-LS lossless** (`1.2.840.10008.1.2.4.80`, codecsls):
 each frame is decoded back and compared with what arrived before the file is kept, and an
 instance that does not come back exact, or that the codecs do not handle (colour, more than 16
 bits), is stored as received. So is anything that arrives compressed, **JPEG XL** included.
@@ -75,16 +75,17 @@ So one header asks for JPEG-LS where the server can make it and anything otherwi
 | Transfer syntax | Frames | Decoded by | Encoded by |
 |---|---|---|---|
 | Explicit VR Little Endian `1.2.840.10008.1.2.1` | `application/octet-stream` | - | - |
-| JPEG-LS lossless `1.2.840.10008.1.2.4.80` (`.81` read) | `image/jls` | CharLS | CharLS |
+| JPEG-LS lossless `1.2.840.10008.1.2.4.80` (`.81` read) | `image/jls` | codecsls | codecsls |
 | JPEG XL lossless `1.2.840.10008.1.2.4.110` (`.112` read) | `image/jxl` | jxl-rs | zune-jpegxl |
 
 Grayscale, 8 or 16 bits allocated; signed pixels are coded as their raw bit pattern, as DCMTK and
 GDCM do.
 
 JPEG XL is served and accepted, not chosen for storage. On 172 slices of a public CT (3D-IRCADb
-patient 1.2, signed 16-bit, one core) JPEG-LS took the pixels to 1/3.38 at about 5 ms a slice;
+patient 1.2, signed 16-bit, one core) JPEG-LS took the pixels to 1/3.38 at about 5 ms a slice
+with CharLS, which pacs-rs used then (codecsls writes the same bytes, at about 2.5 ms a slice);
 zune-jpegxl, the pure-Rust encoder, reached 1/2.82, and libjxl at effort 7 1/3.37 at about
-100 ms a slice. Through the server the study went from 90.4 MB to 26.8 MB, ingested in 3.3 s,
+100 ms a slice. Through the server (with CharLS) the study went from 90.4 MB to 26.8 MB, ingested in 3.3 s,
 and every frame came back exact as uncompressed, JPEG-LS and JPEG XL (checked with CharLS and
 libjxl, not only with the codecs above); jxl-rs decoded libjxl's own effort-7 output of the same
 slices exactly.
