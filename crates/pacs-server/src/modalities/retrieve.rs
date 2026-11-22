@@ -123,7 +123,7 @@ pub(super) async fn move_studies(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if asynchronous {
-        return super::jobs::spawn_move(remotes.clone(), id, studies, destination);
+        return super::jobs::spawn_move(remotes.clone(), id, studies, destination).await;
     }
     let started = Instant::now();
     let result = pacs_dimse::move_studies(

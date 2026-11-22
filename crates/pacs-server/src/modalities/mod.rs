@@ -3,7 +3,7 @@
 //! each: [`studies`] (C-FIND), [`retrieve`] (C-MOVE), with moves in the background as
 //! [`jobs`].
 
-mod jobs;
+pub(crate) mod jobs;
 mod retrieve;
 pub mod schema;
 mod studies;
@@ -31,7 +31,8 @@ pub(crate) struct Remotes {
     pub receiving: bool,
     /// Project names and their AE titles, the destinations a move may name.
     pub projects: Vec<(String, AeTitle)>,
-    jobs: jobs::Jobs,
+    /// Where the jobs are kept.
+    index: pacs_index::Index,
 }
 
 /// The routes, each one by its `#[utoipa::path]`, so that none is served that the API's
@@ -52,13 +53,18 @@ pub(crate) fn api() -> OpenApi {
     described().into_openapi()
 }
 
-pub(crate) fn router(config: Config, receiving: bool, projects: Vec<(String, AeTitle)>) -> Router {
+pub(crate) fn router(
+    config: Config,
+    receiving: bool,
+    projects: Vec<(String, AeTitle)>,
+    index: pacs_index::Index,
+) -> Router {
     described()
         .with_state(Arc::new(Remotes {
             config,
             receiving,
             projects,
-            jobs: jobs::Jobs::default(),
+            index,
         }))
         .split_for_parts()
         .0
