@@ -2182,9 +2182,11 @@ name = "pacs-dicomweb"
 version = "0.14.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "bytes",
  "dicom-core",
  "dicom-dictionary-std",
+ "dicom-json",
  "dicom-object",
  "futures",
  "http-body-util",

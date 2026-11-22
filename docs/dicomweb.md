@@ -11,10 +11,10 @@ with its parameters and statuses, is in the [reference](api-reference.md#dicomwe
 | `GET .../instances/{instance}/frames/{list}` | frames as stored or transcoded: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
 | `GET .../instances/{instance}/rendered`, `.../frames/{frame}/rendered` | a frame as a picture, JPEG or PNG ([below](#rendered)) |
 | `GET .../instances/{instance}/bulkdata/{path}` | a value metadata names by a BulkDataURI ([below](#bulk-data)) |
-| `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
+| `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts, or DICOM JSON with bulk data ([below](#storing-metadata-and-bulk-data)) |
 
-Not yet: fuzzy, empty value and multiple value matching ([below](#searching)); JSON/XML +
-bulk data STOW; rendered series and studies, thumbnails.
+Not yet: fuzzy, empty value and multiple value matching ([below](#searching)); STOW-RS of
+DICOM XML; rendered series and studies, thumbnails.
 
 ## Searching
 
@@ -79,6 +79,22 @@ path being the element's tag, or the tags and item numbers from 0 down to it ins
 (`00400275/0/00081032`). That address answers the value's bytes, `multipart/related;
 type="application/octet-stream"`, or alone for `Accept: application/octet-stream`. Smaller values
 stay inline. The pixel data is not in metadata, and is retrieved by its frames.
+
+## Storing metadata and bulk data
+
+STOW-RS also takes an instance as its metadata and its bulk data (PS3.18 10.5.1.2.2):
+`multipart/related; type="application/dicom+json"`, a first part of DICOM JSON, an array of one
+data set an instance, then parts whose `Content-Location` its BulkDataURIs name (the same URI, or
+one that ends the other). Each instance is made the file it would have been and stored as one
+sent whole, with the same answers.
+
+- **Pixel data** comes as `application/octet-stream`, native, or compressed: `image/jls`,
+  `image/jpeg`, `image/jp2`, `image/jxl`, in the transfer syntax of the part's `transfer-syntax`
+  parameter or that type's default (PS3.18 Table 8.7.3-5); compressed, it is one frame in one
+  fragment, and an instance of several frames in one compressed part fails.
+- **Other bulk data**, at any depth in sequences, is put in place; a BulkDataURI no part has
+  fails that instance (Failure Reason C000), the others are stored.
+- DICOM XML metadata (`application/dicom+xml`) is not taken: 415.
 
 ## Rendered
 
