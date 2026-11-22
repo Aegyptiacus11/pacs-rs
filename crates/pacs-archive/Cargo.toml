@@ -13,6 +13,8 @@ bytes = "1.12.1"
 pacs-core = { path = "../pacs-core" }
 pacs-index = { path = "../pacs-index" }
 pacs-store = { path = "../pacs-store" }
+# each stored file's SHA-256, kept in the index and checked against the store
+sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "rt", "sync"] }
 tracing = "0.1.44"
