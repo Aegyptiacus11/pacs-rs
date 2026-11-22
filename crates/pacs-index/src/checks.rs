@@ -119,6 +119,23 @@ impl Index {
         Ok(())
     }
 
+    /// The whole archive: studies, instances, and the bytes of their files.
+    pub async fn totals(&self) -> Result<(i64, i64, i64), Error> {
+        let row = sqlx::query(
+            "SELECT (SELECT count(*) FROM studies) AS studies,
+                    count(*) AS instances,
+                    CAST(COALESCE(sum(size_bytes), 0) AS BIGINT) AS bytes
+             FROM instances",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            row.try_get("studies")?,
+            row.try_get("instances")?,
+            row.try_get("bytes")?,
+        ))
+    }
+
     /// The public ID and storage key of an instance, by SOP Instance UID.
     pub async fn instance_file(
         &self,
