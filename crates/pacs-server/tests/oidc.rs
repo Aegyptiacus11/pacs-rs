@@ -1,0 +1,794 @@
+//! Signing in through an OpenID provider (`PACS_OIDC_ISSUER`), against a provider made here:
+//! one that answers as the specification says, and that can be made to answer wrong, which a
+//! real provider cannot. The real one (Rauthy) is in `oidc_rauthy.rs`.
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::Router;
+use axum::body::Body;
+use axum::extract::{Form, State};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use clap::Parser;
+use http_body_util::BodyExt;
+use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use pacs_server::auth::open_login;
+use pacs_server::{Settings, app_with_login, open_archive};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use tower::ServiceExt;
+
+const SECRET: &str = "a-signing-secret-of-at-least-32-bytes";
+const CLIENT_ID: &str = "pacs";
+const CLIENT_SECRET: &str = "the-client-secret";
+
+/// Makes the ID token the token endpoint answers with, from the nonce of the sign-in.
+type Mint = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
+#[derive(Default)]
+struct Shared {
+    /// code -> (PKCE challenge, nonce)
+    pending: HashMap<String, (String, String)>,
+    mint: Option<Mint>,
+}
+
+/// A provider on a port of this machine.
+struct Provider {
+    issuer: String,
+    key: Arc<rcgen::KeyPair>,
+    shared: Arc<Mutex<Shared>>,
+}
+
+impl Provider {
+    /// `named`: the issuer its discovery document claims, when not its own address.
+    async fn start(named: Option<&str>) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address: SocketAddr = listener.local_addr().unwrap();
+        let issuer = format!("http://127.0.0.1:{}", address.port());
+        let key = Arc::new(rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap());
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let discovery = json!({
+            "issuer": named.unwrap_or(&issuer),
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+            "jwks_uri": format!("{issuer}/jwks"),
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["EdDSA"],
+        });
+        let jwks = json!({"keys": [{
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "kid": "k1",
+            "alg": "EdDSA",
+            "use": "sig",
+            "x": URL_SAFE_NO_PAD.encode(key.public_key_raw()),
+        }]});
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get(move || async move { axum::Json(discovery) }),
+            )
+            .route("/jwks", get(move || async move { axum::Json(jwks) }))
+            .route("/token", post(token))
+            .with_state(shared.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self {
+            issuer,
+            key,
+            shared,
+        }
+    }
+
+    /// An ID token signed with the published key, with these claims.
+    fn signed(&self, claims: &Value) -> String {
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some("k1".into());
+        let key = EncodingKey::from_ed_der(&self.key.serialize_der());
+        jsonwebtoken::encode(&header, claims, &key).unwrap()
+    }
+
+    /// The claims of a good ID token for Ada.
+    fn claims(&self, nonce: &str) -> Value {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        json!({
+            "iss": self.issuer,
+            "sub": "sub-ada",
+            "aud": CLIENT_ID,
+            "exp": now + 300,
+            "iat": now,
+            "nonce": nonce,
+            "email": "Ada@Example.com",
+            "email_verified": true,
+            "preferred_username": "ada",
+        })
+    }
+
+    /// The token endpoint answers with a token made by `change` from good claims.
+    fn minting(self: &Arc<Self>, change: impl Fn(&mut Value) + Send + Sync + 'static) {
+        let provider = self.clone();
+        let mint: Mint = Arc::new(move |nonce| {
+            let mut claims = provider.claims(nonce);
+            change(&mut claims);
+            provider.signed(&claims)
+        });
+        self.shared.lock().unwrap().mint = Some(mint);
+    }
+}
+
+/// The token endpoint: the client's credentials, the code, and the PKCE verifier checked as
+/// RFC 6749 4.1.3 and RFC 7636 4.6 say.
+async fn token(
+    State(shared): State<Arc<Mutex<Shared>>>,
+    headers: HeaderMap,
+    Form(form): Form<HashMap<String, String>>,
+) -> axum::response::Response {
+    let refused = |error: &str| {
+        (StatusCode::BAD_REQUEST, axum::Json(json!({"error": error}))).into_response()
+    };
+    let basic = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("{CLIENT_ID}:{CLIENT_SECRET}"))
+    );
+    if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(basic.as_str()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(json!({"error": "invalid_client"})),
+        )
+            .into_response();
+    }
+    if form.get("grant_type").map(String::as_str) != Some("authorization_code") {
+        return refused("unsupported_grant_type");
+    }
+    let mut shared = shared.lock().unwrap();
+    let Some((challenge, nonce)) = form
+        .get("code")
+        .and_then(|code| shared.pending.remove(code))
+    else {
+        return refused("invalid_grant");
+    };
+    let verifier = form.get("code_verifier").cloned().unwrap_or_default();
+    if URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())) != challenge {
+        return refused("invalid_grant");
+    }
+    let mint = shared.mint.clone().expect("the test says what to answer");
+    axum::Json(json!({
+        "access_token": "opaque",
+        "token_type": "Bearer",
+        "expires_in": 300,
+        "id_token": mint(&nonce),
+    }))
+    .into_response()
+}
+
+fn settings(dir: &Path, issuer: &str, extra: &[&str]) -> Settings {
+    let index = dir.join("db/index.sqlite").display().to_string();
+    let storage = format!("file:{}", dir.join("files").display());
+    let mut args: Vec<String> = [
+        "pacs-server",
+        "--index",
+        &index,
+        "--storage",
+        &storage,
+        "--auth",
+        "true",
+        "--auth-cookie-secure",
+        "false",
+        "--oidc-issuer",
+        issuer,
+        "--oidc-client-id",
+        CLIENT_ID,
+        "--oidc-redirect-url",
+        "http://localhost:8042/auth/oidc/callback",
+        "--oidc-admins",
+        "boss@example.com",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.extend(extra.iter().map(|s| s.to_string()));
+    Settings::try_parse_from(args).unwrap()
+}
+
+fn env(name: &str) -> Option<String> {
+    match name {
+        "PACS_AUTH_SECRET" => Some(SECRET.into()),
+        "PACS_OIDC_CLIENT_SECRET" => Some(CLIENT_SECRET.into()),
+        _ => None,
+    }
+}
+
+async fn start(settings: &Settings) -> anyhow::Result<Router> {
+    let archive = open_archive(settings).await?;
+    let login = open_login(settings, archive.index(), env).await?;
+    app_with_login(archive, settings, login)
+}
+
+struct Reply {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Value,
+}
+
+impl Reply {
+    fn location(&self) -> &str {
+        self.headers["location"].to_str().unwrap()
+    }
+
+    /// The value of a cookie this answer sets.
+    fn cookie(&self, name: &str) -> Option<String> {
+        self.headers
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .find(|v| v.starts_with(&format!("{name}=")))
+            .map(|v| v.split(';').next().unwrap()[name.len() + 1..].to_owned())
+    }
+
+    fn set_cookie(&self, name: &str) -> String {
+        self.headers
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_owned())
+            .find(|v| v.starts_with(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("no cookie {name}"))
+    }
+}
+
+async fn send(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    headers: &[(&str, String)],
+    body: Option<Value>,
+) -> Reply {
+    let mut request = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let request = match body {
+        Some(body) => request
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())),
+        None => request.body(Body::empty()),
+    }
+    .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    Reply {
+        status,
+        headers,
+        body,
+    }
+}
+
+fn query_of(url: &str) -> HashMap<String, String> {
+    url::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect()
+}
+
+/// The browser's way through: start, the provider's sign-in (the code it would give), back.
+/// `tamper` may change the callback's query before it is sent.
+async fn sign_in(
+    app: &Router,
+    provider: &Provider,
+    tamper: impl FnOnce(&mut Vec<(String, String)>, &mut Option<String>),
+) -> Reply {
+    let started = send(
+        app,
+        Method::GET,
+        "/auth/oidc/start?next=studies/1.2.3",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(started.status, StatusCode::SEE_OTHER);
+    let sent = query_of(started.location());
+    assert!(
+        started
+            .location()
+            .starts_with(&format!("{}/authorize?", provider.issuer))
+    );
+    assert_eq!(sent["response_type"], "code");
+    assert_eq!(sent["client_id"], CLIENT_ID);
+    assert_eq!(sent["code_challenge_method"], "S256");
+    assert_eq!(
+        sent["redirect_uri"],
+        "http://localhost:8042/auth/oidc/callback"
+    );
+    assert_eq!(sent["scope"], "openid email profile");
+    let state_cookie = started.set_cookie("pacs_oidc");
+    assert!(
+        state_cookie.contains("Path=/auth/oidc; HttpOnly; SameSite=Lax"),
+        "{state_cookie}"
+    );
+    provider.shared.lock().unwrap().pending.insert(
+        "code-1".into(),
+        (sent["code_challenge"].clone(), sent["nonce"].clone()),
+    );
+    let mut query = vec![
+        ("code".to_owned(), "code-1".to_owned()),
+        ("state".to_owned(), sent["state"].clone()),
+    ];
+    let mut cookie = started.cookie("pacs_oidc");
+    tamper(&mut query, &mut cookie);
+    let query: String = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(query)
+        .finish();
+    let headers: Vec<(&str, String)> = cookie
+        .map(|c| ("cookie", format!("pacs_oidc={c}")))
+        .into_iter()
+        .collect();
+    send(
+        app,
+        Method::GET,
+        &format!("/auth/oidc/callback?{query}"),
+        &headers,
+        None,
+    )
+    .await
+}
+
+/// The access token a sign-in's refresh cookie gives, and who it says.
+async fn session_of(app: &Router, back: &Reply) -> (String, Value) {
+    let refresh = back.cookie("refresh_token").expect("a refresh cookie");
+    let renewed = send(
+        app,
+        Method::POST,
+        "/auth/refresh",
+        &[("cookie", format!("refresh_token={refresh}"))],
+        None,
+    )
+    .await;
+    assert_eq!(renewed.status, StatusCode::OK, "{}", renewed.body);
+    let token = renewed.body["access_token"].as_str().unwrap().to_owned();
+    let me = send(
+        app,
+        Method::GET,
+        "/auth/me",
+        &[("authorization", format!("Bearer {token}"))],
+        None,
+    )
+    .await;
+    assert_eq!(me.status, StatusCode::OK);
+    (token, me.body)
+}
+
+fn refused_for(back: &Reply, reason: &str) {
+    assert_eq!(back.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        back.location(),
+        format!("../../ui/?signin_error={reason}"),
+        "{:?}",
+        back.headers
+    );
+    assert_eq!(back.cookie("refresh_token"), None);
+    // the sign-in under way is over either way
+    assert!(back.set_cookie("pacs_oidc").contains("Max-Age=0"));
+}
+
+#[tokio::test]
+async fn the_first_sign_in_makes_an_account_and_the_next_finds_it() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+
+    let methods = send(&app, Method::GET, "/auth/methods", &[], None).await;
+    assert_eq!(methods.body, json!({"password": false, "provider": true}));
+
+    provider.minting(|_| {});
+    let back = sign_in(&app, &provider, |_, _| {}).await;
+    assert_eq!(back.status, StatusCode::SEE_OTHER, "{:?}", back.headers);
+    assert_eq!(back.location(), "../../ui/studies/1.2.3");
+    assert!(
+        back.set_cookie("refresh_token")
+            .contains("Path=/auth; HttpOnly")
+    );
+    let (_, me) = session_of(&app, &back).await;
+    assert_eq!(me["login"], "ada@example.com");
+    assert_eq!(me["role"], "reader");
+
+    // the same subject again: the same account, whatever its email is now
+    provider.minting(|claims| claims["email"] = json!("ada.lovelace@example.com"));
+    let again = sign_in(&app, &provider, |_, _| {}).await;
+    let (_, me_again) = session_of(&app, &again).await;
+    assert_eq!(me_again["id"], me["id"]);
+    assert_eq!(me_again["login"], "ada@example.com");
+}
+
+#[tokio::test]
+async fn a_listed_verified_address_is_an_administrator_and_an_unverified_one_is_not() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+
+    // unverified: not vouched for, so neither its login nor an administrator
+    provider.minting(|claims| {
+        claims["sub"] = json!("sub-pretender");
+        claims["email"] = json!("boss@example.com");
+        claims["email_verified"] = json!(false);
+        claims["preferred_username"] = json!("pretender");
+    });
+    let (_, me) = session_of(&app, &sign_in(&app, &provider, |_, _| {}).await).await;
+    assert_eq!(
+        (me["login"].as_str(), me["role"].as_str()),
+        (Some("pretender"), Some("reader"))
+    );
+    // "true" as a string is not a verification either (Core 5.1: a boolean)
+    provider.minting(|claims| {
+        claims["sub"] = json!("sub-pretender-2");
+        claims["email"] = json!("boss@example.com");
+        claims["email_verified"] = json!("true");
+        claims["preferred_username"] = json!("pretender2");
+    });
+    let (_, me) = session_of(&app, &sign_in(&app, &provider, |_, _| {}).await).await;
+    assert_eq!(me["role"], "reader");
+
+    provider.minting(|claims| {
+        claims["sub"] = json!("sub-boss");
+        claims["email"] = json!("Boss@Example.com");
+    });
+    let (token, me) = session_of(&app, &sign_in(&app, &provider, |_, _| {}).await).await;
+    assert_eq!(
+        (me["login"].as_str(), me["role"].as_str()),
+        (Some("boss@example.com"), Some("admin"))
+    );
+    let users = send(
+        &app,
+        Method::GET,
+        "/users",
+        &[("authorization", format!("Bearer {token}"))],
+        None,
+    )
+    .await;
+    assert_eq!(users.status, StatusCode::OK);
+    assert_eq!(users.body.as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn no_password_signs_anyone_in_when_a_provider_is_set() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    // no first administrator is made from PACS_ADMIN_PASSWORD, even when it is given
+    let app = start(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+    let login = send(
+        &app,
+        Method::POST,
+        "/auth/login",
+        &[],
+        Some(json!({"email": "admin", "password": "admin-password-1"})),
+    )
+    .await;
+    assert_eq!(login.status, StatusCode::FORBIDDEN);
+
+    provider.minting(|claims| claims["email"] = json!("boss@example.com"));
+    let (token, _) = session_of(&app, &sign_in(&app, &provider, |_, _| {}).await).await;
+    let bearer = [("authorization", format!("Bearer {token}"))];
+    let made = send(
+        &app,
+        Method::POST,
+        "/users",
+        &bearer,
+        Some(json!({"login": "bob", "password": "a-long-password", "role": "reader"})),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::FORBIDDEN);
+    let changed = send(
+        &app,
+        Method::POST,
+        "/auth/password",
+        &bearer,
+        Some(json!({"current_password": "x", "new_password": "a-long-password"})),
+    )
+    .await;
+    assert_eq!(changed.status, StatusCode::FORBIDDEN);
+    // a tool's own secret neither
+    let tool = send(
+        &app,
+        Method::POST,
+        "/auth/token",
+        &[("content-type", "application/x-www-form-urlencoded".into())],
+        None,
+    )
+    .await;
+    assert_eq!(tool.status, StatusCode::BAD_REQUEST);
+    assert_eq!(tool.body["error"], "unauthorized_client");
+}
+
+#[tokio::test]
+async fn a_callback_without_its_sign_in_is_refused() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+    provider.minting(|_| {});
+
+    // no state cookie: a callback this browser did not start (CSRF)
+    refused_for(
+        &sign_in(&app, &provider, |_, cookie| *cookie = None).await,
+        "expired",
+    );
+    // another state than the cookie's
+    let back = sign_in(&app, &provider, |query, _| query[1].1 = "forged".into()).await;
+    refused_for(&back, "expired");
+    // a cookie that is not ours
+    refused_for(
+        &sign_in(&app, &provider, |_, cookie| *cookie = Some("x.y.z".into())).await,
+        "expired",
+    );
+    // the provider said no
+    let back = sign_in(&app, &provider, |query, _| {
+        query[0] = ("error".into(), "access_denied".into());
+    })
+    .await;
+    refused_for(&back, "refused");
+    // a code the provider does not know
+    let back = sign_in(&app, &provider, |query, _| query[0].1 = "code-2".into()).await;
+    refused_for(&back, "refused");
+}
+
+#[tokio::test]
+async fn an_id_token_that_fails_a_check_is_refused() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    type Change = Box<dyn Fn(&mut Value) + Send + Sync>;
+    let cases: Vec<(&str, Change)> = vec![
+        (
+            "another nonce",
+            Box::new(|c| c["nonce"] = json!("replayed")),
+        ),
+        (
+            "no nonce",
+            Box::new(|c| {
+                c.as_object_mut().unwrap().remove("nonce");
+            }),
+        ),
+        (
+            "another issuer",
+            Box::new(|c| c["iss"] = json!("http://127.0.0.1:1")),
+        ),
+        (
+            "another audience",
+            Box::new(|c| c["aud"] = json!("other-client")),
+        ),
+        ("expired", Box::new(move |c| c["exp"] = json!(now - 3600))),
+        (
+            "not yet valid",
+            Box::new(move |c| c["nbf"] = json!(now + 3600)),
+        ),
+        (
+            "no iat",
+            Box::new(|c| {
+                c.as_object_mut().unwrap().remove("iat");
+            }),
+        ),
+        (
+            "no subject",
+            Box::new(|c| {
+                c.as_object_mut().unwrap().remove("sub");
+            }),
+        ),
+        (
+            "issued to another client",
+            Box::new(|c| c["azp"] = json!("other-client")),
+        ),
+        (
+            "several audiences and no azp",
+            Box::new(|c| c["aud"] = json!([CLIENT_ID, "other-client"])),
+        ),
+    ];
+    for (case, change) in cases {
+        provider.minting(change);
+        let back = sign_in(&app, &provider, |_, _| {}).await;
+        assert_eq!(back.location(), "../../ui/?signin_error=token", "{case}");
+    }
+    // several audiences with this client as azp pass
+    provider.minting(|c| {
+        c["aud"] = json!([CLIENT_ID, "other-client"]);
+        c["azp"] = json!(CLIENT_ID);
+    });
+    let back = sign_in(&app, &provider, |_, _| {}).await;
+    assert_eq!(back.location(), "../../ui/studies/1.2.3");
+
+    // signatures: an HMAC keyed with the client's secret, an unknown key, none at all
+    let forged = |header: Header, key: EncodingKey| {
+        let minter = provider.clone();
+        let mint: Mint = Arc::new(move |nonce| {
+            jsonwebtoken::encode(&header, &minter.claims(nonce), &key).unwrap()
+        });
+        provider.shared.lock().unwrap().mint = Some(mint);
+    };
+    forged(
+        Header::new(Algorithm::HS256),
+        EncodingKey::from_secret(CLIENT_SECRET.as_bytes()).unwrap(),
+    );
+    refused_for(&sign_in(&app, &provider, |_, _| {}).await, "token");
+    let stranger = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = Some("k1".into());
+    forged(header, EncodingKey::from_ed_der(&stranger.serialize_der()));
+    refused_for(&sign_in(&app, &provider, |_, _| {}).await, "token");
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = Some("k2".into());
+    forged(header, EncodingKey::from_ed_der(&stranger.serialize_der()));
+    refused_for(&sign_in(&app, &provider, |_, _| {}).await, "token");
+    let unsigned = {
+        let provider = provider.clone();
+        Arc::new(move |nonce: &str| {
+            let head = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+            let body = URL_SAFE_NO_PAD.encode(provider.claims(nonce).to_string());
+            format!("{head}.{body}.")
+        }) as Mint
+    };
+    provider.shared.lock().unwrap().mint = Some(unsigned);
+    refused_for(&sign_in(&app, &provider, |_, _| {}).await, "token");
+}
+
+#[tokio::test]
+async fn a_deactivated_account_or_a_taken_login_gets_no_session() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+    provider.minting(|claims| {
+        claims["sub"] = json!("sub-boss");
+        claims["email"] = json!("boss@example.com");
+    });
+    let (token, _) = session_of(&app, &sign_in(&app, &provider, |_, _| {}).await).await;
+    let bearer = [("authorization", format!("Bearer {token}"))];
+
+    provider.minting(|_| {});
+    let (_, ada) = session_of(&app, &sign_in(&app, &provider, |_, _| {}).await).await;
+    let off = send(
+        &app,
+        Method::PUT,
+        &format!("/users/{}", ada["id"].as_str().unwrap()),
+        &bearer,
+        Some(json!({"active": false})),
+    )
+    .await;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.body);
+    refused_for(&sign_in(&app, &provider, |_, _| {}).await, "account");
+
+    // another subject whose unverified user name is a login already taken
+    provider.minting(|claims| {
+        claims["sub"] = json!("sub-other");
+        claims["email_verified"] = json!(false);
+        claims["preferred_username"] = json!("boss@example.com");
+    });
+    refused_for(&sign_in(&app, &provider, |_, _| {}).await, "account");
+}
+
+#[tokio::test]
+async fn settings_that_cannot_work_stop_the_start() {
+    let provider = Provider::start(None).await;
+    let elsewhere = Provider::start(Some("https://idp.example")).await;
+    let dir = tempfile::tempdir().unwrap();
+    let fails = async |settings: Settings, says: &str| {
+        let error = format!("{:#}", start(&settings).await.expect_err("a failed start"));
+        assert!(error.contains(says), "{error}");
+    };
+    // the provider names itself otherwise (Discovery 4.3)
+    fails(
+        settings(dir.path(), &elsewhere.issuer, &[]),
+        "the provider names itself",
+    )
+    .await;
+    // not https, and not this machine
+    fails(
+        settings(dir.path(), "http://idp.example", &[]),
+        "must be https",
+    )
+    .await;
+    // nobody answers
+    fails(
+        settings(dir.path(), "http://127.0.0.1:1", &[]),
+        "discovery document",
+    )
+    .await;
+    fails(
+        settings(dir.path(), &provider.issuer, &["--oidc-role", "nobody"]),
+        "PACS_OIDC_ROLE",
+    )
+    .await;
+    fails(
+        settings(dir.path(), &provider.issuer, &["--oidc-scopes", "email"]),
+        "openid",
+    )
+    .await;
+    fails(
+        settings(
+            dir.path(),
+            &provider.issuer,
+            &["--oidc-admins", "not-an-address"],
+        ),
+        "PACS_OIDC_ADMINS",
+    )
+    .await;
+    let mut without_client = settings(dir.path(), &provider.issuer, &[]);
+    without_client.oidc_client_id = None;
+    fails(without_client, "PACS_OIDC_CLIENT_ID").await;
+    let mut no_redirect = settings(dir.path(), &provider.issuer, &[]);
+    no_redirect.oidc_redirect_url = None;
+    fails(no_redirect, "PACS_OIDC_REDIRECT_URL").await;
+    let archive = open_archive(&settings(dir.path(), &provider.issuer, &[]))
+        .await
+        .unwrap();
+    let no_secret = open_login(
+        &settings(dir.path(), &provider.issuer, &[]),
+        archive.index(),
+        |name| (name == "PACS_AUTH_SECRET").then(|| SECRET.to_owned()),
+    )
+    .await;
+    assert!(format!("{:#}", no_secret.err().unwrap()).contains("PACS_OIDC_CLIENT_SECRET"));
+}
+
+#[tokio::test]
+async fn without_a_provider_the_provider_routes_are_not_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index.sqlite").display().to_string();
+    let storage = format!("file:{}", dir.path().join("files").display());
+    let settings = Settings::try_parse_from([
+        "pacs-server",
+        "--index",
+        &index,
+        "--storage",
+        &storage,
+        "--auth",
+        "true",
+    ])
+    .unwrap();
+    let archive = open_archive(&settings).await.unwrap();
+    let login = open_login(&settings, archive.index(), |name| match name {
+        "PACS_AUTH_SECRET" => Some(SECRET.into()),
+        "PACS_ADMIN_PASSWORD" => Some("admin-password-1".into()),
+        _ => None,
+    })
+    .await
+    .unwrap();
+    let app = app_with_login(archive, &settings, login).unwrap();
+    let methods = send(&app, Method::GET, "/auth/methods", &[], None).await;
+    assert_eq!(methods.body, json!({"password": true, "provider": false}));
+    let started = send(&app, Method::GET, "/auth/oidc/start", &[], None).await;
+    assert_eq!(started.status, StatusCode::NOT_FOUND);
+    let back = send(
+        &app,
+        Method::GET,
+        "/auth/oidc/callback?code=c&state=s",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(back.status, StatusCode::NOT_FOUND);
+}
