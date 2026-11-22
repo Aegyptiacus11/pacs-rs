@@ -140,6 +140,8 @@ The DICOM network protocol: see [DIMSE](dimse.md), and [DIMSE over TLS](dimse.md
 | `PACS_FORWARD` | none | rules that [forward](dimse.md#forwarding-by-rule) what arrives, comma-separated, each `destination[:Key=value\|value;Key=value]`, the destination one of `PACS_DIMSE_MOVE_DESTINATIONS` |
 | `PACS_FORWARD_AFTER` | `30` | seconds a study stays quiet, no instance of it stored, before the rules forward it |
 | `PACS_DIMSE_CAPABILITIES` | none | what some of pacs-rs's AE titles offer, comma-separated, each `AE_TITLE=service+service[/syntax\|syntax]`: the services among `verification`, `storage`, `find`, `move` and `get`, the transfer syntaxes by UID or `uncompressed`; an AE title not listed offers everything ([AE titles](dimse.md)) |
+| `PACS_DIMSE_SPOOL_FROM` | `67108864` | a C-STORE's data set larger than this many bytes (64 MiB) is written to disk as it arrives, so that memory does not grow with it ([DIMSE](dimse.md)); `0`: kept in memory |
+| `PACS_DIMSE_SPOOL_DIR` | the system's temporary folder | where those data sets are written; one that cannot take a file stops the start of a server listening for DIMSE |
 | `PACS_DIMSE_KNOWN_CALLERS_ONLY` | `false` | accept associations only from the remotes' AE titles |
 | `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
 | `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |

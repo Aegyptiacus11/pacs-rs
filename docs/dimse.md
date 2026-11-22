@@ -75,7 +75,14 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   file meta information added (PS3.10 7.1, the sending and receiving AE titles included), and
   goes through the same ingest as `POST /instances`: compressed as `PACS_COMPRESSION` says,
   stored, indexed; an instance sent again is kept as first stored unless
-  `PACS_OVERWRITE_INSTANCES` is set, and answered Success either way.
+  `PACS_OVERWRITE_INSTANCES` is set, and answered Success either way. A data set larger than
+  `PACS_DIMSE_SPOOL_FROM` (64 MiB) is written to `PACS_DIMSE_SPOOL_DIR` as it arrives, after the
+  file meta information it is to have, so that memory does not grow with it; its header, what
+  comes before the pixel data, is read from the file's first 64 MiB and checked against the
+  request, and the file is sent to the store a part at a time and hashed on the way. Such an
+  instance is stored as received, not compressed, since that would take its pixels into memory
+  again; a project's AE title reads it whole, to de-identify it. The spool's file is gone once
+  it is stored or refused.
 - **AE titles**: `PACS_DIMSE_AE_TITLE` and any `PACS_DIMSE_EXTRA_AE_TITLES` are accepted on one
   port; another called AE title is rejected (PS3.8 reason 7). Each offers every service in every
   transfer syntax unless `PACS_DIMSE_CAPABILITIES` gives it its own: `RESEARCH=storage+verification/uncompressed`
