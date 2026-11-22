@@ -4,7 +4,7 @@
 //! Resources, identifiers and answers follow the reference server's REST API, so clients
 //! written for it work unchanged; `crates/pacs-server/tests/reference.rs` checks that.
 //! The routes so far are those an annotation platform needs (upload, lookup, statistics,
-//! archives), their counterparts at the other levels, and deletion.
+//! archives), their counterparts at the other levels, deletion, and labels.
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -18,6 +18,7 @@ mod archive;
 mod delete;
 mod error;
 mod find;
+mod labels;
 mod resources;
 pub mod schema;
 mod scope;
@@ -77,6 +78,31 @@ fn described() -> OpenApiRouter<scope::Whole> {
         .routes(routes!(resources::patient_statistics))
         .routes(routes!(archive::patient))
         .routes(routes!(find::find))
+        .routes(routes!(labels::all))
+        .routes(routes!(labels::patients::labels))
+        .routes(routes!(
+            labels::patients::label,
+            labels::patients::put_label,
+            labels::patients::delete_label
+        ))
+        .routes(routes!(labels::studies::labels))
+        .routes(routes!(
+            labels::studies::label,
+            labels::studies::put_label,
+            labels::studies::delete_label
+        ))
+        .routes(routes!(labels::series::labels))
+        .routes(routes!(
+            labels::series::label,
+            labels::series::put_label,
+            labels::series::delete_label
+        ))
+        .routes(routes!(labels::instances::labels))
+        .routes(routes!(
+            labels::instances::label,
+            labels::instances::put_label,
+            labels::instances::delete_label
+        ))
         .routes(routes!(
             archive::create_archive_get,
             archive::create_archive
