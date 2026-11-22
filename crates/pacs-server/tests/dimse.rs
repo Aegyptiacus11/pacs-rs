@@ -1943,3 +1943,96 @@ async fn a_send_refuses_what_cannot_be_sent() {
         assert_eq!(status, expected, "{id} {body}: {answer}");
     }
 }
+
+/// `PACS_FORWARD`: a study that meets a rule is sent to its destination once quiet, as a
+/// job; one that does not is not; a study is taken out once, and again only when it takes
+/// in another instance.
+#[tokio::test]
+async fn a_rule_forwards_what_arrives() {
+    let there_dir = tempfile::tempdir().unwrap();
+    let (there, port) = receiving_archive(there_dir.path()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("second=ARCHIVE2@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-move-destinations",
+            "second",
+            "--forward",
+            "second:Modality=CT;PatientName=doe^*",
+            "--forward-after",
+            "0",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let doe = RealSeries::new(981, 2).with_patient("DOE^JANE", None);
+    let roe = RealSeries::new(982, 1).with_patient("ROE^RICHARD", None);
+    let doe_mr = RealSeries::mr(983, 1).with_patient("DOE^JOHN", None);
+    for series in [&doe, &roe, &doe_mr] {
+        for bytes in series.all_bytes() {
+            archive.ingest(bytes.into()).await.unwrap();
+        }
+    }
+    assert_eq!(
+        pacs_server::forward_now(&settings, &archive).await.unwrap(),
+        1
+    );
+    // nothing left to forward
+    assert_eq!(
+        pacs_server::forward_now(&settings, &archive).await.unwrap(),
+        0
+    );
+    let app = app(archive.clone(), &settings).unwrap();
+    let (_, ids) = get(&app, "/jobs").await;
+    let id = ids[0].as_str().unwrap().to_owned();
+    let job = job_over(&app, &format!("/jobs/{id}")).await;
+    assert_eq!(job["Type"], "C-STORE");
+    assert_eq!(job["State"], "Success", "{job}");
+    assert_eq!(job["StudyInstanceUIDs"], json!([doe.study_uid()]));
+    let count = async |series: &RealSeries| {
+        there
+            .index()
+            .instances(&series.study_uid(), &series.series_uid(), None)
+            .await
+            .unwrap()
+            .len()
+    };
+    assert_eq!(count(&doe).await, 2);
+    assert_eq!(count(&roe).await, 0);
+    assert_eq!(count(&doe_mr).await, 0);
+}
+
+/// A rule that cannot be read stops the parse of the settings; one to an AE studies may not
+/// be sent to stops the start.
+#[tokio::test]
+async fn a_rule_that_cannot_work_stops_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let parsed = Settings::try_parse_from(["pacs-server", "--forward", "second:Colour=red"]);
+    let error = parsed.unwrap_err().to_string();
+    assert!(error.contains("Colour is not a key of a rule"), "{error}");
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            "second=ARCHIVE2@127.0.0.1:9,reader=READER@127.0.0.1:9",
+            "--dimse-move-destinations",
+            "second",
+            "--forward",
+            "reader",
+        ],
+    );
+    let error = pacs_server::forward_rules(&settings)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("not in PACS_DIMSE_MOVE_DESTINATIONS"),
+        "{error}"
+    );
+    let settings = settings_in(dir.path(), &["--forward", "nobody"]);
+    let error = pacs_server::forward_rules(&settings)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a remote AE"), "{error}");
+}
