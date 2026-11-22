@@ -1,0 +1,11 @@
+[
+  {
+    "email": "ada@pacs.test",
+    "given_name": "Ada",
+    "family_name": "Test",
+    "password": { "Plain": "ada-test-password-1" },
+    "roles": [],
+    "enabled": true,
+    "email_verified": true
+  }
+]
