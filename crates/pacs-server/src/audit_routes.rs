@@ -41,6 +41,9 @@ pub(crate) enum Subject {
     /// A remote AE asked by C-MOVE to send studies here. (Begin Transferring DICOM
     /// Instances; what arrives is DICOM Instances Transferred, from the association)
     RemoteMove(String),
+    /// Studies of this archive sent to a remote AE by C-STORE, by its id here. (Begin
+    /// Transferring DICOM Instances, from this server)
+    RemoteStore(String),
 }
 
 fn level(segment: &str) -> Option<Level> {
@@ -110,6 +113,7 @@ pub(crate) fn subject(method: &Method, path: &str, mount: &str) -> Option<Subjec
             Some(Subject::RemoteSearch((*remote).to_owned()))
         }
         ["modalities", remote, "move"] if post => Some(Subject::RemoteMove((*remote).to_owned())),
+        ["modalities", remote, "store"] if post => Some(Subject::RemoteStore((*remote).to_owned())),
         ["tools", "find"] if post => Some(Subject::Search),
         ["tools", "create-archive"] if get || post => Some(Subject::Exported(Target::Listed)),
         ["instances"] if post => Some(Subject::Stores),
@@ -331,6 +335,11 @@ mod tests {
                 Method::POST,
                 "/modalities/a/move",
                 Some(RemoteMove("a".into())),
+            ),
+            (
+                Method::POST,
+                "/modalities/a/store",
+                Some(RemoteStore("a".into())),
             ),
             (Method::GET, "/modalities", None),
             (Method::POST, "/modalities/a/echo", None),

@@ -810,7 +810,8 @@ impl Observer {
             Subject::Search
             | Subject::Stores
             | Subject::RemoteSearch(_)
-            | Subject::RemoteMove(_) => {
+            | Subject::RemoteMove(_)
+            | Subject::RemoteStore(_) => {
                 return Ok(());
             }
         };
@@ -865,7 +866,7 @@ impl Observer {
             // written by the caller, with what was stored
             Subject::Stores => {}
             // written by the caller: a remote AE that fails was asked all the same
-            Subject::RemoteSearch(_) | Subject::RemoteMove(_) => {}
+            Subject::RemoteSearch(_) | Subject::RemoteMove(_) | Subject::RemoteStore(_) => {}
             Subject::Search => {
                 // "the query in the format of the protocol used": the body of a search
                 // that has one, else the request's target, which is never empty
@@ -1031,7 +1032,10 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
         Request::from_parts(parts, Body::from(bytes))
     } else if posted("/tools/find")
         || posted("/tools/create-archive")
-        || matches!(subject, Some(Subject::RemoteMove(_)))
+        || matches!(
+            subject,
+            Some(Subject::RemoteMove(_) | Subject::RemoteStore(_))
+        )
     {
         // what is searched, and what is taken away, is the event
         let (parts, body) = request.into_parts();
@@ -1095,12 +1099,13 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             status,
             StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
         );
-    let remote = match &subject {
-        Some(Subject::RemoteSearch(id) | Subject::RemoteMove(id)) if called => {
-            observer.dimse.remote(id)
-        }
-        _ => None,
-    };
+    let remote =
+        match &subject {
+            Some(
+                Subject::RemoteSearch(id) | Subject::RemoteMove(id) | Subject::RemoteStore(id),
+            ) if called => observer.dimse.remote(id),
+            _ => None,
+        };
     if let Some(remote) = remote {
         let there = application(
             remote.ae_title.as_str(),
@@ -1124,6 +1129,32 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
                 &path,
                 target.as_bytes(),
             ));
+        } else if matches!(subject, Some(Subject::RemoteStore(_))) {
+            // this server sends, for whoever asked: studies of its own, whose patient it knows
+            let (studies, _) = moved(&asked_body, &observer.dimse, &observer.projects);
+            let here = Participant::new(&trail.process, false)
+                .alternative(format!("AETITLES={}", observer.dimse.ae_title.as_str()));
+            let mut known = Vec::new();
+            for uid in &studies {
+                match observer.index.audited_study(uid).await {
+                    Ok(Some(study)) => known.push(described(&study, true)),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::error!(%error, "the audit trail could not read a study sent");
+                    }
+                }
+            }
+            for group in by_patient(known) {
+                audit.record(events::begin_transferring(
+                    &trail.source,
+                    now,
+                    outcome,
+                    here.clone(),
+                    there.clone(),
+                    vec![who.clone()],
+                    &group,
+                ));
+            }
         } else {
             let (studies, destination) = moved(&asked_body, &observer.dimse, &observer.projects);
             let here = Participant::new(&trail.process, false)
