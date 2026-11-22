@@ -12,12 +12,19 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
-        )
-        .init();
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+        tracing_subscriber::registry()
+            .with(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            // what is logged at ERROR, counted for the metrics
+            .with(pacs_server::metrics::CountErrors)
+            .init();
+    }
 
     let settings = Settings::parse();
     if settings.healthcheck {
@@ -68,6 +75,16 @@ async fn main() -> anyhow::Result<()> {
     pacs_server::spawn_job_sweeps(&settings, archive.index())?;
     let app = app_with_audit(archive.clone(), &settings, login, audit.clone())?;
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;
+    if let Some(metrics) = settings.metrics_listen {
+        let metrics = tokio::net::TcpListener::bind(metrics).await?;
+        tracing::info!(metrics = %metrics.local_addr()?, "metrics at /metrics");
+        let routes = pacs_server::metrics::router(archive.clone());
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(metrics, routes).await {
+                tracing::error!(%error, "the metrics listener stopped");
+            }
+        });
+    }
     // one shutdown signal for both servers
     let (stop, stopped) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
