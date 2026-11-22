@@ -481,6 +481,28 @@ impl Scp {
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
         let mut served = Counts::default();
+        // the accepted contexts, for the Part 10 header of a data set spooled on one
+        let contexts: Vec<(u8, String, String)> = association
+            .presentation_contexts()
+            .iter()
+            .filter(|pc| pc.reason == PresentationContextResultReason::Acceptance)
+            .map(|pc| {
+                (
+                    pc.id,
+                    pc.abstract_syntax.trim_end_matches('\0').to_owned(),
+                    pc.transfer_syntax.trim_end_matches('\0').to_owned(),
+                )
+            })
+            .collect();
+        let header = |context: u8, command: &Command| {
+            let (_, sop_class, ts) = contexts.iter().find(|(id, ..)| *id == context)?;
+            store::spool_header(command, sop_class, ts, calling, called)
+        };
+        let spool = self.config.spool.as_ref().map(|to| message::Spool {
+            dir: &to.dir,
+            from_bytes: to.from_bytes,
+            header: &header,
+        });
         loop {
             // what it did so far, for the administration page
             open.served(
@@ -488,7 +510,13 @@ impl Scp {
                 served.found as u64,
                 served.retrieved as u64,
             );
-            match message::receive(&mut association, self.config.max_data_set_bytes).await {
+            let received = message::receive_spooling(
+                &mut association,
+                self.config.max_data_set_bytes,
+                spool.as_ref(),
+            )
+            .await;
+            match received {
                 Ok(Incoming::Message(message)) => {
                     let Some(context) = association
                         .presentation_contexts()

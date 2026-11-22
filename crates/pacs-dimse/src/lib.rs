@@ -79,12 +79,23 @@ pub struct Config {
     pub move_timeout: Duration,
     /// The largest data set kept; a larger C-STORE is read through and refused.
     pub max_data_set_bytes: usize,
+    /// Where a C-STORE's data set larger than `from_bytes` is written as it arrives, so that
+    /// memory does not grow with it; `None` keeps every data set in memory, up to
+    /// `max_data_set_bytes`.
+    pub spool: Option<SpoolTo>,
     /// What some of pacs-rs's AE titles offer, each of its own: services and transfer
     /// syntaxes. An AE title not listed offers every service in every transfer syntax.
     pub capabilities: Vec<Capabilities>,
     /// With it, the listener speaks TLS and nothing else (PS3.15 B.12): a connection that
     /// does not open with a TLS handshake this configuration accepts is closed.
     pub tls: Option<std::sync::Arc<rustls::ServerConfig>>,
+}
+
+/// Where large received data sets are spooled ([`Config::spool`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpoolTo {
+    pub dir: std::path::PathBuf,
+    pub from_bytes: usize,
 }
 
 impl Config {
@@ -99,6 +110,7 @@ impl Config {
             timeout: Duration::from_secs(30),
             move_timeout: Duration::from_secs(600),
             max_data_set_bytes: 1 << 30,
+            spool: None,
             capabilities: Vec::new(),
             tls: None,
         }

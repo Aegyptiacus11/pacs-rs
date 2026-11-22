@@ -23,6 +23,10 @@ pub enum DataSet {
     /// Command Data Set Type said none follows.
     None,
     Received(Vec<u8>),
+    /// Larger than the spool's bound: written to a file as it arrived, after the Part 10
+    /// header [`Spool::header`] gave, so that memory did not grow with it. The file goes
+    /// when this does.
+    Spooled(SpooledFile),
     /// Larger than the limit: read to its last fragment and dropped, `size` bytes in all.
     Dropped {
         size: usize,
@@ -53,6 +57,30 @@ fn protocol(message: impl Into<String>) -> MessageError {
     MessageError::Protocol(message.into())
 }
 
+/// A data set written to disk: the file, removed when this is dropped, and its length.
+#[derive(Debug)]
+pub struct SpooledFile {
+    pub path: tempfile::TempPath,
+    pub size: u64,
+}
+
+impl PartialEq for SpooledFile {
+    fn eq(&self, other: &Self) -> bool {
+        *self.path == *other.path
+    }
+}
+
+impl Eq for SpooledFile {}
+
+/// Where data sets larger than `from_bytes` are written as they arrive, and the Part 10
+/// header that goes before one: `header` makes it from the presentation context and the
+/// command, and says `None` for a message whose data set is not to be spooled.
+pub struct Spool<'a> {
+    pub dir: &'a std::path::Path,
+    pub from_bytes: usize,
+    pub header: &'a (dyn Fn(u8, &Command) -> Option<Vec<u8>> + Send + Sync),
+}
+
 /// Read the next message, keeping at most `max_data` bytes of its data set.
 ///
 /// PS3.8 E.2 and PS3.7 6.3: the command's fragments come first and the last of them is
@@ -63,6 +91,24 @@ where
     A: AsyncAssociation<S> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
+    receive_spooling(association, max_data, None).await
+}
+
+/// [`receive`], a data set that grows past `spool`'s bound written to a file of it from then
+/// on ([`DataSet::Spooled`]). A file that cannot be written is an error, which ends the
+/// association, never a data set kept in memory after all.
+pub async fn receive_spooling<A, S>(
+    association: &mut A,
+    max_data: usize,
+    spool: Option<&Spool<'_>>,
+) -> Result<Incoming, MessageError>
+where
+    A: AsyncAssociation<S> + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    use tokio::io::AsyncWriteExt;
+    let spool_error = |e: std::io::Error| protocol(format!("spooling a data set to disk: {e}"));
+    let mut spooled: Option<(tokio::fs::File, tempfile::TempPath, u64)> = None;
     let mut context_id = None;
     let mut command_bytes = Vec::new();
     let mut command: Option<Command> = None;
@@ -115,18 +161,48 @@ where
                 (PDataValueType::Data, None) => {
                     return Err(protocol("a data fragment before the command's last one"));
                 }
-                (PDataValueType::Data, Some(_)) => {
+                (PDataValueType::Data, Some(parsed)) => {
                     size += fragment.len();
-                    if size <= max_data {
-                        data.extend_from_slice(&fragment);
-                    } else if !data.is_empty() {
+                    if size > max_data {
+                        // read through and dropped, the spool's file with it
                         data = Vec::new();
+                        spooled = None;
+                    } else if let Some((file, _, written)) = &mut spooled {
+                        file.write_all(&fragment).await.map_err(spool_error)?;
+                        *written += fragment.len() as u64;
+                    } else {
+                        data.extend_from_slice(&fragment);
+                        let header = spool
+                            .filter(|spool| data.len() > spool.from_bytes)
+                            .and_then(|spool| {
+                                (spool.header)(presentation_context_id, parsed)
+                                    .map(|header| (spool, header))
+                            });
+                        if let Some((spool, header)) = header {
+                            let (file, path) = tempfile::Builder::new()
+                                .prefix("pacs-spool-")
+                                .tempfile_in(spool.dir)
+                                .map_err(spool_error)?
+                                .into_parts();
+                            let mut file = tokio::fs::File::from_std(file);
+                            file.write_all(&header).await.map_err(spool_error)?;
+                            file.write_all(&data).await.map_err(spool_error)?;
+                            let written = (header.len() + data.len()) as u64;
+                            data = Vec::new();
+                            spooled = Some((file, path, written));
+                        }
                     }
                     if is_last {
-                        let data = if size <= max_data {
-                            DataSet::Received(data)
-                        } else {
+                        let data = if size > max_data {
                             DataSet::Dropped { size }
+                        } else if let Some((mut file, path, written)) = spooled.take() {
+                            file.flush().await.map_err(spool_error)?;
+                            DataSet::Spooled(SpooledFile {
+                                path,
+                                size: written,
+                            })
+                        } else {
+                            DataSet::Received(data)
                         };
                         return Ok(Incoming::Message(Message {
                             context_id: presentation_context_id,

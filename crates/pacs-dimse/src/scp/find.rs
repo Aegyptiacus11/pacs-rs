@@ -968,6 +968,14 @@ async fn prepare(
                 None,
             ));
         }
+        // only a C-STORE's data set is spooled; an Identifier that large is too large
+        DataSet::Spooled(spooled) => {
+            return Err(refusal(
+                Status::FIND_OUT_OF_RESOURCES,
+                format!("an Identifier of {} bytes is over the limit", spooled.size),
+                None,
+            ));
+        }
         DataSet::Dropped { size } => {
             return Err(refusal(
                 Status::FIND_OUT_OF_RESOURCES,
