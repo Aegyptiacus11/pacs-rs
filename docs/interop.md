@@ -84,19 +84,13 @@ Built:
   De-identification Method naming the profile and each override (E.1.1); new File Meta Information.
 - Quarantine instead of Clean Pixel Data (E.3.1), Clean Structured Content and Clean Graphics: Secondary
   Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
-  SCREEN SAVE; kept apart in `PACS_QUARANTINE`, or refused.
-- No staging on disk: the identified instance is held in memory while it is de-identified, never stored.
+  SCREEN SAVE.
 
-Not yet:
-
-- The re-identification key. The standard's way is the Encrypted Attributes Sequence (E.1.1): the
-  original values inside each instance, encrypted to an honest broker's RSA key, so pacs-rs never holds a
-  key that reads them. A separate encrypted table is the alternative; neither is built.
-- Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data (OCR and review).
-- A review of the quarantine in the web interface.
-- Tested on the MIDI-B challenge's validation data (Data in Support of the MIDI-B Challenge,
-  doi:10.7937/cf2p-aw56), whose answer key scores every required action; so far tested rule by rule
-  against Table E.1-1.
+Changing in 0.16.0: the profile is applied when a role without `identities` reads, not on the way in.
+Studies are stored once, as received, so there is no re-identification key to keep; what the profile
+would quarantine stays in the archive, hidden from those roles. Not planned: the Encrypted Attributes
+Sequence, Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data and a run on
+the MIDI-B validation data.
 
 ## Rules for the SCP side (step 8)
 

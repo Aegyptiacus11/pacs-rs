@@ -78,13 +78,16 @@ this milestone.
 
 ## 5. The research workflow
 
+Studies are stored once, as received, and a role without the `identities` permission sees
+its projects de-identified ([De-identification](de-identification.md)).
+
 | Item | Done when |
 |---|---|
-| Re-identification key | the Encrypted Attributes Sequence of PS3.15 E.1.1, or an encrypted table, read back in a test ([De-identification](de-identification.md)) |
-| The remaining options | Retain Safe Private, Clean Structured Content, Clean Graphics and Clean Pixel Data |
-| Quarantine review | quarantined instances are listed, viewed and released or deleted in the web interface |
-| MIDI-B | the de-identification is scored on the MIDI-B challenge's validation data |
-| Write-back | segmentations as DICOM Segmentation and measurements as Structured Reports go to the hospital's destination (clinical mode, step 7) |
+| Identities by role | a role without `identities` gets every study of its projects through the project's profile, on every route, and a search on an attribute the profile hides is refused |
+| Replaced UIDs | a request naming a replaced UID finds the stored instance, at every level |
+| Hidden instances | what the profile would quarantine is kept in the archive and not shown to a role without `identities` |
+| Over DIMSE | a project's AE title answers C-FIND, C-MOVE and C-GET with the de-identified view |
+| Results coming back | a segmentation or report stored with replaced UIDs joins the original study, its references mapped back |
 | Labels, metadata and modifications | the rest of the [REST API](rest-api.md) that research tools use |
 
 ## 6. The clinical archive

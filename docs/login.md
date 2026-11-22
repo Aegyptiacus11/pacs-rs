@@ -36,6 +36,7 @@ the ones it is given.
 | `write` | uploads, STOW-RS, measurements, hanging protocols |
 | `remote` | everything about remote AEs (`/modalities`, `/jobs`) |
 | `delete` | deleting patients, studies, series and instances |
+| `identities` | studies as stored; without it, only the studies of [projects](de-identification.md), de-identified |
 | `users` | managing users and roles |
 
 `remote` is apart from `read` because a search on a remote AE shows the hospital's patients,
@@ -49,6 +50,8 @@ A server starts with four roles, which can be changed or removed, and others add
 | `editor` | `read`, `write`, `remote` |
 | `manager` | `read`, `write`, `remote`, `delete` |
 | `admin` | all of them, for good: this role cannot be changed or removed |
+
+The first three also have `identities` (0.16.0 on); a role for researchers is one without it.
 
 | Request | |
 |---|---|
