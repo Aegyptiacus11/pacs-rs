@@ -476,3 +476,56 @@ fn a_remote_ae_is_marked_tls_after_its_port() {
         assert!(parse(bad).is_err(), "{bad}");
     }
 }
+
+/// Over TLS the called AE title is inside the session, so every service is negotiated, and
+/// an AE title's own capabilities hold per operation: a C-ECHO to an AE title that offers
+/// storage only is refused 0122, one to pacs-rs's own AE title answered.
+#[tokio::test]
+async fn over_tls_an_ae_titles_capabilities_hold_per_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let ca = Authority::new(dir.path(), "site");
+    let (cert, key) = ca.issue("listener", &["127.0.0.1"]);
+    let ca_file = ca.file();
+    let (_, address) = listening(
+        &dir.path().join("listener"),
+        &[
+            "--dimse-tls-cert-file",
+            &cert,
+            "--dimse-tls-key-file",
+            &key,
+            "--dimse-tls-client-auth",
+            "off",
+            "--dimse-extra-ae-titles",
+            "RESEARCH",
+            "--dimse-capabilities",
+            "RESEARCH=storage",
+        ],
+    )
+    .await;
+    let caller = dir.path().join("caller");
+    std::fs::create_dir_all(&caller).unwrap();
+    let call = async |called: &str| {
+        let remote = format!("there={called}@127.0.0.1:{}/tls", address.port());
+        let config = dimse_config(&settings(
+            &caller,
+            &[
+                "--dimse-remotes",
+                &remote,
+                "--dimse-ae-title",
+                "CALLER",
+                "--dimse-tls-ca-file",
+                &ca_file,
+            ],
+        ))
+        .unwrap();
+        let remote = config.remote("there").unwrap().clone();
+        pacs_dimse::echo(&remote, &AeTitle::new("CALLER").unwrap(), WAIT).await
+    };
+    assert!(call("PACSRS").await.is_ok());
+    match call("RESEARCH").await {
+        Err(pacs_dimse::EchoError::Status(status)) => {
+            assert_eq!(status, Status::SOP_CLASS_NOT_SUPPORTED)
+        }
+        other => panic!("{other:?}"),
+    }
+}
