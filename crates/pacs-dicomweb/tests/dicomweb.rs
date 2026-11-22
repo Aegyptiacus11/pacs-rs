@@ -1722,9 +1722,108 @@ async fn metadata_and_bulk_data_are_stored_as_files() {
     assert_eq!(failed["00081197"]["Value"][0], 0xC000);
     assert_eq!(failed["00081155"]["Value"][0], ct.instance_uid(0));
 
-    // DICOM XML is not taken
+    // a media type of parts that is not one STOW-RS takes
     let boundary = multipart::new_boundary();
-    let xml = send(
+    let other = send(
+        &app,
+        "POST",
+        "/studies",
+        &[(
+            "content-type",
+            &format!(r#"multipart/related; type="text/plain"; boundary={boundary}"#),
+        )],
+        located_body(&boundary, &[("text/plain", None, b"hello".to_vec())]),
+    )
+    .await;
+    assert_eq!(other.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+/// A data set of DICOM JSON written as the Native DICOM Model (PS3.19 A.1), as a client
+/// that speaks XML sends it.
+fn native_model(json: &Value) -> String {
+    fn escape(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+    fn data_set(json: &Value, out: &mut String) {
+        for (tag, element) in json.as_object().unwrap() {
+            let vr = element["vr"].as_str().unwrap();
+            out.push_str(&format!(r#"<DicomAttribute tag="{tag}" vr="{vr}">"#));
+            if let Some(uri) = element.get("BulkDataURI").and_then(Value::as_str) {
+                out.push_str(&format!(r#"<BulkData uri="{}"/>"#, escape(uri)));
+            } else if let Some(inline) = element.get("InlineBinary").and_then(Value::as_str) {
+                out.push_str(&format!("<InlineBinary>{inline}</InlineBinary>"));
+            } else if let Some(values) = element.get("Value").and_then(Value::as_array) {
+                for (i, value) in values.iter().enumerate() {
+                    let n = i + 1;
+                    match (vr, value) {
+                        ("SQ", item) => {
+                            out.push_str(&format!(r#"<Item number="{n}">"#));
+                            data_set(item, out);
+                            out.push_str("</Item>");
+                        }
+                        ("PN", name) => {
+                            let alphabetic = name["Alphabetic"].as_str().unwrap_or_default();
+                            let parts: Vec<&str> = alphabetic.split('^').collect();
+                            out.push_str(&format!(r#"<PersonName number="{n}"><Alphabetic>"#));
+                            for (part, text) in [
+                                "FamilyName",
+                                "GivenName",
+                                "MiddleName",
+                                "NamePrefix",
+                                "NameSuffix",
+                            ]
+                            .iter()
+                            .zip(parts)
+                            {
+                                out.push_str(&format!("<{part}>{}</{part}>", escape(text)));
+                            }
+                            out.push_str("</Alphabetic></PersonName>");
+                        }
+                        (_, Value::String(text)) => out
+                            .push_str(&format!(r#"<Value number="{n}">{}</Value>"#, escape(text))),
+                        (_, other) => {
+                            out.push_str(&format!(r#"<Value number="{n}">{other}</Value>"#))
+                        }
+                    }
+                }
+            }
+            out.push_str("</DicomAttribute>");
+        }
+    }
+    let mut out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8"?><NativeDicomModel xmlns="http://dicom.nema.org/PS3.19/models/NativeDICOM">"#,
+    );
+    data_set(json, &mut out);
+    out.push_str("</NativeDicomModel>");
+    out
+}
+
+/// STOW-RS of the Native DICOM Model (PS3.18 10.5.1.2.2): the real CT as XML with its
+/// pixel data and its large private value in parts of their own, stored as the file it was;
+/// a part that is not the model fails, the others are stored.
+#[tokio::test]
+async fn xml_metadata_and_bulk_data_are_stored_as_files() {
+    let app = app().await;
+    let ct = RealSeries::new(992, 1);
+    let original = pacs_core::Instance::from_bytes(&ct.slice_bytes(0)).unwrap();
+    let mut metadata = original.metadata_json().unwrap();
+    metadata["00431029"] = serde_json::json!({"vr": "OB", "BulkDataURI": "private/1"});
+    metadata["7FE00010"] = serde_json::json!({"vr": "OW", "BulkDataURI": "pixels/1"});
+    let element = |instance: &pacs_core::Instance, tag| {
+        instance
+            .object
+            .element(tag)
+            .unwrap()
+            .to_bytes()
+            .unwrap()
+            .to_vec()
+    };
+    let pixel_data = dicom_dictionary_std::tags::PIXEL_DATA;
+    let private = dicom_core::Tag(0x0043, 0x1029);
+    let boundary = multipart::new_boundary();
+    let reply = send(
         &app,
         "POST",
         "/studies",
@@ -1734,13 +1833,54 @@ async fn metadata_and_bulk_data_are_stored_as_files() {
         )],
         located_body(
             &boundary,
-            &[(
-                "application/dicom+xml",
-                None,
-                b"<NativeDicomModel/>".to_vec(),
-            )],
+            &[
+                (
+                    "application/dicom+xml",
+                    None,
+                    native_model(&metadata).into_bytes(),
+                ),
+                ("application/dicom+xml", None, b"<NotTheModel/>".to_vec()),
+                (
+                    "application/octet-stream",
+                    Some("pixels/1"),
+                    element(&original, pixel_data),
+                ),
+                (
+                    "application/octet-stream",
+                    Some("private/1"),
+                    element(&original, private),
+                ),
+            ],
         ),
     )
     .await;
-    assert_eq!(xml.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // one stored, one failed
+    assert_eq!(
+        reply.status,
+        StatusCode::ACCEPTED,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    assert_eq!(
+        reply.json()["00081198"]["Value"][0]["00081197"]["Value"][0],
+        0xC000
+    );
+    let stored = get(
+        &app,
+        &format!(
+            "/studies/{}/series/{}/instances/{}",
+            ct.study_uid(),
+            ct.series_uid(),
+            ct.instance_uid(0)
+        ),
+        "multipart/related; type=\"application/dicom\"; transfer-syntax=*",
+    )
+    .await;
+    let back = pacs_core::Instance::from_bytes(&stored.parts()[0].content).unwrap();
+    assert_eq!(element(&back, pixel_data), element(&original, pixel_data));
+    assert_eq!(element(&back, private), element(&original, private));
+    assert_eq!(
+        back.metadata_json().unwrap()["00100010"],
+        original.metadata_json().unwrap()["00100010"]
+    );
 }
