@@ -122,6 +122,8 @@ jobs:
       PACS_TEST_POSTGRES_URL: postgres://postgres:test@127.0.0.1:15432
       PACS_TEST_S3_ENDPOINT: http://127.0.0.1:18333
       PACS_TEST_REFERENCE_URL: http://127.0.0.1:18042/dicom-web
+      # an OpenID provider, for the sign-in and the tools' tokens (tests/oidc_rauthy.rs)
+      PACS_TEST_RAUTHY_URL: http://localhost:18088/auth/v1/
       # audit messages are validated against DICOM's schema
       PACS_TEST_XMLLINT: xmllint
     steps:
@@ -131,16 +133,23 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # Started by hand, not as service containers: SeaweedFS needs a command line.
-      - name: Postgres, S3 and the reference server
+      - name: Postgres, S3, the reference server and an OpenID provider
         run: |
           docker run -d --name pg -p 127.0.0.1:15432:5432 -e POSTGRES_PASSWORD=test postgres:18.6-alpine
           docker run -d --name s3 -p 127.0.0.1:18333:8333 chrislusf/seaweedfs:4.48 server -s3
           docker run -d --name ref -p 127.0.0.1:18042:8042 \
             -e DICOM_WEB_PLUGIN_ENABLED=true -e ORTHANC__AUTHENTICATION_ENABLED=false \
             orthancteam/orthanc:26.9.1
+          # LOCAL_TEST: Rauthy's own demo settings, on localhost only; its bootstrap is ours
+          docker run -d --name rauthy -p 127.0.0.1:18088:8080 \
+            -e LOCAL_TEST=true -e LISTEN_SCHEME=http -e PUB_URL=localhost:18088 \
+            -e BOOTSTRAP_DIR=/app/bootstrap \
+            -v "$PWD/crates/pacs-server/tests/rauthy/bootstrap:/app/bootstrap:ro" \
+            ghcr.io/sebadob/rauthy:0.37.2
           ready() { for _ in $(seq 1 60); do "$@" && return 0; sleep 2; done; echo "::error::not ready: $*"; return 1; }
           ready docker exec pg pg_isready -U postgres -q
           ready curl -fsS -o /dev/null http://127.0.0.1:18042/system
+          ready curl -fsS -o /dev/null http://localhost:18088/auth/v1/.well-known/openid-configuration
           # the bucket the S3 tests use
           ready curl -fsS -o /dev/null -X PUT http://127.0.0.1:18333/pacs-test
 
@@ -161,7 +170,7 @@ jobs:
 
       - name: Container logs
         if: failure()
-        run: for c in pg pacs-pg-tls s3 ref; do echo "== $c"; docker logs --tail 50 "$c"; done
+        run: for c in pg pacs-pg-tls s3 ref rauthy; do echo "== $c"; docker logs --tail 50 "$c"; done
 
   test-windows:
     needs: changes

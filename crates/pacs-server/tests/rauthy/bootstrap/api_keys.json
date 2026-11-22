@@ -1,0 +1,7 @@
+[
+  {
+    "name": "pacs-tests",
+    "secret": { "Plain": "pacsTestsApiKey0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN" },
+    "access": [{ "group": "Clients", "access_rights": ["read", "update"] }]
+  }
+]
