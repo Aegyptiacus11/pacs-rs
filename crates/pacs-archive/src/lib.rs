@@ -281,9 +281,10 @@ impl Archive {
         }
         let (instance, bytes) = self.compress(instance, bytes).await;
         let size = bytes.len();
+        let hash = sha256_hex(&bytes);
         let object_key = self.store.put(&instance.key, bytes).await?;
         let new = NewInstance::new(&instance, object_key.clone(), size)
-            .map(|new| new.in_project(self.project.as_deref()));
+            .map(|new| new.with_sha256(hash).in_project(self.project.as_deref()));
         let new = match new {
             Ok(new) => new,
             Err(e) => {
@@ -388,4 +389,79 @@ fn read_permits(bytes: u64) -> usize {
     ((bytes >> 10).max(1) as usize)
         .min(Semaphore::MAX_PERMITS)
         .min(u32::MAX as usize)
+}
+
+/// The SHA-256 of `bytes`, lower-case hex: how the index keeps a stored file's.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Why a stored file failed its check.
+pub fn file_failure(file: &pacs_index::StoredFile, bytes: &[u8]) -> (String, Option<String>) {
+    let hash = sha256_hex(bytes);
+    let failure = if bytes.len() as i64 != file.size_bytes {
+        Some(format!(
+            "{} bytes in the store, {} in the index",
+            bytes.len(),
+            file.size_bytes
+        ))
+    } else {
+        match &file.sha256 {
+            Some(kept) if *kept != hash => {
+                Some(format!("changed: SHA-256 {hash}, {kept} when stored"))
+            }
+            _ => None,
+        }
+    };
+    (hash, failure)
+}
+
+impl Archive {
+    /// Check one stored file against the index: there, of its size, with its SHA-256 (taken
+    /// now for a file stored before hashes were kept). What was wrong, or `None`. Recorded
+    /// in the index either way. A store that cannot be read is an error, not a bad file.
+    pub async fn check_file(
+        &self,
+        file: &pacs_index::StoredFile,
+    ) -> Result<Option<String>, CheckError> {
+        let failure = match self.store.get(&file.object_key).await {
+            Ok(bytes) => {
+                let (hash, failure) = file_failure(file, &bytes);
+                self.index
+                    .record_check(&file.sop_instance_uid, Some(&hash), failure.as_deref())
+                    .await?;
+                failure
+            }
+            Err(pacs_store::Error::NotFound(_)) => {
+                let failure = "missing from the store".to_owned();
+                self.index
+                    .record_check(&file.sop_instance_uid, None, Some(&failure))
+                    .await?;
+                Some(failure)
+            }
+            Err(e) => return Err(CheckError::Store(e)),
+        };
+        if let Some(failure) = &failure {
+            tracing::error!(
+                sop_instance_uid = %file.sop_instance_uid,
+                object_key = %file.object_key,
+                %failure,
+                "a stored file failed its check"
+            );
+        }
+        Ok(failure)
+    }
+}
+
+/// A check that could not be made.
+#[derive(Debug, thiserror::Error)]
+pub enum CheckError {
+    #[error("the store: {0}")]
+    Store(pacs_store::Error),
+    #[error("the index: {0}")]
+    Index(#[from] pacs_index::Error),
 }

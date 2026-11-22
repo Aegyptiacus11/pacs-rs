@@ -28,6 +28,20 @@ async fn main() -> anyhow::Result<()> {
         });
     }
     let archive = open_archive(&settings).await?;
+    if settings.check_files {
+        let mut summary = pacs_server::checks::Summary::default();
+        let result = pacs_server::checks::check_all(&archive, &mut summary).await;
+        for failure in &summary.failures {
+            println!("{}: {}", failure.sop_instance_uid, failure.failure);
+        }
+        println!(
+            "{} files checked, {} failed",
+            summary.checked,
+            summary.failures.len()
+        );
+        result?;
+        std::process::exit(if summary.failures.is_empty() { 0 } else { 1 });
+    }
     let login =
         pacs_server::auth::open_login(&settings, archive.index(), pacs_server::process_env).await?;
     if login.is_none() {
@@ -36,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let audit = pacs_server::audit::open_audit(&settings)?;
+    pacs_server::checks::spawn_due_checks(archive.clone(), settings.check_files_days);
     let app = app_with_audit(archive.clone(), &settings, login, audit.clone())?;
     let listener = tokio::net::TcpListener::bind(settings.listen).await?;
     // one shutdown signal for both servers

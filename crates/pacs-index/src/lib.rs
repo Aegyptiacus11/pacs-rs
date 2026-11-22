@@ -41,6 +41,7 @@ macro_rules! seen {
 
 mod annotations;
 mod audited;
+mod checks;
 mod clients;
 mod delete;
 pub mod matching;
@@ -52,6 +53,7 @@ mod seen;
 mod users;
 mod worklist;
 pub use audited::AuditedStudy;
+pub use checks::{CheckCounts, FailedFile, StoredFile};
 pub use clients::StoredClient;
 pub use delete::{Deleted, Level};
 pub use matching::{Kind, Match};
@@ -91,6 +93,8 @@ pub struct NewInstance {
     pub instance_number: Option<i64>,
     pub object_key: String,
     pub size_bytes: i64,
+    /// The SHA-256 of the stored file, lower-case hex: what later checks compare it with.
+    pub sha256: Option<String>,
     /// The project the instance came in through; none when it is stored as received.
     pub project: Option<String>,
     patient_id: Option<String>,
@@ -114,6 +118,12 @@ pub struct NewInstance {
 }
 
 impl NewInstance {
+    /// The same instance, with the SHA-256 of its stored file (lower-case hex).
+    pub fn with_sha256(mut self, sha256: String) -> Self {
+        self.sha256 = Some(sha256);
+        self
+    }
+
     /// The same instance, come in through `project`.
     pub fn in_project(mut self, project: Option<&str>) -> Self {
         self.project = project.map(str::to_owned);
@@ -147,6 +157,7 @@ impl NewInstance {
             instance_number: instance.int(tags::INSTANCE_NUMBER),
             object_key,
             size_bytes: size_bytes as i64,
+            sha256: None,
             project: None,
             patient_id: instance.string(tags::PATIENT_ID),
             patient_name: instance.string(tags::PATIENT_NAME),
@@ -477,8 +488,9 @@ impl Index {
         sqlx::query(
             "INSERT INTO instances (sop_instance_uid, series_instance_uid, sop_class_uid,
                                     instance_number, transfer_syntax_uid, object_key, size_bytes,
-                                    attributes, metadata, public_id, main_tags, received_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                    attributes, metadata, public_id, main_tags, received_ms,
+                                    sha256, checked_ms, check_failure)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL)
              ON CONFLICT (sop_instance_uid) DO UPDATE SET
                 sop_class_uid = excluded.sop_class_uid,
                 instance_number = excluded.instance_number,
@@ -486,7 +498,8 @@ impl Index {
                 object_key = excluded.object_key, size_bytes = excluded.size_bytes,
                 attributes = excluded.attributes, metadata = excluded.metadata,
                 public_id = excluded.public_id, main_tags = excluded.main_tags,
-                received_ms = excluded.received_ms",
+                received_ms = excluded.received_ms, sha256 = excluded.sha256,
+                checked_ms = excluded.checked_ms, check_failure = NULL",
         )
         .bind(&new.sop_instance_uid)
         .bind(&new.series_instance_uid)
@@ -500,6 +513,9 @@ impl Index {
         .bind(&new.instance_public_id)
         .bind(new.instance_main_tags.to_string())
         .bind(now_ms())
+        .bind(&new.sha256)
+        // a file hashed as it is stored is checked then; one without a hash never was
+        .bind(new.sha256.as_ref().map(|_| now_ms()))
         .execute(&mut *tx)
         .await?;
 

@@ -13,7 +13,7 @@ use utoipa::openapi::{Info, License, OpenApi};
 use crate::auth::{Right, is_open, right_for};
 
 /// The sections of the reference, in order, each with what it is about.
-const TAGS: [(&str, &str); 12] = [
+const TAGS: [(&str, &str); 13] = [
     (
         "Patients",
         "A patient is the studies that share a Patient ID.",
@@ -39,6 +39,10 @@ const TAGS: [(&str, &str); 12] = [
     (
         "Jobs",
         "Moves from a remote archive that run in the background.",
+    ),
+    (
+        "Integrity",
+        "Each stored file checked against the size and SHA-256 the index took when it was stored. Only for a role with `users`.",
     ),
     (
         "Signing in",
@@ -77,6 +81,7 @@ pub fn description() -> OpenApi {
     let mut api = api.nest("/dicom-web", pacs_dicomweb::api());
     api.merge(crate::modalities::api());
     api.merge(crate::auth::api());
+    api.merge(crate::checks::api());
     let mut info = Info::new("pacs-rs", env!("CARGO_PKG_VERSION"));
     info.description = Some(
         "The REST API of pacs-rs: patients, studies, series and instances by identifier. \

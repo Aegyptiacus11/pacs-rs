@@ -28,6 +28,7 @@
 - [Audit trail](audit.md)
 - [Behind a reverse proxy](reverse-proxy.md)
 - [Backing up and upgrading](backup.md)
+- [Checking stored files](integrity.md)
 
 # Reference
 
