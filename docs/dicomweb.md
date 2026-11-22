@@ -57,6 +57,14 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
   matches): `…ScheduledProcedureStepID=STEP1&RequestAttributesSequence.RequestedProcedureID=REQ2`
   finds nothing when STEP1 and REQ2 are in two items of the series. The sequence itself takes
   no value.
+- **`includefield`** adds attributes to each answer, by keyword or tag, comma-separated or
+  repeated (PS3.18 8.3.4.3): `includefield=Manufacturer,00180050`. They come from the
+  metadata the index keeps of every instance: an instance answers with its own, a study or a
+  series with those of its first instance by Instance Number. `includefield=all` gives the
+  modules of the level: at the study level the Patient, General Study and Patient Study
+  Modules, at the series level those and the General Series, General Equipment and Frame of
+  Reference Modules, at the instance level the whole data set without its pixel data.
+  Nothing an answer already has is changed; a name that is no attribute is 400.
 - Not a key yet: the searches from the root for all series or all instances.
 
 SQLite and Postgres answer the same: one rule in the code decides every match, and the
