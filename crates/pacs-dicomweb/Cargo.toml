@@ -8,22 +8,23 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-serde.workspace = true
-utoipa.workspace = true
-utoipa-axum.workspace = true
-axum.workspace = true
-bytes.workspace = true
-futures.workspace = true
-memchr.workspace = true
-pacs-archive.workspace = true
-pacs-core.workspace = true
-pacs-index.workspace = true
-pacs-store.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+# the description of the HTTP API, written beside each handler
+utoipa = "6.0.0"
+utoipa-axum = "0.3.0"
+axum = "0.8.9"
+bytes = "1.12.1"
+futures = "0.3.34"
+memchr = "2.8.3"
+pacs-archive = { path = "../pacs-archive" }
+pacs-core = { path = "../pacs-core" }
+pacs-index = { path = "../pacs-index" }
+pacs-store = { path = "../pacs-store" }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 
 [dev-dependencies]
-http-body-util.workspace = true
-pacs-core = { workspace = true, features = ["real"] }
-tempfile.workspace = true
-tower.workspace = true
+http-body-util = "0.1.5"
+pacs-core = { path = "../pacs-core", features = ["real"] }
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }

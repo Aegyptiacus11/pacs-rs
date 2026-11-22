@@ -8,14 +8,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-dicom-dictionary-std.workspace = true
-pacs-core.workspace = true
-serde_json.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
+dicom-dictionary-std = "0.10.0"
+pacs-core = { path = "../pacs-core" }
+serde_json = "1.0.154"
+# tls-rustls-ring-webpki: TLS to Postgres (PACS_INDEX_TLS), with the web's root certificates
+# built in for a server whose certificate needs no PACS_INDEX_CA_FILE
+sqlx = { version = "0.9.0", default-features = false, features = ["any", "macros", "migrate", "postgres", "runtime-tokio", "sqlite", "tls-rustls-ring-webpki"] }
+thiserror = "2.0.21"
 
 [dev-dependencies]
-dicom-core.workspace = true
-pacs-core = { workspace = true, features = ["real"] }
-tempfile.workspace = true
-tokio.workspace = true
+dicom-core = "0.10.0"
+pacs-core = { path = "../pacs-core", features = ["real"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }

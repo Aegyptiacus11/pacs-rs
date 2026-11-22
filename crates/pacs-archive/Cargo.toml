@@ -8,17 +8,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-dicom-dictionary-std.workspace = true
-bytes.workspace = true
-pacs-core.workspace = true
-pacs-index.workspace = true
-pacs-store.workspace = true
-thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
-tracing.workspace = true
+dicom-dictionary-std = "0.10.0"
+bytes = "1.12.1"
+pacs-core = { path = "../pacs-core" }
+pacs-index = { path = "../pacs-index" }
+pacs-store = { path = "../pacs-store" }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "rt", "sync"] }
+tracing = "0.1.44"
 
 [dev-dependencies]
-dicom-dictionary-std.workspace = true
-pacs-core = { workspace = true, features = ["real"] }
-tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+dicom-dictionary-std = "0.10.0"
+pacs-core = { path = "../pacs-core", features = ["real"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "rt"] }

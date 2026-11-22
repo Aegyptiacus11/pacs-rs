@@ -8,19 +8,21 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-charls.workspace = true
-dicom-core.workspace = true
-dicom-dictionary-std.workspace = true
-dicom-json.workspace = true
-dicom-object.workspace = true
-dicom-transfer-syntax-registry = { workspace = true, optional = true }
-jxl.workspace = true
-memchr.workspace = true
-serde_json.workspace = true
-sha1.workspace = true
-thiserror.workspace = true
-zune-core.workspace = true
-zune-jpegxl.workspace = true
+# CharLS (JPEG-LS), C++ built by cmake and linked statically.
+charls = { version = "0.4.2", features = ["static"] }
+dicom-core = "0.10.0"
+dicom-dictionary-std = "0.10.0"
+dicom-json = "0.10.0"
+dicom-object = "0.10.0"
+dicom-transfer-syntax-registry = { version = "0.10.1", default-features = false, optional = true }
+# jxl-rs, the libjxl project's JPEG XL decoder.
+jxl = "0.8.0"
+memchr = "2.8.3"
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+thiserror = "2.0.21"
+zune-core = { version = "0.5.3", default-features = false, features = ["std"] }
+zune-jpegxl = { version = "0.5.2", default-features = false, features = ["std"] }
 
 [features]
 # Real DICOM files (tests/data/pydicom), whole and altered, as test data for the tests here
@@ -28,7 +30,7 @@ zune-jpegxl.workspace = true
 real = ["dep:dicom-transfer-syntax-registry"]
 
 [dev-dependencies]
-dicom-dictionary-std.workspace = true
+dicom-dictionary-std = "0.10.0"
 pacs-core = { path = ".", features = ["real"] }
 
 [[example]]
