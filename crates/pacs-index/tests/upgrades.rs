@@ -140,3 +140,85 @@ async fn every_releases_postgres_index_opens_and_reads_as_written() {
         reads_as_written(&index, release, true).await;
     }
 }
+
+/// Accounts as a 0.15 server could have them: `researcher` held by a user limited to a
+/// project, `editor` by one who is not, `manager` by a limited client.
+const ACCOUNTS_BEFORE_IDENTITIES: &str = "
+    INSERT INTO roles (id, name, permissions, created_ms) VALUES ('researcher', 'Researcher', 'read', 10);
+    INSERT INTO users (id, login, password_hash, role, active, created_ms) VALUES
+        ('u1', 'ana', 'x', 'researcher', 1, 0), ('u2', 'bo', 'x', 'editor', 1, 0);
+    INSERT INTO clients (id, name, secret_hash, role, created_by, created_ms) VALUES
+        ('c1', 'pipeline', 'x', 'manager', 'admin', 0);
+    INSERT INTO limited_accounts (account) VALUES ('user:u1'), ('client:c1');
+    INSERT INTO account_projects (account, project) VALUES ('user:u1', 'liver');
+";
+
+/// 0.16.0 gives every role `identities` but those a limited account holds, so that nobody
+/// sees more than before: limited accounts saw only de-identified studies.
+async fn identities_kept_from_the_limited(index: &Index) {
+    let permissions = async |id: &str| index.role(id).await.unwrap().unwrap().permissions;
+    for (role, has) in [
+        ("reader", true),
+        ("editor", true),
+        ("admin", true),
+        ("researcher", false),
+        ("manager", false),
+    ] {
+        assert_eq!(
+            permissions(role).await.iter().any(|p| p == "identities"),
+            has,
+            "{role}"
+        );
+    }
+    assert_eq!(permissions("researcher").await, ["read"]);
+}
+
+#[tokio::test]
+async fn identities_go_to_every_role_but_the_limited_accounts_on_sqlite() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite");
+    std::fs::copy(copies().join("0.14.0.sqlite"), &path).unwrap();
+    sqlx::any::install_default_drivers();
+    let before = sqlx::AnyPool::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::raw_sql(ACCOUNTS_BEFORE_IDENTITIES)
+        .execute(&before)
+        .await
+        .unwrap();
+    before.close().await;
+    let index = Index::open(&path).await.unwrap();
+    identities_kept_from_the_limited(&index).await;
+}
+
+#[tokio::test]
+async fn identities_go_to_every_role_but_the_limited_accounts_on_postgres() {
+    let Ok(server) = std::env::var("PACS_TEST_POSTGRES_URL") else {
+        eprintln!("PACS_TEST_POSTGRES_URL not set; skipping");
+        return;
+    };
+    let server = server.trim_end_matches('/');
+    sqlx::any::install_default_drivers();
+    let admin = sqlx::AnyPool::connect(&format!("{server}/postgres"))
+        .await
+        .unwrap();
+    let name = format!("pacs_identities_{}", std::process::id());
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let url = format!("{server}/{name}");
+    let dump = std::fs::read_to_string(copies().join("0.14.0.postgres.sql")).unwrap();
+    let before = sqlx::AnyPool::connect(&url).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(dump))
+        .execute(&before)
+        .await
+        .unwrap();
+    sqlx::raw_sql(ACCOUNTS_BEFORE_IDENTITIES)
+        .execute(&before)
+        .await
+        .unwrap();
+    before.close().await;
+    let index = Index::connect(&url).await.unwrap();
+    identities_kept_from_the_limited(&index).await;
+}

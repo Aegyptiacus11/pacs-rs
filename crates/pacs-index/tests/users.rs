@@ -155,10 +155,11 @@ async fn roles_start_as_four_and_are_made_changed_and_removed() {
         let roles = index.roles().await.unwrap();
         let ids: Vec<&str> = roles.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["reader", "editor", "manager", "admin"]);
-        assert_eq!(roles[0].permissions, perms(&["read"]));
+        // identities since 0.16.0 (migration 0018), on every role no limited account holds
+        assert_eq!(roles[0].permissions, perms(&["read", "identities"]));
         assert_eq!(
             roles[3].permissions,
-            perms(&["read", "write", "remote", "delete", "users"])
+            perms(&["read", "write", "remote", "delete", "users", "identities"])
         );
         assert_eq!(index.role("nobody").await.unwrap(), None);
 
