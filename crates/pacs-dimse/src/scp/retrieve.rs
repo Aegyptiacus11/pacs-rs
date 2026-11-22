@@ -38,11 +38,6 @@ use crate::scu::store::{Accepted, Originator, SendError, Sender, c_store_rq, enc
 use crate::status::{Status, StatusClass};
 use crate::{Config, RemoteAe};
 
-/// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-MOVE on.
-pub(super) fn is_move(sop_class: &str) -> bool {
-    matches!(sop_class, PATIENT_ROOT_MOVE | STUDY_ROOT_MOVE)
-}
-
 /// The model a MOVE or a GET SOP class is of.
 fn model_of(sop_class: &str) -> Option<Model> {
     match sop_class {

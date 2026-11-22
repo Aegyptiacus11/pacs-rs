@@ -11,10 +11,12 @@
 mod find;
 mod operation;
 mod retrieve;
+mod services;
 pub(crate) mod store;
 
 use operation::After;
 
+pub use services::{Capabilities, Service};
 pub use store::{Destination, part10};
 
 use pacs_archive::observed::{Stored, stored_during};
@@ -33,11 +35,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
+use crate::Config;
 use crate::ae::AeTitle;
 use crate::command::{self, Command, field, tag};
 use crate::message::{self, DataSet, Incoming, MessageError};
 use crate::status::Status;
-use crate::{Config, VERIFICATION};
 
 /// An association as whoever accounts for it sees it: where the peer is, and the AE
 /// titles it called from and called.
@@ -157,7 +159,21 @@ impl Scp {
             .unwrap_or(&self.destination)
     }
 
-    fn options(&self) -> ServerAssociationOptions<'static, Titles, Roles> {
+    /// The capabilities of `called_ae_title`, when the settings give it some of its own.
+    pub fn capabilities(&self, called_ae_title: &str) -> Option<&Capabilities> {
+        self.config
+            .capabilities
+            .iter()
+            .find(|c| c.ae_title.matches(called_ae_title))
+    }
+
+    /// What an association negotiates: the SOP classes of the services `capabilities`
+    /// offers, in its transfer syntaxes; every service in every transfer syntax pacs-rs
+    /// reads without.
+    fn options(
+        &self,
+        capabilities: Option<&Capabilities>,
+    ) -> ServerAssociationOptions<'static, Titles, Roles> {
         let mut accepted = vec![self.config.ae_title.clone()];
         accepted.extend(self.config.extra_ae_titles.iter().cloned());
         accepted.extend(self.routes.iter().map(|(title, _)| title.clone()));
@@ -173,16 +189,18 @@ impl Scp {
             .ae_title(self.config.ae_title.as_str().to_owned())
             .read_timeout(self.config.timeout)
             .write_timeout(self.config.timeout)
-            .with_abstract_syntax(VERIFICATION)
-            .with_abstract_syntax(crate::query::STUDY_ROOT_FIND)
-            .with_abstract_syntax(crate::scu::retrieve::STUDY_ROOT_MOVE)
-            .with_abstract_syntax(crate::query::STUDY_ROOT_GET)
-            .with_abstract_syntax(crate::query::PATIENT_ROOT_FIND)
-            .with_abstract_syntax(crate::query::PATIENT_ROOT_MOVE)
-            .with_abstract_syntax(crate::query::PATIENT_ROOT_GET)
             .with_negotiation(Roles);
-        for (uid, _) in crate::sop_classes::STORAGE {
-            options = options.with_abstract_syntax(*uid);
+        for service in Service::ALL {
+            if capabilities.is_none_or(|c| c.allows(service)) {
+                for uid in service.sop_classes() {
+                    options = options.with_abstract_syntax(uid);
+                }
+            }
+        }
+        if let Some(syntaxes) = capabilities.and_then(|c| c.transfer_syntaxes.as_ref()) {
+            for uid in syntaxes {
+                options = options.with_transfer_syntax(uid.clone());
+            }
         }
         if let Some(tls) = &self.config.tls {
             options = options.tls_config(tls.clone());
@@ -196,7 +214,15 @@ impl Scp {
         listener: TcpListener,
         shutdown: impl Future<Output = ()> + Send,
     ) {
-        let options = Arc::new(self.options());
+        let options = Arc::new(Negotiated {
+            all: self.options(None),
+            of_titles: self
+                .config
+                .capabilities
+                .iter()
+                .map(|c| (c.ae_title.clone(), self.options(Some(c))))
+                .collect(),
+        });
         tokio::pin!(shutdown);
         loop {
             let (socket, peer) = tokio::select! {
@@ -233,7 +259,7 @@ impl Scp {
 
     async fn association(
         &self,
-        options: &ServerAssociationOptions<'static, Titles, Roles>,
+        options: &Negotiated,
         socket: TcpStream,
         peer: std::net::SocketAddr,
     ) {
@@ -248,12 +274,23 @@ impl Scp {
         // upgrade from plain): a caller that does not open with a handshake the
         // configuration accepts is refused here, before any DICOM.
         if self.config.tls.is_some() {
-            match options.establish_tls_async(socket).await {
+            // the called AE title is inside the TLS session dicom-ul opens: every service is
+            // negotiated, and an AE title's own capabilities hold per operation
+            match options.all.establish_tls_async(socket).await {
                 Ok(association) => self.established(association, peer).await,
                 Err(e) => refused(e),
             }
         } else {
-            match options.establish_async(socket).await {
+            let called = called_ae_title(&socket, self.config.timeout).await;
+            let chosen = called
+                .and_then(|called| {
+                    options
+                        .of_titles
+                        .iter()
+                        .find(|(title, _)| title.matches(&called))
+                })
+                .map_or(&options.all, |(_, options)| options);
+            match chosen.establish_async(socket).await {
                 Ok(association) => self.established(association, peer).await,
                 Err(e) => refused(e),
             }
@@ -474,50 +511,58 @@ impl Scp {
                         calling,
                         called,
                     };
-                    let response =
-                        match handle(&request, &message.command, message.data, destination).await {
-                            Handled::Respond(response) => response,
-                            Handled::Nothing => continue,
-                            Handled::Find(identifier) => {
-                                let open = self
-                                    .find(
-                                        &mut association,
-                                        peer,
-                                        &request,
-                                        &message.command,
-                                        identifier,
-                                        destination,
-                                    )
-                                    .await;
-                                served.found += 1;
-                                if open {
-                                    continue;
-                                }
-                                break;
+                    let capabilities = self.capabilities(called);
+                    let handled = handle(
+                        &request,
+                        &message.command,
+                        message.data,
+                        destination,
+                        capabilities,
+                    )
+                    .await;
+                    let response = match handled {
+                        Handled::Respond(response) => response,
+                        Handled::Nothing => continue,
+                        Handled::Find(identifier) => {
+                            let open = self
+                                .find(
+                                    &mut association,
+                                    peer,
+                                    &request,
+                                    &message.command,
+                                    identifier,
+                                    destination,
+                                )
+                                .await;
+                            served.found += 1;
+                            if open {
+                                continue;
                             }
-                            Handled::Retrieve(identifier) => {
-                                let open = self
-                                    .retrieve(
-                                        &mut association,
-                                        peer,
-                                        &request,
-                                        &message.command,
-                                        identifier,
-                                        destination,
-                                    )
-                                    .await;
-                                served.retrieved += 1;
-                                if open {
-                                    continue;
-                                }
-                                break;
+                            break;
+                        }
+                        Handled::Retrieve(identifier) => {
+                            let open = self
+                                .retrieve(
+                                    &mut association,
+                                    peer,
+                                    &request,
+                                    &message.command,
+                                    identifier,
+                                    destination,
+                                )
+                                .await;
+                            served.retrieved += 1;
+                            if open {
+                                continue;
                             }
-                            Handled::Abort(reason) => {
-                                tracing::warn!(%peer, calling, reason, "association aborted");
-                                let _ = association.abort().await;
-                                break;
-                            }
-                        };
+                            break;
+                        }
+                        Handled::Abort(reason) => {
+                            tracing::warn!(%peer, calling, reason, "association aborted");
+                            let _ = association.abort().await;
+                            break;
+                        }
+                    };
                     served.count(&message.command, &response);
                     if let Err(e) =
                         message::send(&mut association, request.context_id, &response, None).await
@@ -586,6 +631,36 @@ async fn sent_studies(index: &pacs_index::Index, sent: &[retrieve::Sent]) -> Vec
         }
     }
     studies
+}
+
+/// The negotiations an association may get: every service, or an AE title's own.
+struct Negotiated {
+    all: ServerAssociationOptions<'static, Titles, Roles>,
+    of_titles: Vec<(AeTitle, ServerAssociationOptions<'static, Titles, Roles>)>,
+}
+
+/// The Called AE Title of the A-ASSOCIATE-RQ waiting on `socket`, read without taking it
+/// off the connection (PS3.8 9.3.2: PDU type 01H, then the PDU length, the protocol version
+/// and two reserved bytes, then the 16 bytes of the title). `None` for anything else, which
+/// the negotiation answers as it should.
+async fn called_ae_title(socket: &TcpStream, wait: std::time::Duration) -> Option<String> {
+    let mut header = [0u8; 26];
+    let read = async {
+        loop {
+            match socket.peek(&mut header).await {
+                Ok(n) if n >= header.len() => return true,
+                // the connection closed, or failed
+                Ok(0) | Err(_) => return false,
+                // the rest of the header is on its way
+                Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+            }
+        }
+    };
+    if !tokio::time::timeout(wait, read).await.unwrap_or(false) || header[0] != 0x01 {
+        return None;
+    }
+    let title = String::from_utf8_lossy(&header[10..26]);
+    Some(title.trim_matches([' ', '\0']).to_owned())
 }
 
 /// SCP/SCU Role Selection (PS3.7 D.3.3.4): for a Storage SOP class the requester may be
@@ -693,6 +768,7 @@ async fn handle(
     command: &Command,
     data: DataSet,
     destination: &Destination,
+    capabilities: Option<&Capabilities>,
 ) -> Handled {
     let Ok(field) = command.command_field() else {
         return Handled::Abort("a command without Command Field");
@@ -710,13 +786,37 @@ async fn handle(
         Handled::Respond(command::response(command, status, comment))
     };
     // PS3.7 9.1.1.1.9 and 9.1.5.1.4: Refused: SOP Class not supported when pacs-rs has no
-    // such SOP class; Mistyped argument when it is not the one agreed for this context.
+    // such SOP class, or the AE title called offers none of its service; Mistyped argument
+    // when it is not the one agreed for this context.
     let affected = command.ui(tag::AFFECTED_SOP_CLASS_UID).unwrap_or("");
-    if !is_supported(affected) {
+    let Some(service) = Service::of(affected) else {
         return respond(
             Status::SOP_CLASS_NOT_SUPPORTED,
             Some(&format!("SOP Class {affected} is not supported")),
         );
+    };
+    if let Some(capabilities) = capabilities {
+        // negotiated already on a plain connection; over TLS every service is, and the AE
+        // title's own capabilities hold here
+        if !capabilities.allows(service) {
+            return respond(
+                Status::SOP_CLASS_NOT_SUPPORTED,
+                Some(&format!(
+                    "{} offers no {} service",
+                    capabilities.ae_title,
+                    service.name()
+                )),
+            );
+        }
+        if !capabilities.allows_transfer_syntax(request.transfer_syntax) {
+            return respond(
+                Status::SOP_CLASS_NOT_SUPPORTED,
+                Some(&format!(
+                    "{} does not take transfer syntax {}",
+                    capabilities.ae_title, request.transfer_syntax
+                )),
+            );
+        }
     }
     if affected != request.abstract_syntax {
         return respond(
@@ -727,18 +827,18 @@ async fn handle(
             )),
         );
     }
-    match field {
-        field::C_ECHO_RQ if affected == VERIFICATION => respond(Status::SUCCESS, None),
-        field::C_STORE_RQ if is_storage(affected) => {
+    // PS3.7 9.1.5.1.4, 9.1.1.1.9: an operation the SOP class does not have
+    if field != service.operation() {
+        return respond(Status::UNRECOGNIZED_OPERATION, None);
+    }
+    match service {
+        Service::Verification => respond(Status::SUCCESS, None),
+        Service::Storage => {
             let (status, comment) = store::store(request, command, data, destination).await;
             respond(status, comment.as_deref())
         }
-        field::C_FIND_RQ if find::is_find(affected) => Handled::Find(data),
-        field::C_MOVE_RQ if retrieve::is_move(affected) => Handled::Retrieve(data),
-        field::C_GET_RQ if retrieve::is_get(affected) => Handled::Retrieve(data),
-        // PS3.7 9.1.5.1.4, 9.1.1.1.9: an operation the SOP class does not have, or one
-        // pacs-rs does not provide.
-        _ => respond(Status::UNRECOGNIZED_OPERATION, None),
+        Service::Find => Handled::Find(data),
+        Service::Move | Service::Get => Handled::Retrieve(data),
     }
 }
 
@@ -746,14 +846,6 @@ pub(crate) fn is_storage(sop_class: &str) -> bool {
     crate::sop_classes::STORAGE
         .iter()
         .any(|(uid, _)| *uid == sop_class)
-}
-
-fn is_supported(sop_class: &str) -> bool {
-    sop_class == VERIFICATION
-        || find::is_find(sop_class)
-        || retrieve::is_move(sop_class)
-        || retrieve::is_get(sop_class)
-        || is_storage(sop_class)
 }
 
 #[derive(Default)]
