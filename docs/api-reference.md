@@ -1222,7 +1222,7 @@ Permission, when the login is on: `users`.
 
 Adds a tool.
 
-The answer is the only place its secret ever appears: the index keeps a hash of it.
+The answer is the only place its secret ever appears: the index keeps a hash of it. With an OpenID provider, the tool is registered under its `client_id` there and has no secret here: it gets its tokens from the provider.
 
 Permission, when the login is on: `users`.
 
@@ -1465,6 +1465,7 @@ A tool to add.
 
 | Field | Type | |
 |---|---|---|
+| `client_id` | string or null, optional | With an OpenID provider: the tool's client id there, which its tokens name. Without one it is not given: the server makes the id and a secret. |
 | `name` | string |  |
 | `projects` | list of string or null, optional | The projects to limit the client to; absent or `null`: every study. |
 | `role` | string |  |

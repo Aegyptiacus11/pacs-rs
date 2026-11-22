@@ -457,6 +457,14 @@ async fn open_provider(
         }
         admins.push(admin);
     }
+    let audience = match settings.oidc_audience.as_deref().map(str::trim) {
+        Some(audience) if !audience.is_empty() => audience.to_owned(),
+        _ => url::Url::parse(&redirect_url)
+            .ok()
+            .filter(|url| url.has_host())
+            .map(|url| url.origin().ascii_serialization())
+            .context("PACS_OIDC_REDIRECT_URL: not a URL with a host")?,
+    };
     crate::oidc::Provider::discover(crate::oidc::ProviderSettings {
         issuer: issuer.trim().to_owned(),
         client_id,
@@ -469,6 +477,7 @@ async fn open_provider(
             .join(" "),
         role: settings.oidc_role.trim().to_owned(),
         admins,
+        audience,
     })
     .await
     .context("PACS_OIDC_ISSUER")
@@ -599,6 +608,80 @@ async fn client_of(login: &Login, claims: &Claims) -> Result<Option<SignedIn>, p
 
 /// A client's request refused. IUA (ITI TF-2: 3.72.4.3) asks for 401 whether the token or
 /// its scope fails; the challenge says which.
+/// The scopes a provider gives a tool, as it names them there: `pacs:read`, `pacs:write`,
+/// `pacs:remote`, `pacs:delete`. Prefixed, since the provider serves other applications too.
+const PROVIDER_SCOPE_PREFIX: &str = "pacs:";
+
+/// The tool a provider's access token is for, with what it may do: the tool registered under
+/// the token's client id (`client_id`, or `azp` from a provider that does not send it), with
+/// its role, narrowed by the token's `pacs:` scopes when it has any. `None`: a token the
+/// provider did not issue for this server, or for no tool registered here.
+async fn provider_client(
+    login: &Login,
+    provider: &crate::oidc::Provider,
+    token: &str,
+) -> Result<Option<SignedIn>, pacs_index::Error> {
+    let claims = match provider.access_claims(token).await {
+        Ok(claims) => claims,
+        Err(failure) => {
+            if matches!(
+                failure,
+                crate::oidc::Failure::Provider(_) | crate::oidc::Failure::Internal(_)
+            ) {
+                tracing::error!(
+                    detail = failure.detail(),
+                    "a tool's token could not be checked"
+                );
+            } else {
+                tracing::info!(detail = failure.detail(), "a tool's token was refused");
+            }
+            return Ok(None);
+        }
+    };
+    let Some(id) = claims
+        .get("client_id")
+        .or_else(|| claims.get("azp"))
+        .and_then(Value::as_str)
+    else {
+        tracing::info!("a provider's token names no client");
+        return Ok(None);
+    };
+    let Some(client) = login.index.client(id).await? else {
+        tracing::info!(client = %id, "a provider's token for a tool not registered here");
+        return Ok(None);
+    };
+    // a role that is gone allows nothing
+    let role = login.index.role(&client.role).await?;
+    let allowed: Vec<Permission> = role
+        .map(|role| role.permissions)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| p.parse().ok())
+        .filter(|p| CLIENT_SCOPES.contains(p))
+        .collect();
+    let asked: Vec<Permission> = claims
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .split(' ')
+        .filter_map(|scope| scope.strip_prefix(PROVIDER_SCOPE_PREFIX))
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    // the scopes only narrow the role, and no pacs: scope at all leaves it whole
+    let permissions = if asked.is_empty() {
+        allowed
+    } else {
+        allowed.into_iter().filter(|p| asked.contains(p)).collect()
+    };
+    Ok(Some(SignedIn {
+        id: client.id,
+        login: client.name,
+        role: client.role,
+        permissions,
+        client: true,
+    }))
+}
+
 fn client_refused(error: &'static str, detail: &str) -> Response {
     let mut response = refused(StatusCode::UNAUTHORIZED, detail).into_response();
     let challenge = match error {
@@ -661,11 +744,16 @@ async fn guard(State(login): State<Login>, mut request: Request, next: Next) -> 
     let claims = match (bearer, query_token) {
         (Some(token), _) => {
             let Ok(claims) = login.sessions.access.verify(&token) else {
-                // not a user's: a client's, which names this server as issuer and audience
-                let Ok(claims) = login.clients.verify(&token) else {
+                // not a user's: a client's, which names this server as issuer and audience,
+                // or one the provider gave a tool
+                let client = if let Ok(claims) = login.clients.verify(&token) {
+                    client_of(&login, &claims).await
+                } else if let Some(provider) = &login.provider {
+                    provider_client(&login, provider, &token).await
+                } else {
                     return invalid();
                 };
-                let client = match client_of(&login, &claims).await {
+                let client = match client {
                     Ok(Some(client)) => client,
                     Ok(None) => {
                         return client_refused("invalid_token", "Invalid or expired access token");
@@ -1690,6 +1778,10 @@ async fn list_clients(State(login): State<Login>) -> Result<Json<Value>, Refusal
 /// A tool to add.
 #[derive(Deserialize, ToSchema)]
 struct NewClient {
+    /// With an OpenID provider: the tool's client id there, which its tokens name. Without
+    /// one it is not given: the server makes the id and a secret.
+    #[serde(default)]
+    client_id: Option<String>,
     name: String,
     role: String,
     /// The projects to limit the client to; absent or `null`: every study.
@@ -1697,9 +1789,19 @@ struct NewClient {
     projects: Option<Vec<String>>,
 }
 
+/// A client id at the provider, as a tool is registered under it: 1 to 128 visible ASCII
+/// characters (RFC 6749 A.1 allows those).
+fn provider_client_id(id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err("client_id: 1 to 128 visible ASCII characters".into());
+    }
+    Ok(id.to_owned())
+}
+
 /// Adds a tool.
 ///
-/// The answer is the only place its secret ever appears: the index keeps a hash of it.
+/// The answer is the only place its secret ever appears: the index keeps a hash of it. With an OpenID provider, the tool is registered under its `client_id` there and has no secret here: it gets its tokens from the provider.
 #[utoipa::path(
     post,
     path = "/clients",
@@ -1719,17 +1821,37 @@ async fn create_client(
     let name = client_name(&new.name).map_err(unprocessable)?;
     let role = known_role(&login, &new.role).await?;
     let projects = known_projects(&login, new.projects)?;
-    let id = new_id().map_err(|e| internal("making a client id", e))?;
-    let secret = new_secret().map_err(|e| internal("making a client secret", e))?;
+    // with a provider, the tool is the provider's client and has no secret here
+    let (id, secret) = match (&login.provider, new.client_id) {
+        (Some(_), Some(id)) => (provider_client_id(&id).map_err(unprocessable)?, None),
+        (Some(_), None) => {
+            return Err(unprocessable(
+                "client_id: the tool's client id at the OpenID provider".into(),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(unprocessable(
+                "client_id: only with an OpenID provider; this server makes the id".into(),
+            ));
+        }
+        (None, None) => (
+            new_id().map_err(|e| internal("making a client id", e))?,
+            Some(new_secret().map_err(|e| internal("making a client secret", e))?),
+        ),
+    };
+    // no secret: a stored hash that the hash of no secret is
+    let hash = secret.as_deref().map(secret_hash).unwrap_or_default();
     let client = login
         .index
-        .create_client(&id, &name, &secret_hash(&secret), &role, &user.login)
+        .create_client(&id, &name, &hash, &role, &user.login)
         .await
         .map_err(|e| from_index("making a client", e))?;
     tracing::info!(client = %client.name, role = %client.role, by = %user.login, "client made");
     let mut shown = shown_client(&client);
     shown["projects"] = keep_projects(&login, &client_account(&client.id), projects).await?;
-    shown["secret"] = secret.into();
+    if let Some(secret) = secret {
+        shown["secret"] = secret.into();
+    }
     Ok(token_reply(StatusCode::CREATED, shown))
 }
 
