@@ -27,7 +27,9 @@ pub enum TranscodeError {
 
 impl Instance {
     /// The pixel layout every frame shares, if this instance is one the codecs handle:
-    /// one sample per pixel, monochrome, 8 or 16 bits allocated.
+    /// monochrome or palette colour of one sample per pixel, or RGB or YBR_FULL of three,
+    /// 8 or 16 bits allocated. The planar configuration is that of the native frames; a
+    /// compressed frame decodes by pixel.
     pub fn shape(&self) -> Result<Shape, TranscodeError> {
         let unsupported = |what: String| TranscodeError::Unsupported(what);
         let get = |tag, name: &str| {
@@ -36,23 +38,29 @@ impl Instance {
                 .ok_or_else(|| unsupported(format!("{name} missing")))
         };
         let samples = self.int(tags::SAMPLES_PER_PIXEL).unwrap_or(1);
-        if samples != 1 {
-            return Err(unsupported(format!("{samples} samples per pixel")));
-        }
         let photometric = self
             .string(tags::PHOTOMETRIC_INTERPRETATION)
             .unwrap_or_default();
-        if !matches!(photometric.as_str(), "MONOCHROME1" | "MONOCHROME2") {
+        // PS3.3 C.7.6.3.1.2; YBR_FULL_422 and the other subsampled ones are not a native
+        // frame of three full planes, and are left as they are
+        let known = matches!(
+            (samples, photometric.as_str()),
+            (1, "MONOCHROME1" | "MONOCHROME2" | "PALETTE COLOR") | (3, "RGB" | "YBR_FULL")
+        );
+        if !known {
             return Err(unsupported(format!(
-                "photometric interpretation {photometric:?}"
+                "{samples} samples per pixel, photometric interpretation {photometric:?}"
             )));
         }
+        let planar = codec::is_native(&self.key.transfer_syntax_uid)
+            && self.int(tags::PLANAR_CONFIGURATION) == Some(1);
         let shape = Shape::new(
             get(tags::ROWS, "Rows")?,
             get(tags::COLUMNS, "Columns")?,
             get(tags::BITS_ALLOCATED, "Bits Allocated")?,
             get(tags::BITS_STORED, "Bits Stored")?,
-        );
+        )
+        .with_samples(samples as u16, planar);
         if !matches!(shape.bits_allocated, 8 | 16) {
             return Err(unsupported(format!(
                 "{} bits allocated",
@@ -110,7 +118,10 @@ impl Instance {
             for number in 1..=frames {
                 let native = self.native_frame(number, shape)?;
                 let encoded = codec::encode(target, shape, &native)?;
-                if verify && codec::decode(target, shape, &encoded)? != native {
+                // what comes back is by pixel, as the original is once interleaved
+                if verify
+                    && codec::decode(target, shape, &encoded)? != *codec::by_pixel(shape, &native)
+                {
                     return Err(TranscodeError::NotLossless(number));
                 }
                 fragments.push(pad_even(encoded));
@@ -128,6 +139,14 @@ impl Instance {
                 tags::PIXEL_DATA,
                 VR::OB,
                 PixelFragmentSequence::new(table, fragments),
+            ));
+        }
+        // colour by pixel: compressed (PS3.5 8.2.3, 8.2.4), or decoded from a compressed one
+        if shape.samples > 1 && !(codec::is_native(target) && shape.planar) {
+            object.put(DataElement::new(
+                tags::PLANAR_CONFIGURATION,
+                VR::US,
+                PrimitiveValue::from(0u16),
             ));
         }
         object.remove_element(tags::EXTENDED_OFFSET_TABLE);
