@@ -80,10 +80,6 @@ this milestone.
 
 | Item | Done when |
 |---|---|
-| Re-identification key | the Encrypted Attributes Sequence of PS3.15 E.1.1, or an encrypted table, read back in a test ([De-identification](de-identification.md)) |
-| The remaining options | Retain Safe Private, Clean Structured Content, Clean Graphics and Clean Pixel Data |
-| Quarantine review | quarantined instances are listed, viewed and released or deleted in the web interface |
-| MIDI-B | the de-identification is scored on the MIDI-B challenge's validation data |
 | Write-back | segmentations as DICOM Segmentation and measurements as Structured Reports go to the hospital's destination (clinical mode, step 7) |
 | Labels, metadata and modifications | the rest of the [REST API](rest-api.md) that research tools use |
 

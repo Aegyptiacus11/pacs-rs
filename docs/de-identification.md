@@ -43,7 +43,8 @@ projects sees their studies and nothing else.
   SCREEN SAVE (each profile may change the list). It is kept as received in `PACS_QUARANTINE`, never indexed
   or served, or without it refused (C-STORE status C003, with the reason).
 
-Not yet: a re-identification key (the Encrypted Attributes Sequence of PS3.15 E.1.1, or an encrypted
-table), Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data, a review of the
-quarantine in the web interface, and a run on the MIDI-B validation data. The plan is in
-[the hospital interfaces plan](interop.md).
+Not planned: a re-identification key (the originals stay in the hospital's archive, and the
+pseudonyms come from the project's secret), Retain Safe Private, Clean Structured Content,
+Clean Graphics and Clean Pixel Data (what they would clean is quarantined instead), a review
+of the quarantine in the web interface, and a run on the MIDI-B validation data. The plan is
+in [the hospital interfaces plan](interop.md).

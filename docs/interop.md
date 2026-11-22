@@ -87,16 +87,10 @@ Built:
   SCREEN SAVE; kept apart in `PACS_QUARANTINE`, or refused.
 - No staging on disk: the identified instance is held in memory while it is de-identified, never stored.
 
-Not yet:
-
-- The re-identification key. The standard's way is the Encrypted Attributes Sequence (E.1.1): the
-  original values inside each instance, encrypted to an honest broker's RSA key, so pacs-rs never holds a
-  key that reads them. A separate encrypted table is the alternative; neither is built.
-- Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data (OCR and review).
-- A review of the quarantine in the web interface.
-- Tested on the MIDI-B challenge's validation data (Data in Support of the MIDI-B Challenge,
-  doi:10.7937/cf2p-aw56), whose answer key scores every required action; so far tested rule by rule
-  against Table E.1-1.
+Not planned: the re-identification key (the Encrypted Attributes Sequence of E.1.1, or an encrypted
+table), since the originals stay in the hospital's archive; Retain Safe Private, Clean Structured Content,
+Clean Graphics and Clean Pixel Data, whose cases are quarantined; a review of the quarantine in the web
+interface; a run on the MIDI-B validation data.
 
 ## Rules for the SCP side (step 8)
 
