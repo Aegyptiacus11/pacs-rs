@@ -12,8 +12,9 @@
 //!   left in them), once its file is confirmed gone, and the removal is in the audit trail as
 //!   a deletion by the server.
 //!
-//! Files written in the last ten minutes are left out: an instance being stored has its file
-//! a moment before its index entry. It can run beside a running server.
+//! Files written in the last ten minutes (`--grace`, in seconds) are left out: an instance
+//! being stored has its file a moment before its index entry. It can run beside a running
+//! server; on a copy nothing writes to, such as a restored backup, `--grace 0`.
 
 use std::io::Write;
 use std::time::Duration;
@@ -23,9 +24,6 @@ use pacs_archive::{Archive, LostRepair, OrphanRepair};
 
 use crate::Settings;
 use crate::audit::Audit;
-
-/// How recent a file may be and still be left out.
-pub const GRACE: Duration = Duration::from_secs(600);
 
 /// A quarantine kept inside the store would look like orphans, and repair would index files
 /// that must never be: refuse to compare then.

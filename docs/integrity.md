@@ -37,7 +37,8 @@ pacs-server --consistency --repair   # and repair it
 
 It runs with the server's settings, and can run beside a running server: files written in
 the last ten minutes are left out, since an instance being stored has its file a moment
-before its index entry. `--repair`:
+before its index entry. `--grace <seconds>` changes that; `--grace 0` on a copy nothing
+writes to, such as a [restored backup](backup.md#restoring). `--repair`:
 
 - indexes again a file no entry names, when it reads as DICOM, as if it had just been
   received. A file that does not, or that is a copy of an instance indexed under another

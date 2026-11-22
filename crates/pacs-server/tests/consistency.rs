@@ -223,5 +223,7 @@ fn a_quarantine_inside_the_store_is_refused_and_repair_needs_the_comparison() {
     assert!(check_quarantine(&with("file:/data/quarantine")).is_ok());
     assert!(check_quarantine(&with("file:/data/files-quarantine")).is_ok());
     assert!(Settings::try_parse_from(["pacs-server", "--repair"]).is_err());
+    assert!(Settings::try_parse_from(["pacs-server", "--grace", "0"]).is_err());
+    assert!(Settings::try_parse_from(["pacs-server", "--consistency", "--grace", "0"]).is_ok());
     assert!(Settings::try_parse_from(["pacs-server", "--consistency", "--repair"]).is_ok());
 }

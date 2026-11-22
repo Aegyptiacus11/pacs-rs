@@ -123,6 +123,12 @@ pub struct Settings {
     #[arg(long, requires = "consistency")]
     pub repair: bool,
 
+    /// With --consistency: files written this many seconds ago or less are left out, an
+    /// instance being stored having its file a moment before its entry. 0 for a copy nothing
+    /// writes to, such as a restored backup.
+    #[arg(long, requires = "consistency", default_value_t = 600)]
+    pub grace: u64,
+
     /// Days a deleted resource stays in the trash, restorable, before its files go: see
     /// `pacs_server::trash`. 0: deleted at once.
     #[arg(long, env = "PACS_TRASH_DAYS", default_value_t = 30)]
