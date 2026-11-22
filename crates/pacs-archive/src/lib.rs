@@ -448,6 +448,28 @@ pub fn file_failure(file: &pacs_index::StoredFile, bytes: &[u8]) -> (String, Opt
 }
 
 impl Archive {
+    /// Whether the index and the store answer, each within `timeout`: what failed, by part.
+    pub async fn ready(
+        &self,
+        timeout: std::time::Duration,
+    ) -> (Result<(), String>, Result<(), String>) {
+        let index = async {
+            match tokio::time::timeout(timeout, self.index.ping()).await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err(format!("no answer within {} s", timeout.as_secs())),
+            }
+        };
+        let store = async {
+            match tokio::time::timeout(timeout, self.store.ping()).await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err(format!("no answer within {} s", timeout.as_secs())),
+            }
+        };
+        tokio::join!(index, store)
+    }
+
     /// Check one stored file against the index: there, of its size, with its SHA-256 (taken
     /// now for a file stored before hashes were kept). What was wrong, or `None`. Recorded
     /// in the index either way. A store that cannot be read is an error, not a bad file.
