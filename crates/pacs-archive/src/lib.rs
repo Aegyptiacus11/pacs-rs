@@ -4,6 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
+mod consistency;
 pub mod frames;
 pub mod observed;
 
@@ -390,6 +391,8 @@ fn read_permits(bytes: u64) -> usize {
         .min(Semaphore::MAX_PERMITS)
         .min(u32::MAX as usize)
 }
+
+pub use consistency::{Inconsistencies, LostRepair, OrphanRepair};
 
 /// The SHA-256 of `bytes`, lower-case hex: how the index keeps a stored file's.
 pub fn sha256_hex(bytes: &[u8]) -> String {

@@ -113,6 +113,20 @@ impl Index {
         Ok(())
     }
 
+    /// The public ID and storage key of an instance, by SOP Instance UID.
+    pub async fn instance_file(
+        &self,
+        sop_instance_uid: &str,
+    ) -> Result<Option<(String, String)>, Error> {
+        let row =
+            sqlx::query("SELECT public_id, object_key FROM instances WHERE sop_instance_uid = $1")
+                .bind(sop_instance_uid)
+                .fetch_optional(&self.pool)
+                .await?;
+        row.map(|row| Ok((row.try_get("public_id")?, row.try_get("object_key")?)))
+            .transpose()
+    }
+
     /// The files whose last check failed, by study.
     pub async fn failed_files(&self) -> Result<Vec<FailedFile>, Error> {
         let rows = sqlx::query(

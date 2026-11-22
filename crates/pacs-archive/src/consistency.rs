@@ -111,11 +111,9 @@ impl Archive {
             return Ok(OrphanRepair::Copy { indexed_at });
         }
         match self.ingest(bytes).await {
-            Ok(ingested) if ingested.outcome == Outcome::AlreadyStored => {
-                Ok(OrphanRepair::Copy {
-                    indexed_at: String::new(),
-                })
-            }
+            Ok(ingested) if ingested.outcome == Outcome::AlreadyStored => Ok(OrphanRepair::Copy {
+                indexed_at: String::new(),
+            }),
             Ok(_) => {
                 // stored again under its own key; a file that was elsewhere stays as a copy
                 let at = self
@@ -135,7 +133,8 @@ impl Archive {
     /// Remove a lost entry from the index, once its file is confirmed gone and the entry
     /// still names it.
     pub async fn repair_lost(&self, lost: &StoredFile) -> Result<LostRepair, CheckError> {
-        let Some((public_id, object_key)) = self.index.instance_file(&lost.sop_instance_uid).await?
+        let Some((public_id, object_key)) =
+            self.index.instance_file(&lost.sop_instance_uid).await?
         else {
             return Ok(LostRepair::NoLongerLost);
         };
