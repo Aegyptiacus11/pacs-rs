@@ -77,13 +77,6 @@ async fn store_parts(
     body: Bytes,
     study: Option<String>,
 ) -> Result<Response, ApiError> {
-    // nothing is stored for an account limited to projects: it would be in no project
-    if state.archive.index().account().is_some() {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            pacs_archive::IngestError::Limited.to_string(),
-        ));
-    }
     let content_type = headers
         .get(CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
