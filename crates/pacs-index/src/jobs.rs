@@ -17,6 +17,8 @@ pub struct StoredJob {
     pub kind: String,
     pub remote: String,
     pub destination: String,
+    /// The Patient ID the studies are named under, for a remote AE in Patient Root.
+    pub patient_id: Option<String>,
     pub studies: Vec<String>,
     /// `Running`, `Success`, `Warning`, `Cancelled` or `Failure`.
     pub state: String,
@@ -42,6 +44,7 @@ fn job(row: &AnyRow) -> Result<StoredJob, Error> {
         kind: row.try_get("kind")?,
         remote: row.try_get("remote")?,
         destination: row.try_get("destination")?,
+        patient_id: row.try_get("patient_id")?,
         studies: list("studies")?,
         state: row.try_get("state")?,
         progress: json("progress")?,
@@ -54,7 +57,7 @@ fn job(row: &AnyRow) -> Result<StoredJob, Error> {
     })
 }
 
-const COLUMNS: &str = "id, kind, remote, destination, studies, state, progress, \
+const COLUMNS: &str = "id, kind, remote, destination, patient_id, studies, state, progress, \
                        failed_instances, error, cancel_asked, restarts, started_ms, finished_ms";
 
 fn select(rest: &'static str) -> sqlx::AssertSqlSafe<String> {
@@ -68,18 +71,20 @@ impl Index {
         kind: &str,
         remote: &str,
         destination: &str,
+        patient_id: Option<&str>,
         studies: &[String],
     ) -> Result<i64, Error> {
         let mut tx = self.begin_write().await?;
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO jobs (kind, remote, destination, studies, state, progress,
+            "INSERT INTO jobs (kind, remote, destination, patient_id, studies, state, progress,
                                failed_instances, error, cancel_asked, restarts, started_ms,
                                heartbeat_ms)
-             VALUES ($1, $2, $3, $4, 'Running', '{}', '[]', NULL, 0, 0, $5, $5) RETURNING id",
+             VALUES ($1, $2, $3, $4, $5, 'Running', '{}', '[]', NULL, 0, 0, $6, $6) RETURNING id",
         )
         .bind(kind)
         .bind(remote)
         .bind(destination)
+        .bind(patient_id)
         .bind(Value::from(studies).to_string())
         .bind(now_ms())
         .fetch_one(&mut *tx)
