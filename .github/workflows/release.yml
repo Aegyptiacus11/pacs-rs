@@ -115,9 +115,15 @@ jobs:
           bin="$RUNNER_TEMP/rootfs/pacs-server"
           [ -x "$bin" ] || { echo "::error::no pacs-server in the image"; exit 1; }
           file "$bin" | grep -qE "(statically|static-pie) linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
+          # the command-line tools, from the same build (cached), beside the server
+          docker buildx build --platform "${{ matrix.platform }}" --provenance=false --sbom=false \
+            --target tools --output "type=local,dest=$RUNNER_TEMP/tools" .
+          for tool in echoscu storescu storescp findscu movescu getscu; do
+            [ -x "$RUNNER_TEMP/tools/$tool" ] || { echo "::error::no $tool built"; exit 1; }
+          done
           name="pacs-rs-$VERSION-linux-${{ matrix.arch }}"
           mkdir -p "$RUNNER_TEMP/$name" dist
-          cp "$bin" LICENSE-MIT LICENSE-APACHE README.md "$RUNNER_TEMP/$name/"
+          cp "$bin" "$RUNNER_TEMP"/tools/* LICENSE-MIT LICENSE-APACHE README.md "$RUNNER_TEMP/$name/"
           tar -C "$RUNNER_TEMP" -czf "dist/$name.tar.gz" "$name"
 
       - name: Smoke test
@@ -159,16 +165,22 @@ jobs:
         run: npm ci --no-audit --no-fund && npm run build
       - name: Toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
-      - run: cargo build --release --locked -p pacs-server
+      - run: cargo build --release --locked -p pacs-server -p pacs-dimse --features pacs-dimse/tools
       - name: Smoke test
         run: |
           target/release/pacs-server.exe --version
           target/release/pacs-server.exe --help >/dev/null
+          for tool in echoscu storescu storescp findscu movescu getscu; do
+            "target/release/$tool.exe" --version
+          done
       - name: Package
         run: |
           name="pacs-rs-$VERSION-windows-amd64"
           mkdir -p "$name" dist
           cp target/release/pacs-server.exe LICENSE-MIT LICENSE-APACHE README.md "$name/"
+          for tool in echoscu storescu storescp findscu movescu getscu; do
+            cp "target/release/$tool.exe" "$name/"
+          done
           7z a -tzip -bso0 "dist/$name.zip" "$name"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -15,8 +15,14 @@ RUN apk add --no-cache musl-dev gcc
 WORKDIR /src
 COPY . .
 COPY --from=ui /ui/dist ui/dist
-RUN cargo build --release --locked -p pacs-server \
+RUN cargo build --release --locked -p pacs-server -p pacs-dimse --features pacs-dimse/tools \
     && mkdir -p /out/data
+
+# The DIMSE command-line tools, for the release archives: `--target tools`. Not in the image.
+FROM scratch AS tools
+COPY --from=build /src/target/release/echoscu /src/target/release/storescu \
+     /src/target/release/storescp /src/target/release/findscu \
+     /src/target/release/movescu /src/target/release/getscu /
 
 FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
