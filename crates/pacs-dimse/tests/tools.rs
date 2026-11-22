@@ -184,12 +184,20 @@ fn what_fails_exits_with_failure() {
         ),
         ("getscu", vec![nobody.as_str(), "not-a-uid"]),
     ] {
+        // run in a folder of its own: nothing it may leave lands in the checkout
+        let dir = tempfile::tempdir().unwrap();
         let run = tool(name)
+            .current_dir(dir.path())
             .args(&args)
             .arg("--timeout")
             .arg("2")
             .output()
             .unwrap();
         assert!(!run.status.success(), "{name} {args:?}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "{name} {args:?} left files"
+        );
     }
 }

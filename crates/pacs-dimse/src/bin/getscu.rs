@@ -37,6 +37,10 @@ async fn main() -> ExitCode {
     let args = Args::parse();
     let result = async {
         let remote = remote(&args.remote)?;
+        // what is asked is checked before anything is made in the output folder
+        if let Some(bad) = args.studies.iter().find(|u| !pacs_core::is_valid_uid(u)) {
+            return Err(format!("{bad:?} is not a Study Instance UID"));
+        }
         let destination = Destination::Archive(archive_in(&args.output).await?);
         let outcome = pacs_dimse::get_studies(
             &remote,
