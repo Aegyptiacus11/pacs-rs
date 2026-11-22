@@ -109,6 +109,12 @@ pub struct Settings {
     #[arg(long)]
     pub healthcheck: bool,
 
+    /// A TOML file of settings, by name without PACS_ and in lower case (`listen =
+    /// "0.0.0.0:8080"`, `trash_days = 30`): see `load_settings`. The command line and the
+    /// PACS_* variables take precedence over it; secrets are never read from it.
+    #[arg(long, env = "PACS_CONFIG")]
+    pub config: Option<std::path::PathBuf>,
+
     /// Check every stored file against the index (its size and SHA-256), say what failed,
     /// exit 1 if anything did and 0 if not, and do nothing else: see `pacs_server::checks`.
     #[arg(long)]
@@ -434,6 +440,162 @@ pub fn secret(name: &str, env: impl Fn(&str) -> Option<String>) -> anyhow::Resul
         }
         None => Ok(None),
     }
+}
+
+/// Settings that are secrets: the environment only (or a `_FILE` beside it), never a file of
+/// settings that may be read by more people, or kept in a repository.
+const SECRET_SETTINGS: [&str; 6] = [
+    "index_password",
+    "s3_access_key_id",
+    "s3_secret_access_key",
+    "auth_secret",
+    "admin_password",
+    "oidc_client_secret",
+];
+
+/// How many letters to add, remove or change to make `a` into `b`: what a typo is.
+fn edits(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut previous = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let replaced = previous + usize::from(ca != *cb);
+            previous = row[j + 1];
+            row[j + 1] = replaced.min(row[j] + 1).min(row[j + 1] + 1);
+        }
+    }
+    row[b.len()]
+}
+
+/// The settings from the command line, the `PACS_*` variables and the file of `PACS_CONFIG`
+/// (or `--config`), in that order of precedence, then the defaults.
+///
+/// The file is checked whole before anything starts: a key that names no setting, a value a
+/// setting does not take, a secret, or a file that is not TOML stops the start, with every
+/// problem in the one error.
+pub fn load_settings<I, T>(args: I) -> anyhow::Result<Settings>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    use clap::{CommandFactory, FromArgMatches, parser::ValueSource};
+    let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+    let command = Settings::command();
+    let matches = command.clone().try_get_matches_from(&args)?;
+    let Some(path) = matches.get_one::<std::path::PathBuf>("config").cloned() else {
+        return Ok(Settings::from_arg_matches(&matches)?);
+    };
+    let at = path.display();
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("PACS_CONFIG: reading {at}"))?;
+    let table: toml::Table = text
+        .parse()
+        .map_err(|e| anyhow::anyhow!("PACS_CONFIG: {at} is not TOML: {e}"))?;
+    // each setting with a variable, by its name in the file
+    let settings: std::collections::BTreeMap<String, &clap::Arg> = command
+        .get_arguments()
+        .filter_map(|arg| {
+            let env = arg.get_env()?.to_str()?;
+            Some((env.strip_prefix("PACS_")?.to_lowercase(), arg))
+        })
+        .collect();
+    let mut problems = Vec::new();
+    let mut from_file = Vec::new();
+    for (key, value) in &table {
+        if SECRET_SETTINGS.contains(&key.as_str()) || key.starts_with("project_secret_") {
+            problems.push(format!(
+                "{key}: a secret, read from the environment only (PACS_{0} or PACS_{0}_FILE)",
+                key.to_uppercase()
+            ));
+            continue;
+        }
+        if key == "config" {
+            problems.push("config: a file of settings cannot name another".into());
+            continue;
+        }
+        let Some(arg) = settings.get(key) else {
+            let close: Vec<&str> = settings
+                .keys()
+                .filter(|known| edits(known, key) <= 2)
+                .map(String::as_str)
+                .take(3)
+                .collect();
+            problems.push(if close.is_empty() {
+                format!("{key}: not a setting")
+            } else {
+                format!("{key}: not a setting (perhaps {})", close.join(", "))
+            });
+            continue;
+        };
+        let text = match value {
+            toml::Value::String(s) => s.clone(),
+            toml::Value::Integer(i) => i.to_string(),
+            toml::Value::Boolean(b) => b.to_string(),
+            toml::Value::Float(f) => f.to_string(),
+            toml::Value::Array(items) => {
+                let parts: Option<Vec<String>> = items
+                    .iter()
+                    .map(|item| match item {
+                        toml::Value::String(s) => Some(s.clone()),
+                        toml::Value::Integer(i) => Some(i.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                match parts {
+                    Some(parts) if arg.get_value_delimiter().is_some() => parts.join(","),
+                    Some(_) => {
+                        problems.push(format!("{key}: one value, not a list"));
+                        continue;
+                    }
+                    None => {
+                        problems.push(format!("{key}: a list of strings or numbers"));
+                        continue;
+                    }
+                }
+            }
+            other => {
+                problems.push(format!(
+                    "{key}: a string, a number, true or false, not {}",
+                    other.type_str()
+                ));
+                continue;
+            }
+        };
+        // the value as the command line would take it, alone, so that a wrong one is said now
+        let long = arg.get_long().context("a setting without its long name")?;
+        let alone = [
+            std::ffi::OsString::from("pacs-server"),
+            std::ffi::OsString::from(format!("--{long}={text}")),
+        ];
+        if let Err(e) = Settings::command().try_get_matches_from(alone) {
+            let said = e.to_string();
+            let first = said
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim_start_matches("error: ");
+            problems.push(format!("{key}: {first}"));
+            continue;
+        }
+        // the command line and the variables come first
+        let id = arg.get_id().as_str();
+        if matches!(
+            matches.value_source(id),
+            Some(ValueSource::CommandLine | ValueSource::EnvVariable)
+        ) {
+            continue;
+        }
+        from_file.push(std::ffi::OsString::from(format!("--{long}={text}")));
+    }
+    if !problems.is_empty() {
+        bail!("PACS_CONFIG: {at}:\n  {}", problems.join("\n  "));
+    }
+    let mut all = args;
+    all.extend(from_file);
+    let matches = Settings::command().try_get_matches_from(all)?;
+    Ok(Settings::from_arg_matches(&matches)?)
 }
 
 pub fn process_env(name: &str) -> Option<String> {

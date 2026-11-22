@@ -14,6 +14,31 @@ which is how Docker and Kubernetes hand secrets over.
 A start whose settings do not add up stops with the reason, rather than running with less
 than was asked.
 
+## In a file
+
+`PACS_CONFIG` (or `--config`) names a TOML file of settings, each by its name without
+`PACS_` and in lower case:
+
+```toml
+listen = "0.0.0.0:8080"
+index = "postgres://pacs@db.internal/pacs"
+storage = "s3://pacs-archive"
+s3_endpoint = "https://s3.example.org"
+auth = true
+trash_days = 30
+cors_origins = ["https://viewer.example.org"]
+```
+
+The command line comes first, then the variables, then the file, then the defaults: a
+variable set by a container still wins over the file it mounts. The file is checked whole
+before anything starts, and every problem is said at once: a key that names no setting (with
+the closest ones), a value the setting does not take, a list for a setting of one value, and
+a secret, which stays in the environment or its `_FILE`.
+
+| Variable | Default | |
+|---|---|---|
+| `PACS_CONFIG` | none | a TOML file of settings, as above |
+
 ## Addresses
 
 Where the server listens and how it names itself.
