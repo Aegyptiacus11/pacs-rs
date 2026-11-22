@@ -31,7 +31,7 @@ pub use scu::echo::{EchoError, echo};
 pub use scu::find::{FindError, FindOutcome, find_studies};
 pub use scu::get::get_studies;
 pub use scu::retrieve::{MoveError, MoveOutcome, Progress, move_studies};
-pub use scu::store::{Accepted, Originator, SendError, Sender};
+pub use scu::store::{Accepted, Originator, SendError, Sender, send_instances};
 pub use status::{Status, StatusClass};
 
 /// Implicit VR Little Endian, the default transfer syntax every AE accepts (PS3.5 10.1).

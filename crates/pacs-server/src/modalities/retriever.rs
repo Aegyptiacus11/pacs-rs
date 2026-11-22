@@ -144,4 +144,35 @@ impl Retriever {
             (got, _) => (got, Method::Get),
         }
     }
+
+    /// Send every instance of `studies`, as `index` sees them, to `remote` by C-STORE.
+    pub async fn send<F>(
+        &self,
+        remote: &RemoteAe,
+        index: &pacs_index::Index,
+        studies: &[String],
+        on_progress: F,
+    ) -> Result<MoveOutcome, MoveError>
+    where
+        F: FnMut(Progress) -> ControlFlow<()>,
+    {
+        let instances = match super::send::instances_of(index, studies).await {
+            Ok(Ok(instances)) => instances,
+            Ok(Err(missing)) => {
+                return Err(MoveError::Request(format!(
+                    "{missing} is not in the archive"
+                )));
+            }
+            Err(e) => return Err(MoveError::Request(format!("the index: {e}"))),
+        };
+        pacs_dimse::send_instances(
+            remote,
+            &self.config.ae_title,
+            &self.archive,
+            &instances,
+            self.config.timeout,
+            on_progress,
+        )
+        .await
+    }
 }

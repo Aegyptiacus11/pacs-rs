@@ -2440,6 +2440,7 @@ mod tests {
             (Method::GET, "/modalities", Remote),
             (Method::GET, "/modalities/hospital/studies", Remote),
             (Method::POST, "/modalities/hospital/move", Remote),
+            (Method::POST, "/modalities/hospital/store", Remote),
             (Method::GET, "/jobs/1", Remote),
             (Method::GET, "/roles", SignedIn),
             (Method::POST, "/roles", Admin),

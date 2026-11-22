@@ -68,7 +68,7 @@ to a C-GET. What remains:
 
 | Item | Done when |
 |---|---|
-| Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a retrieval makes it send) |
+| Sending by a rule | pacs-rs sends what arrives to another AE by a rule of its settings (from the REST API it does: [`POST /modalities/{id}/store`](dimse.md)) |
 | Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |
 | A service per SOP class | the SCP finds its handler for each SOP class in a registry, so a new service is added without touching the association loop |
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |

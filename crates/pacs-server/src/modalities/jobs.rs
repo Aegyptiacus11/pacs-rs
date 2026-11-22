@@ -134,16 +134,30 @@ async fn finish(index: &Index, id: i64, result: Result<MoveOutcome, MoveError>) 
     }
 }
 
-/// Run job `id`'s move to its end. Beside it, four times a second, its counts go to the index and
-/// a cancel asked there comes back: the move's own callback cannot wait on the index.
+/// What a job does with its studies.
+enum Work {
+    /// Bring them in for `destination`, pacs-rs's AE title or a project's: a C-MOVE or a
+    /// C-GET.
+    Retrieve {
+        patient_id: Option<String>,
+        destination: AeTitle,
+    },
+    /// Send them to the remote AE: C-STOREs.
+    Send,
+}
+
+/// The kind a job of sending is kept under.
+const SEND: &str = "C-STORE";
+
+/// Run job `id` to its end. Beside it, four times a second, its counts go to the index and
+/// a cancel asked there comes back: the operation's own callback cannot wait on the index.
 async fn run(
     index: Index,
     retriever: Arc<Retriever>,
     id: i64,
     remote_id: String,
-    patient_id: Option<String>,
     studies: Vec<String>,
-    destination: AeTitle,
+    work: Work,
 ) {
     let Some(remote) = retriever.config.remote(&remote_id) else {
         let error = format!("the remote AE {remote_id} is not configured");
@@ -181,33 +195,46 @@ async fn run(
             }
         })
     };
-    let (result, method) = retriever
-        .retrieve(
-            remote,
-            patient_id.as_deref(),
-            &studies,
-            &destination,
-            |progress| {
-                if let Ok(mut latest) = latest.lock() {
-                    *latest = Some(progress);
-                }
-                if cancel.load(Ordering::Relaxed) {
-                    ControlFlow::Break(())
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-        )
-        .await;
+    let on_progress = |progress| {
+        if let Ok(mut latest) = latest.lock() {
+            *latest = Some(progress);
+        }
+        if cancel.load(Ordering::Relaxed) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let (result, method) = match &work {
+        Work::Retrieve {
+            patient_id,
+            destination,
+        } => {
+            let (result, method) = retriever
+                .retrieve(
+                    remote,
+                    patient_id.as_deref(),
+                    &studies,
+                    destination,
+                    on_progress,
+                )
+                .await;
+            (result, method.name())
+        }
+        Work::Send => (
+            retriever.send(remote, &index, &studies, on_progress).await,
+            SEND,
+        ),
+    };
     done.store(true, Ordering::Relaxed);
     ticker.abort();
-    if method == Method::Get
-        && let Err(e) = index.job_kind(id, method.name()).await
+    if method == Method::Get.name()
+        && let Err(e) = index.job_kind(id, method).await
     {
         tracing::error!(job = id, error = %e, "a job's operation was not written to the index");
     }
     if let Err(e) = &result {
-        tracing::info!(remote = %remote_id, job = id, error = %e, operation = method.name(), "a retrieval failed");
+        tracing::info!(remote = %remote_id, job = id, error = %e, operation = method, "a job failed");
     }
     finish(&index, id, result).await;
 }
@@ -247,9 +274,51 @@ pub(super) async fn spawn_move(
         remotes.retriever.clone(),
         id,
         remote_id,
-        patient_id,
         studies,
-        destination,
+        Work::Retrieve {
+            patient_id,
+            destination,
+        },
+    ));
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"ID": id.to_string(), "Path": format!("/jobs/{id}")})),
+    )
+        .into_response()
+}
+
+/// Send studies as a job; answers at once with its id and path.
+pub(super) async fn spawn_send(
+    remotes: Arc<Remotes>,
+    remote_id: String,
+    studies: Vec<String>,
+) -> Response {
+    let Some(remote) = remotes.config.remote(&remote_id) else {
+        return RestError::NotFound.into_response();
+    };
+    let id = match remotes
+        .index
+        .create_job(SEND, &remote_id, remote.ae_title.as_str(), None, &studies)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, "a job could not be written to the index");
+            return RestError::Status {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "the job could not be kept".into(),
+                details: None,
+            }
+            .into_response();
+        }
+    };
+    tokio::spawn(run(
+        remotes.index.clone(),
+        remotes.retriever.clone(),
+        id,
+        remote_id,
+        studies,
+        Work::Send,
     ));
     (
         StatusCode::ACCEPTED,
@@ -323,14 +392,21 @@ pub async fn take_up_stale(
             }
             (None, Ok(destination)) => {
                 tracing::info!(job = job.id, remote = %job.remote, restarts, "a job left running is taken up again");
+                let work = if job.kind == SEND {
+                    Work::Send
+                } else {
+                    Work::Retrieve {
+                        patient_id: job.patient_id.clone(),
+                        destination,
+                    }
+                };
                 tokio::spawn(run(
                     index.clone(),
                     retriever.clone(),
                     job.id,
                     job.remote.clone(),
-                    job.patient_id.clone(),
                     job.studies.clone(),
-                    destination,
+                    work,
                 ));
                 resumed += 1;
             }

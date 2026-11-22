@@ -56,6 +56,16 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   failed sub-operation. 502 when the remote AE fails by both, saying when it does not know
   pacs-rs as a destination (A801: register pacs-rs's AE title, host and port there, or let it
   answer C-GET).
+- **C-STORE SCU** on pacs-rs's own initiative, through `POST /modalities/{id}/store` with
+  `{"StudyInstanceUID": …}`: every instance of the studies sent on one association, each in
+  the transfer syntax it is stored in when the remote AE takes it, decoded otherwise. Only to
+  the remote AEs of `PACS_DIMSE_MOVE_DESTINATIONS` (409 for another: an archive pacs-rs only
+  reads from is not written to because someone asked), and only studies the account sees (404
+  for one outside its projects, as for one not there). The answer has the counts and `Method`
+  `C-STORE`; 502 when the remote AE cannot be reached or stores none. With `"Asynchronous":
+  true` it is a job of `Type` `C-STORE`, cancelled before the next instance and taken up again
+  after a restart like a move. The audit trail has a Begin Transferring line a patient, from
+  pacs-rs to the remote AE, for whoever asked.
 - **C-FIND SCP**, Patient Root and Study Root, at every level of each: [Being
   searched](#being-searched) below.
 - **C-MOVE SCP** and **C-GET SCP**, on both models and at the same levels, with the
