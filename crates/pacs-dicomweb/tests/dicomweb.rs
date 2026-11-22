@@ -1444,3 +1444,68 @@ async fn colour_is_rendered_as_rgb() {
         }
     }
 }
+
+/// More than 16 bits: the real RT Dose stored with its frames deflated; frames and files
+/// given native unless the client names Deflated Image Frame Compression; rendered as any
+/// monochrome image.
+#[tokio::test]
+async fn a_32_bit_dose_is_stored_deflated_and_given_native() {
+    const DEFLATED: &str = "1.2.840.10008.1.2.8.1";
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let app = router(archive.clone(), Config::default());
+    let file = pacs_core::real::file_bytes("rtdose.dcm");
+    let original = pacs_core::Instance::from_bytes(&file).unwrap();
+    assert_eq!(
+        stow(&app, "/studies", vec![file]).await.status,
+        StatusCode::OK
+    );
+    let key = &original.key;
+    let entry = archive
+        .index()
+        .instance(
+            &key.study_instance_uid,
+            &key.series_instance_uid,
+            &key.sop_instance_uid,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.transfer_syntax_uid, DEFLATED);
+    let shape = original.shape().unwrap();
+    let at = format!(
+        "/studies/{}/series/{}/instances/{}",
+        key.study_instance_uid, key.series_instance_uid, key.sop_instance_uid
+    );
+    let native = original.native_frame(3, shape).unwrap();
+    for accept in [
+        "multipart/related; type=\"application/octet-stream\"",
+        "multipart/related; type=\"application/octet-stream\"; transfer-syntax=*",
+        "*/*",
+    ] {
+        let reply = get(&app, &format!("{at}/frames/3"), accept).await;
+        assert_eq!(reply.status, StatusCode::OK, "{accept}");
+        assert_eq!(reply.parts()[0].content.to_vec(), native, "{accept}");
+    }
+    let named =
+        format!("multipart/related; type=\"application/octet-stream\"; transfer-syntax={DEFLATED}");
+    let reply = get(&app, &format!("{at}/frames/3"), &named).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_ne!(reply.parts()[0].content.to_vec(), native);
+    assert_eq!(
+        pacs_core::codec::decode(DEFLATED, shape, &reply.parts()[0].content).unwrap(),
+        native
+    );
+    // the file, native unless asked for as stored
+    let file = get(&app, &at, "multipart/related; type=\"application/dicom\"").await;
+    let back = pacs_core::Instance::from_bytes(&file.parts()[0].content).unwrap();
+    assert_eq!(
+        back.key.transfer_syntax_uid,
+        pacs_core::codec::EXPLICIT_VR_LE
+    );
+    assert_eq!(back.native_frame(3, shape).unwrap(), native);
+    // rendered
+    let png = get(&app, &format!("{at}/frames/3/rendered"), "image/png").await;
+    assert_eq!(png.status, StatusCode::OK);
+    let (w, h, samples, _) = decoded_png(&png.body);
+    assert_eq!((w, h, samples), (10, 10, 1));
+}
