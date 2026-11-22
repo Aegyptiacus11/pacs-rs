@@ -57,7 +57,7 @@ So that workstations, viewers and other archives can use pacs-rs as they use any
 Built: [C-FIND as SCP](dimse.md#being-searched) on the Patient Root and Study Root models
 of PS3.4 C.6, which DCMTK's `findscu` and pynetdicom search at every level, with sequence matching (PS3.4
 C.2.2.2.6) added to the [one matcher](dicomweb.md#searching) it shares with QIDO-RS and
-`/tools/find`. [C-MOVE and C-GET as SCP](dimse.md#being-retrieved-from), which `movescu`,
+`/tools/find`; QIDO-RS names a key of a sequence's item as `Sequence.Attribute`. [C-MOVE and C-GET as SCP](dimse.md#being-retrieved-from), which `movescu`,
 `getscu` and pynetdicom retrieve with: a C-MOVE sends to the AEs listed as destinations
 (`PACS_DIMSE_MOVE_DESTINATIONS`) and a move to any other is refused with status A801; a
 C-GET sends on the association that asks, by SCP/SCU role selection. Both are on the two
@@ -67,7 +67,6 @@ remains:
 
 | Item | Done when |
 |---|---|
-| Sequence matching over HTTP | QIDO-RS takes a key inside a sequence (`RequestAttributesSequence.ScheduledProcedureStepID`), which the matcher already answers |
 | Patient Root as SCU | pacs-rs searches and pulls from an archive on the Patient Root model too (as SCP it answers both models) |
 | C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |
 | Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a retrieval makes it send) |
