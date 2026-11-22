@@ -65,12 +65,12 @@ models, and send with a C-STORE SCU that decodes for a peer that does not take t
 transfer syntax. As SCU, [C-FIND, C-MOVE and C-GET](dimse.md) on both models: an archive of
 Patient Root only is searched patients first, and a C-MOVE the archive refuses gives way
 to a C-GET. Studies are [sent](dimse.md) to other AEs from the REST API, and
-[forwarded by rule](dimse.md#forwarding-by-rule) as they arrive. What remains:
+[forwarded by rule](dimse.md#forwarding-by-rule) as they arrive. The SCP dispatches by a
+registry of services, and each AE title can offer its own services and transfer syntaxes
+on one port. What remains:
 
 | Item | Done when |
 |---|---|
-| Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |
-| A service per SOP class | the SCP finds its handler for each SOP class in a registry, so a new service is added without touching the association loop |
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |
 | Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
 | DICOMweb to the end | `includefield`, rendered media, STOW-RS with JSON or XML and bulk data, BulkDataURI in metadata |

@@ -139,6 +139,7 @@ The DICOM network protocol: see [DIMSE](dimse.md), and [DIMSE over TLS](dimse.md
 | `PACS_DIMSE_MOVE_DESTINATIONS` | none | the remote AEs studies may be sent to, by their `id`, comma-separated: the destinations a C-MOVE asked of pacs-rs may name, and those [sending](dimse.md) and forwarding send to. An archive pacs-rs only reads from is left out |
 | `PACS_FORWARD` | none | rules that [forward](dimse.md#forwarding-by-rule) what arrives, comma-separated, each `destination[:Key=value\|value;Key=value]`, the destination one of `PACS_DIMSE_MOVE_DESTINATIONS` |
 | `PACS_FORWARD_AFTER` | `30` | seconds a study stays quiet, no instance of it stored, before the rules forward it |
+| `PACS_DIMSE_CAPABILITIES` | none | what some of pacs-rs's AE titles offer, comma-separated, each `AE_TITLE=service+service[/syntax\|syntax]`: the services among `verification`, `storage`, `find`, `move` and `get`, the transfer syntaxes by UID or `uncompressed`; an AE title not listed offers everything ([AE titles](dimse.md)) |
 | `PACS_DIMSE_KNOWN_CALLERS_ONLY` | `false` | accept associations only from the remotes' AE titles |
 | `PACS_DIMSE_MAX_ASSOCIATIONS` | `16` | associations served at once |
 | `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |
