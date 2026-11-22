@@ -626,7 +626,13 @@ async fn same_rest_answers_as_the_reference_server() {
             reference.get(&path, "*/*").await,
             pacs.get(&path, "*/*").await,
         );
-        if report.status(&path, &r, &p) && r.body != p.body {
+        // a list is compared as JSON (the reference indents it), an empty body as bytes
+        let same = if r.body.is_empty() {
+            r.body == p.body
+        } else {
+            reference.json(&r) == pacs.json(&p)
+        };
+        if report.status(&path, &r, &p) && !same {
             report.push(format!(
                 "{path}: reference {:?} | pacs-rs {:?}",
                 String::from_utf8_lossy(&r.body),
