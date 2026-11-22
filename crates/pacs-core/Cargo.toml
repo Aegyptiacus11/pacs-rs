@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# CharLS (JPEG-LS), C++ built by cmake and linked statically.
-charls = { version = "0.4.2", features = ["static"] }
+# JPEG-LS in safe Rust, no dependencies: it writes the bytes CharLS writes (its tests check)
+codecsls = "0.1.0"
 dicom-core = "0.10.0"
 dicom-dictionary-std = "0.10.0"
 dicom-json = "0.10.0"

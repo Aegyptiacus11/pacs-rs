@@ -10,8 +10,8 @@ COPY ui/ ./
 RUN npm run build
 
 FROM rust:1.99.1-alpine3.24 AS build
-# g++ and cmake build CharLS (JPEG-LS), which is linked in statically.
-RUN apk add --no-cache musl-dev g++ cmake make
+# gcc for the C some crates build (mimalloc, SQLite, ring), linked in statically.
+RUN apk add --no-cache musl-dev gcc
 WORKDIR /src
 COPY . .
 COPY --from=ui /ui/dist ui/dist

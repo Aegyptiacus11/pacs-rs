@@ -1,7 +1,7 @@
 # Building and testing
 
-The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up. CharLS is C++, built by
-the `charls` crate and linked statically, so building also needs `cmake` and a C++ compiler.
+The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up. A few crates build C
+(mimalloc, SQLite, ring), so building also needs a C compiler; nothing needs `cmake` or C++.
 
 ```bash
 cargo test --workspace
@@ -21,12 +21,10 @@ For work on the interface, `npm run dev` in `ui/` serves it with hot reload and 
 requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`);
 `npm run check` type-checks it. Components from shadcn/ui live in `ui/src/components/ui`.
 
-On Windows, a static build (no Visual C++ runtime needed) also tells CMake which C runtime
-CharLS uses; this is what CI and the release do:
+On Windows, a static build (no Visual C++ runtime needed) is what CI and the release do:
 
 ```powershell
 $env:RUSTFLAGS = "-C target-feature=+crt-static"
-$env:CMAKE_TOOLCHAIN_FILE = "$PWD\cmake\msvc-static-crt.cmake"
 cargo build --release -p pacs-server
 ```
 
