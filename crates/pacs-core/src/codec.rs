@@ -30,6 +30,10 @@ pub const JPEG_LS_LOSSLESS: &str = "1.2.840.10008.1.2.4.80";
 pub const JPEG_LS_NEAR_LOSSLESS: &str = "1.2.840.10008.1.2.4.81";
 pub const JPEG_XL_LOSSLESS: &str = "1.2.840.10008.1.2.4.110";
 pub const JPEG_XL: &str = "1.2.840.10008.1.2.4.112";
+/// Deflated Image Frame Compression (PS3.5 10.20): each frame deflated (RFC 1951) in a
+/// fragment of its own, lossless whatever the pixels are; what is stored of more than 16
+/// bits, which JPEG-LS does not code.
+pub const DEFLATED_FRAMES: &str = "1.2.840.10008.1.2.8.1";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CodecError {
@@ -91,7 +95,7 @@ impl Shape {
                 self.samples
             )));
         }
-        if !matches!(self.bits_allocated, 8 | 16) {
+        if !matches!(self.bits_allocated, 8 | 16 | 32) {
             return Err(CodecError::Unsupported(format!(
                 "{} bits allocated",
                 self.bits_allocated
@@ -120,12 +124,16 @@ pub fn can_decode(ts: &str) -> bool {
             | JPEG_LS_NEAR_LOSSLESS
             | JPEG_XL_LOSSLESS
             | JPEG_XL
+            | DEFLATED_FRAMES
     )
 }
 
 /// Whether frames can be encoded in transfer syntax `ts` here.
 pub fn can_encode(ts: &str) -> bool {
-    matches!(ts, EXPLICIT_VR_LE | JPEG_LS_LOSSLESS | JPEG_XL_LOSSLESS)
+    matches!(
+        ts,
+        EXPLICIT_VR_LE | JPEG_LS_LOSSLESS | JPEG_XL_LOSSLESS | DEFLATED_FRAMES
+    )
 }
 
 /// Whether `ts` keeps pixel data as plain bytes rather than in fragments.
@@ -140,6 +148,7 @@ pub fn decode(ts: &str, shape: Shape, bytes: &[u8]) -> Result<Vec<u8>, CodecErro
         EXPLICIT_VR_LE | IMPLICIT_VR_LE => bytes.to_vec(),
         JPEG_LS_LOSSLESS | JPEG_LS_NEAR_LOSSLESS => decode_jpeg_ls(bytes)?,
         JPEG_XL_LOSSLESS | JPEG_XL => decode_jpeg_xl(shape, bytes)?,
+        DEFLATED_FRAMES => inflate(bytes)?,
         other => {
             return Err(CodecError::Unsupported(format!(
                 "no decoder for transfer syntax {other}"
@@ -173,6 +182,7 @@ pub fn encode(ts: &str, shape: Shape, native: &[u8]) -> Result<Vec<u8>, CodecErr
         EXPLICIT_VR_LE => Ok(native.to_vec()),
         JPEG_LS_LOSSLESS => encode_jpeg_ls(shape, native),
         JPEG_XL_LOSSLESS => encode_jpeg_xl(shape, native),
+        DEFLATED_FRAMES => deflate(native),
         other => Err(CodecError::Unsupported(format!(
             "no encoder for transfer syntax {other}"
         ))),
@@ -206,7 +216,33 @@ fn coded_bits(shape: Shape, native: &[u8]) -> u16 {
     }
 }
 
+/// A frame deflated as PS3.5 10.20 says: RFC 1951, no zlib or gzip wrapping.
+fn deflate(native: &[u8]) -> Result<Vec<u8>, CodecError> {
+    use std::io::Write;
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(native)
+        .and_then(|()| encoder.finish())
+        .map_err(|e| CodecError::Unsupported(format!("deflating a frame: {e}")))
+}
+
+fn inflate(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
+    use std::io::Read;
+    let mut native = Vec::new();
+    flate2::read::DeflateDecoder::new(bytes)
+        .read_to_end(&mut native)
+        .map_err(|e| CodecError::Unsupported(format!("inflating a frame: {e}")))?;
+    Ok(native)
+}
+
 fn encode_jpeg_ls(shape: Shape, native: &[u8]) -> Result<Vec<u8>, CodecError> {
+    if shape.bits_allocated > 16 {
+        return Err(CodecError::Unsupported(format!(
+            "{} bits allocated: JPEG-LS codes 16 at most",
+            shape.bits_allocated
+        )));
+    }
     let bits = u8::try_from(coded_bits(shape, native))
         .map_err(|_| CodecError::JpegLs("more than 16 bits per sample".into()))?;
     let frame = codecsls::jpegls::FrameInfo {
@@ -248,9 +284,9 @@ fn decode_jpeg_ls(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
 }
 
 fn encode_jpeg_xl(shape: Shape, native: &[u8]) -> Result<Vec<u8>, CodecError> {
-    if shape.samples != 1 {
+    if shape.samples != 1 || shape.bits_allocated > 16 {
         return Err(CodecError::Unsupported(
-            "JPEG XL here is for monochrome frames".into(),
+            "JPEG XL here is for monochrome frames of 16 bits at most".into(),
         ));
     }
     // zune takes 16-bit samples in native byte order.

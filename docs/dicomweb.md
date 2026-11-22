@@ -97,8 +97,11 @@ is a 256 x 256 JPEG of a CT slice in an abdominal window.
 
 Uncompressed pixel data is stored as **JPEG-LS lossless** (`1.2.840.10008.1.2.4.80`, codecsls):
 each frame is decoded back and compared with what arrived before the file is kept, and an
-instance that does not come back exact, or that the codecs do not handle (more than 16 bits,
-subsampled colour such as YBR_FULL_422), is stored as received. So is anything that arrives compressed, **JPEG XL** included.
+instance that does not come back exact, or that the codecs do not handle (subsampled colour
+such as YBR_FULL_422), is stored as received. Pixel data of more than 16 bits, which JPEG-LS
+does not code (an RT Dose of 32-bit values), is stored with each frame deflated instead:
+**Deflated Image Frame Compression** (`1.2.840.10008.1.2.8.1`, PS3.5 10.20), lossless, a
+fragment a frame, checked the same way. So is anything that arrives compressed, **JPEG XL** included.
 `PACS_COMPRESSION=off` stores everything as received.
 
 The client's preference decides what a retrieve sends (PS3.18 8.7.3.5): the Accept header's
@@ -113,8 +116,15 @@ So one header asks for JPEG-LS where the server can make it and anything otherwi
 | Explicit VR Little Endian `1.2.840.10008.1.2.1` | `application/octet-stream` | - | - |
 | JPEG-LS lossless `1.2.840.10008.1.2.4.80` (`.81` read) | `image/jls` | codecsls | codecsls |
 | JPEG XL lossless `1.2.840.10008.1.2.4.110` (`.112` read) | `image/jxl` | jxl-rs | zune-jpegxl |
+| Deflated Image Frame Compression `1.2.840.10008.1.2.8.1` | `application/octet-stream` | flate2 | flate2 |
 
-Monochrome, palette colour, RGB and YBR_FULL, 8 or 16 bits allocated; signed pixels are coded
+Deflated frames are octet streams few clients inflate, so they are given only to a client that
+names their transfer syntax (`transfer-syntax=1.2.840.10008.1.2.8.1`); an octet stream of no
+transfer syntax (Explicit VR Little Endian, PS3.18 Table 8.7.3-5), `transfer-syntax=*` and
+`*/*` get the frames inflated, and a file asked for without a transfer syntax comes native.
+
+Monochrome, palette colour, RGB and YBR_FULL, 8 or 16 bits allocated (32 for monochrome in
+deflated frames); signed pixels are coded
 as their raw bit pattern, as DCMTK and GDCM do. Colour is coded by pixel, and a file that had
 its samples by plane is kept with Planar Configuration 0, as compressed colour always is (PS3.5
 8.2.3); decoded again, it comes back by pixel. Palette colour keeps its lookup tables as they

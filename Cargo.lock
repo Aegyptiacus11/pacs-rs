@@ -2150,6 +2150,7 @@ dependencies = [
  "dicom-json",
  "dicom-object",
  "dicom-transfer-syntax-registry",
+ "flate2",
  "jpeg-encoder",
  "jxl",
  "memchr",

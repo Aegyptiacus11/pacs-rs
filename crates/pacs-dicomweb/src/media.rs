@@ -109,12 +109,20 @@ pub fn choose(
 }
 
 fn range_accepts(range: &MediaType, part_type: &str, ts: &str) -> Option<Packaging> {
-    let ts_ok = |requested: Option<&str>| requested.is_none_or(|r| r == "*" || r == ts);
+    // Deflated frames are octet streams few clients inflate: given to one that names their
+    // transfer syntax, never for a wild card or for an octet stream of no transfer syntax,
+    // which is Explicit VR Little Endian (PS3.18 Table 8.7.3-5).
+    let named_only = ts == pacs_core::codec::DEFLATED_FRAMES;
+    let ts_ok = |requested: Option<&str>| match requested {
+        None => !named_only,
+        Some(r) => r == ts || (r == "*" && !named_only),
+    };
     match range.essence.as_str() {
-        "*/*" | "multipart/*" => Some(Packaging::Multipart),
+        "*/*" | "multipart/*" if !named_only => Some(Packaging::Multipart),
+        "*/*" | "multipart/*" => None,
         "multipart/related" => {
             let requested_ts = range.param("transfer-syntax");
-            if requested_ts == Some("*") {
+            if requested_ts == Some("*") && !named_only {
                 return Some(Packaging::Multipart);
             }
             let type_ok = range

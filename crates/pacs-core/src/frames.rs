@@ -60,6 +60,9 @@ pub fn compressed_media_type(ts: &str) -> Option<&'static str> {
         "1.2.840.10008.1.2.4.110" | "1.2.840.10008.1.2.4.111" | "1.2.840.10008.1.2.4.112" => {
             "image/jxl"
         }
+        // PS3.18 Table 8.7.3-5: frames of no image format are octet streams, their transfer
+        // syntax named
+        "1.2.840.10008.1.2.8.1" => "application/octet-stream",
         _ => return None,
     })
 }

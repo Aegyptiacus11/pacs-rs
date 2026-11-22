@@ -1,7 +1,7 @@
 # Test files from pydicom
 
 DICOM files taken unchanged from the test data of [pydicom](https://github.com/pydicom/pydicom)
-3.0.2, for the tests that store, search and send real DICOM (`pacs_core::real`). Seven are in
+3.0.2, for the tests that store, search and send real DICOM (`pacs_core::real`). Eight are in
 pydicom's package (`pydicom/data/test_files`); the two `emri_small` files are in
 [pydicom-data](https://github.com/pydicom/pydicom-data) at commit `39a2eb3`, which pydicom
 downloads when a test asks for them, and were checked against the hashes pydicom keeps for
@@ -17,6 +17,7 @@ them (`pydicom/data/hashes.json`).
 | `emri_small_jpeg_ls_lossless.dcm` | `emri_small.dcm` in JPEG-LS Lossless, a fragment a frame, an empty offset table | `24de03c9c0f8b5aa75d7fbcc894f94e612b66702175b4936589a0849ec9f87b4` |
 | `examples_rgb_color.dcm` | Ultrasound Image Storage, G.E. Medical Systems, RGB by pixel, Explicit VR Little Endian, 240 x 320, 8 bits | `bdd7f166ccef2dbd7ea9fc601ac25811f45aa623493b86cec0979b47109b83d4` |
 | `examples_palette.dcm` | Philips Medical Systems, PALETTE COLOR with its lookup tables, Explicit VR Little Endian, 350 x 800, 8 bits | `c6f5b60e1711d6009f7a944873969d4c8d4fcbd6ad96099a3a1a20f32a95a2bb` |
+| `rtdose.dcm` | RT Dose Storage, 15 frames of 10 x 10, 32 bits allocated and stored, Implicit VR Little Endian | `1d6cc092146d093e086a6bcccef4ebb7d097941343f5cd3b6395d157b64e37e4` |
 | `UN_sequence.dcm` | a data set of one private sequence written in UN, as GDCM 2.4.4 left it | `09f033e0d40a18c4ade0b08b8d318ab6deb684a84f503d4ec4f00908883dd431` |
 
 ## Where they come from
@@ -31,6 +32,8 @@ As pydicom's own `README.txt` beside its test files says:
 - `examples_rgb_color.dcm` is `US1_UNCR` of the same sample set, its Pixel Data cropped.
 - `examples_palette.dcm` is `OBXXXX1A.dcm`, its Pixel Data cropped; pydicom took it from its
   issue 205 and says it is "supposedly from a Philips machine".
+- `rtdose.dcm` was, in pydicom's words, "created by a commercial radiotherapy treatment
+  planning system and modified"; its manufacturer and model are replaced by placeholders.
 - `UN_sequence.dcm` was given to pydicom by a user to reproduce its issue 1312.
 
 Not said there, so not known here: who made `emri_small.dcm` and from what. It names no

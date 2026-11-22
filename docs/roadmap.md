@@ -67,14 +67,14 @@ Patient Root only is searched patients first, and a C-MOVE the archive refuses g
 to a C-GET. Studies are [sent](dimse.md) to other AEs from the REST API, and
 [forwarded by rule](dimse.md#forwarding-by-rule) as they arrive. The SCP dispatches by a
 registry of services, and each AE title can offer its own services and transfer syntaxes
-on one port. What remains:
+on one port. Every image is stored losslessly compressed: monochrome and colour in JPEG-LS,
+more than 16 bits in deflated frames. What remains:
 
 | Item | Done when |
 |---|---|
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |
 | Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
 | DICOMweb to the end | STOW-RS with JSON or XML and bulk data, BulkDataURI in metadata (`includefield` and rendered instances and frames are built) |
-| Lossless storage of every image | more than 16 bits compressed too, checked as today (colour is: RGB, YBR_FULL and palette colour in JPEG-LS) |
 | Conformance Statement | the PS3.2 document, generated from what the code negotiates |
 
 ## 5. The research workflow
