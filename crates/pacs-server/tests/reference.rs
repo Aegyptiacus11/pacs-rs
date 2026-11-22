@@ -193,6 +193,16 @@ impl Server {
         reply(response).await
     }
 
+    async fn put(&self, path: &str) -> Reply {
+        let response = self
+            .client
+            .put(format!("{}{path}", self.base))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{} PUT {path}: {e}", self.name));
+        reply(response).await
+    }
+
     async fn delete(&self, path: &str) -> Reply {
         let response = self
             .client
@@ -588,6 +598,73 @@ async fn same_rest_answers_as_the_reference_server() {
             reference.json(&r),
             pacs.json(&p)
         ));
+    }
+
+    // labels: put on, read back, refused when not one, searched; the study's answer below
+    // then carries them too
+    let label = format!("run-{run}");
+    for path in [
+        format!("/studies/{study_id}/labels/{label}"),
+        format!("/studies/{study_id}/labels/{label}"),
+        format!("/studies/{study_id}/labels/not%20one"),
+    ] {
+        let (r, p) = (reference.put(&path).await, pacs.put(&path).await);
+        if report.status(&format!("PUT {path}"), &r, &p) && r.body != p.body {
+            report.push(format!(
+                "PUT {path}: reference {:?} | pacs-rs {:?}",
+                String::from_utf8_lossy(&r.body),
+                String::from_utf8_lossy(&p.body)
+            ));
+        }
+    }
+    for path in [
+        format!("/studies/{study_id}/labels"),
+        format!("/studies/{study_id}/labels/{label}"),
+        format!("/studies/{study_id}/labels/absent-{run}"),
+    ] {
+        let (r, p) = (
+            reference.get(&path, "*/*").await,
+            pacs.get(&path, "*/*").await,
+        );
+        if report.status(&path, &r, &p) && r.body != p.body {
+            report.push(format!(
+                "{path}: reference {:?} | pacs-rs {:?}",
+                String::from_utf8_lossy(&r.body),
+                String::from_utf8_lossy(&p.body)
+            ));
+        }
+    }
+    let labelled = serde_json::json!({"Level": "Study", "Query": {}, "Labels": [label]});
+    let (r, p) = (
+        reference
+            .post("/tools/find", labelled.to_string().into_bytes())
+            .await,
+        pacs.post("/tools/find", labelled.to_string().into_bytes())
+            .await,
+    );
+    if report.status("/tools/find with Labels", &r, &p) && reference.json(&r) != pacs.json(&p) {
+        report.push(format!(
+            "/tools/find with Labels: reference {} | pacs-rs {}",
+            reference.json(&r),
+            pacs.json(&p)
+        ));
+    }
+    let (r, p) = (
+        reference.get("/tools/labels", "*/*").await,
+        pacs.get("/tools/labels", "*/*").await,
+    );
+    if report.status("/tools/labels", &r, &p) {
+        let has = |v: &Value| {
+            v.as_array()
+                .is_some_and(|a| a.contains(&Value::from(label.clone())))
+        };
+        if !has(&reference.json(&r)) || !has(&pacs.json(&p)) {
+            report.push(format!(
+                "/tools/labels: reference {} | pacs-rs {}",
+                reference.json(&r),
+                pacs.json(&p)
+            ));
+        }
     }
 
     let path = format!("/studies/{study_id}");

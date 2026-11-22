@@ -798,3 +798,177 @@ async fn a_file_too_costly_to_read_is_413() {
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     assert!(String::from_utf8_lossy(&body).contains("over the limit"));
 }
+
+/// Labels: put on, read, taken off, at every level; shown in each resource; listed in use;
+/// a search keeps the resources with all, any or none of them; a deletion takes them away.
+#[tokio::test]
+async fn labels_are_put_read_searched_and_go_with_their_resource() {
+    let app = app().await;
+    let [first, _, second] = two_studies(&app).await;
+    let (p, st) = (first.patient_id(), first.study_uid());
+    let study = public_ids::study(&p, &st);
+    let other = public_ids::study(&second.patient_id(), &second.study_uid());
+    let series = public_ids::series(&p, &st, &first.series_uid());
+    let instance = public_ids::instance(&p, &st, &first.series_uid(), &first.instance_uid(0));
+    let patient = public_ids::patient(&p);
+    for (level, id) in [
+        ("patients", &patient),
+        ("studies", &study),
+        ("series", &series),
+        ("instances", &instance),
+    ] {
+        let path = format!("/{level}/{id}/labels");
+        assert_eq!(json(&app, "GET", &path, Bytes::new()).await, json!([]));
+        for label in ["liver", "cohort-A", "liver"] {
+            let (status, _, body) =
+                call(&app, "PUT", &format!("{path}/{label}"), Bytes::new()).await;
+            assert_eq!(status, StatusCode::OK, "{path}/{label}");
+            assert!(body.is_empty());
+        }
+        assert_eq!(
+            json(&app, "GET", &path, Bytes::new()).await,
+            json!(["cohort-A", "liver"])
+        );
+        let resource = json(&app, "GET", &format!("/{level}/{id}"), Bytes::new()).await;
+        assert_eq!(resource["Labels"], json!(["cohort-A", "liver"]), "{level}");
+        let (has, _, _) = call(&app, "GET", &format!("{path}/liver"), Bytes::new()).await;
+        let (hasnt, _, _) = call(&app, "GET", &format!("{path}/kidney"), Bytes::new()).await;
+        assert_eq!((has, hasnt), (StatusCode::OK, StatusCode::NOT_FOUND));
+        let (status, _, _) = call(&app, "DELETE", &format!("{path}/cohort-A"), Bytes::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json(&app, "GET", &path, Bytes::new()).await,
+            json!(["liver"])
+        );
+    }
+    // in lists too
+    let listed = json(&app, "GET", "/studies?expand", Bytes::new()).await;
+    let labelled: Vec<_> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["ID"].as_str().unwrap().to_owned(), s["Labels"].clone()))
+        .collect();
+    assert!(labelled.contains(&(study.clone(), json!(["liver"]))));
+    assert!(labelled.contains(&(other.clone(), json!([]))));
+    let (status, _, _) = call(
+        &app,
+        "PUT",
+        &format!("/studies/{other}/labels/kidney"),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json(&app, "GET", "/tools/labels", Bytes::new()).await,
+        json!(["kidney", "liver"])
+    );
+
+    // searches
+    let find = async |body: Value| json(&app, "POST", "/tools/find", body.to_string().into()).await;
+    assert_eq!(
+        find(json!({"Level": "Study", "Labels": ["liver"]})).await,
+        json!([study])
+    );
+    let mut any =
+        find(json!({"Level": "Study", "Labels": ["liver", "kidney"], "LabelsConstraint": "Any"}))
+            .await
+            .as_array()
+            .unwrap()
+            .clone();
+    any.sort_by_key(|v| v.as_str().unwrap().to_owned());
+    let mut both = vec![json!(study), json!(other)];
+    both.sort_by_key(|v| v.as_str().unwrap().to_owned());
+    assert_eq!(any, both);
+    assert_eq!(
+        find(json!({"Level": "Study", "Labels": ["liver", "kidney"]})).await,
+        json!([])
+    );
+    assert_eq!(
+        find(json!({"Level": "Study", "Labels": ["liver"], "LabelsConstraint": "None"})).await,
+        json!([other])
+    );
+    assert_eq!(
+        find(json!({"Level": "Series", "Labels": ["liver"]})).await,
+        json!([series])
+    );
+    let expanded = find(json!({"Level": "Instance", "Labels": ["liver"], "Expand": true})).await;
+    assert_eq!(expanded[0]["ID"], instance.as_str());
+    assert_eq!(expanded[0]["Labels"], json!(["liver"]));
+
+    // refusals
+    for (method, path, status) in [
+        (
+            "PUT",
+            format!("/studies/{study}/labels/two%20words"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "PUT",
+            format!("/studies/{study}/labels/{}", "x".repeat(65)),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "PUT",
+            "/studies/nothing/labels/liver".to_owned(),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "GET",
+            "/studies/nothing/labels".to_owned(),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "DELETE",
+            "/series/nothing/labels/liver".to_owned(),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (got, _, body) = call(&app, method, &path, Bytes::new()).await;
+        assert_eq!(
+            got,
+            status,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    for body in [
+        json!({"Level": "Study", "Labels": ["two words"]}),
+        json!({"Level": "Study", "Labels": ["liver"], "LabelsConstraint": "Most"}),
+        json!({"Level": "Series", "Labels": ["liver"], "LabelsConstraint": "None"}),
+    ] {
+        let (got, _, _) = call(&app, "POST", "/tools/find", body.to_string().into()).await;
+        assert_eq!(got, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    // a deletion takes the labels of what it removed, and only those: the patient, who
+    // keeps another study, keeps theirs
+    let (status, _, _) = call(&app, "DELETE", &format!("/studies/{study}"), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        find(json!({"Level": "Instance", "Labels": ["liver"]})).await,
+        json!([])
+    );
+    assert_eq!(
+        json(
+            &app,
+            "GET",
+            &format!("/patients/{patient}/labels"),
+            Bytes::new()
+        )
+        .await,
+        json!(["liver"])
+    );
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/patients/{patient}"),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json(&app, "GET", "/tools/labels", Bytes::new()).await,
+        json!([])
+    );
+}
