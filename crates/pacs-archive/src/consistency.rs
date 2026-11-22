@@ -75,6 +75,10 @@ impl Archive {
             if indexed.remove(&object.key).is_some() {
                 continue;
             }
+            // deleted files waiting to be restored or emptied: the trash's, not orphans
+            if self.store.is_trash(&object.key) {
+                continue;
+            }
             if object.modified > recent {
                 found.too_recent += 1;
             } else {
