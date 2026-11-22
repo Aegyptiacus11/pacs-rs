@@ -213,6 +213,7 @@ impl Scp {
             let options = options.clone();
             tokio::spawn(async move {
                 let Ok(_slot) = scp.slots.clone().try_acquire_owned() else {
+                    pacs_core::metrics::add(&pacs_core::metrics::ASSOCIATIONS_REFUSED);
                     tracing::warn!(%peer, "association rejected: the limit of {} is reached", scp.config.max_associations);
                     if let Some(observer) = &scp.observer {
                         observer
@@ -237,6 +238,7 @@ impl Scp {
         peer: std::net::SocketAddr,
     ) {
         let refused = |e: dicom_ul::association::Error| {
+            pacs_core::metrics::add(&pacs_core::metrics::ASSOCIATIONS_REFUSED);
             tracing::info!(%peer, error = %e, "association not established");
             if let Some(observer) = &self.observer {
                 observer.refused(peer, &e.to_string());
@@ -269,6 +271,7 @@ impl Scp {
         let called = association.called_ae_title().trim().to_owned();
         let destination = self.destination(&called).clone();
         tracing::info!(%peer, calling, called, "association established");
+        let _open = pacs_core::metrics::OpenAssociation::new();
         // what the archive takes in while the association lasts: its messages are served
         // on this task, one after the other
         let messages = self.messages(association, peer, &calling, &called, &destination);

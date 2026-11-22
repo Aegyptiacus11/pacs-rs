@@ -278,6 +278,7 @@ impl Archive {
             && existing.series_instance_uid == instance.key.series_instance_uid
             && existing.study_instance_uid == instance.key.study_instance_uid
         {
+            count(Outcome::AlreadyStored);
             noted(&instance.key, Outcome::AlreadyStored);
             return Ok(Ingested {
                 key: instance.key,
@@ -318,6 +319,7 @@ impl Archive {
                         }
                     }
                 }
+                count(outcome);
                 noted(&instance.key, outcome);
                 Ok(Ingested {
                     key: instance.key,
@@ -417,6 +419,16 @@ fn read_permits(bytes: u64) -> usize {
 
 pub use consistency::{Inconsistencies, LostRepair, OrphanRepair};
 pub use trash::Restored;
+
+/// An instance stored, for the metrics.
+fn count(outcome: Outcome) {
+    use pacs_core::metrics::{INSTANCES_ADDED, INSTANCES_ALREADY_STORED, INSTANCES_REPLACED, add};
+    add(match outcome {
+        Outcome::Added => &INSTANCES_ADDED,
+        Outcome::Replaced => &INSTANCES_REPLACED,
+        Outcome::AlreadyStored => &INSTANCES_ALREADY_STORED,
+    });
+}
 
 /// The SHA-256 of `bytes`, lower-case hex: how the index keeps a stored file's.
 pub fn sha256_hex(bytes: &[u8]) -> String {
