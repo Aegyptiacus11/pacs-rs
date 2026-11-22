@@ -37,6 +37,8 @@ struct Shared {
     /// code -> (PKCE challenge, nonce)
     pending: HashMap<String, (String, String)>,
     mint: Option<Mint>,
+    /// opaque token -> what the introspection endpoint answers for it
+    introspected: HashMap<String, Value>,
 }
 
 /// A provider on a port of this machine.
@@ -59,6 +61,7 @@ impl Provider {
             "authorization_endpoint": format!("{issuer}/authorize"),
             "token_endpoint": format!("{issuer}/token"),
             "jwks_uri": format!("{issuer}/jwks"),
+            "introspection_endpoint": format!("{issuer}/introspect"),
             "response_types_supported": ["code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["EdDSA"],
@@ -78,6 +81,7 @@ impl Provider {
             )
             .route("/jwks", get(move || async move { axum::Json(jwks) }))
             .route("/token", post(token))
+            .route("/introspect", post(introspect))
             .with_state(shared.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Self {
@@ -124,6 +128,25 @@ impl Provider {
         });
         self.shared.lock().unwrap().mint = Some(mint);
     }
+}
+
+/// The introspection endpoint (RFC 7662): this server's client credentials, then what the
+/// test said of the token, or inactive.
+async fn introspect(
+    State(shared): State<Arc<Mutex<Shared>>>,
+    headers: HeaderMap,
+    Form(form): Form<HashMap<String, String>>,
+) -> axum::response::Response {
+    let basic = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("{CLIENT_ID}:{CLIENT_SECRET}"))
+    );
+    if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(basic.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let token = form.get("token").cloned().unwrap_or_default();
+    let answer = shared.lock().unwrap().introspected.get(&token).cloned();
+    axum::Json(answer.unwrap_or(json!({"active": false}))).into_response()
 }
 
 /// The token endpoint: the client's credentials, the code, and the PKCE verifier checked as
@@ -791,4 +814,337 @@ async fn without_a_provider_the_provider_routes_are_not_there() {
     )
     .await;
     assert_eq!(back.status, StatusCode::NOT_FOUND);
+    // a tool is made here, with a secret, never named after a provider's client
+    let signed = send(
+        &app,
+        Method::POST,
+        "/auth/login",
+        &[],
+        Some(json!({"email": "admin", "password": "admin-password-1"})),
+    )
+    .await;
+    let admin = signed.body["access_token"].as_str().unwrap().to_owned();
+    let named = send(
+        &app,
+        Method::POST,
+        "/clients",
+        &[("authorization", format!("Bearer {admin}"))],
+        Some(json!({"client_id": "tool-1", "name": "Viewer", "role": "reader"})),
+    )
+    .await;
+    assert_eq!(named.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Where the tests' pacs-rs is, as the provider's tokens for it name it: the origin of
+/// PACS_OIDC_REDIRECT_URL.
+const AUDIENCE: &str = "http://localhost:8042";
+
+impl Provider {
+    /// A tool's access token, signed with the published key, from good claims changed.
+    fn tool_token(&self, change: impl Fn(&mut Value)) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut claims = json!({
+            "iss": self.issuer,
+            "sub": "tool-1",
+            "aud": AUDIENCE,
+            "client_id": "tool-1",
+            "exp": now + 300,
+            "iat": now,
+            "jti": "j1",
+        });
+        change(&mut claims);
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some("k1".into());
+        header.typ = Some("at+jwt".into());
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ed_der(&self.key.serialize_der()),
+        )
+        .unwrap()
+    }
+}
+
+/// A server with an administrator signed in through the provider, and the tool `tool-1`
+/// registered with `role`.
+async fn with_a_tool(provider: &Arc<Provider>, dir: &Path, role: &str) -> (Router, String) {
+    let app = start(&settings(dir, &provider.issuer, &[])).await.unwrap();
+    provider.minting(|claims| {
+        claims["sub"] = json!("sub-boss");
+        claims["email"] = json!("boss@example.com");
+    });
+    let (admin, _) = session_of(&app, &sign_in(&app, provider, |_, _| {}).await).await;
+    let made = send(
+        &app,
+        Method::POST,
+        "/clients",
+        &[("authorization", format!("Bearer {admin}"))],
+        Some(json!({"client_id": "tool-1", "name": "Viewer", "role": role})),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    assert_eq!(made.body["id"], "tool-1");
+    // the provider keeps its secret: none here
+    assert!(made.body.get("secret").is_none(), "{}", made.body);
+    (app, admin)
+}
+
+async fn status_with(app: &Router, method: Method, path: &str, token: &str) -> StatusCode {
+    send(
+        app,
+        method,
+        path,
+        &[("authorization", format!("Bearer {token}"))],
+        None,
+    )
+    .await
+    .status
+}
+
+#[tokio::test]
+async fn a_tools_token_from_the_provider_gets_its_roles_rights_and_no_more() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = with_a_tool(&provider, dir.path(), "reader").await;
+
+    let token = provider.tool_token(|_| {});
+    assert_eq!(
+        status_with(&app, Method::GET, "/studies", &token).await,
+        StatusCode::OK
+    );
+    // a reader deletes nothing, and a tool manages no account: refused for the token's scope
+    // (401 with insufficient_scope, as for this server's own tool tokens)
+    let delete = send(
+        &app,
+        Method::DELETE,
+        "/studies/x",
+        &[("authorization", format!("Bearer {token}"))],
+        None,
+    )
+    .await;
+    assert_eq!(delete.status, StatusCode::UNAUTHORIZED);
+    assert!(
+        delete.headers["www-authenticate"]
+            .to_str()
+            .unwrap()
+            .contains("insufficient_scope")
+    );
+    assert_eq!(
+        status_with(&app, Method::GET, "/users", &token).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // a provider that names the client in azp only (RFC 9068 asks for client_id)
+    let azp = provider.tool_token(|c| {
+        c.as_object_mut().unwrap().remove("client_id");
+        c["azp"] = json!("tool-1");
+    });
+    assert_eq!(
+        status_with(&app, Method::GET, "/studies", &azp).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn the_tokens_scopes_narrow_the_role_and_never_widen_it() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = with_a_tool(&provider, dir.path(), "manager").await;
+    let with_scope = |scope: &'static str| provider.tool_token(move |c| c["scope"] = json!(scope));
+
+    // no pacs: scope: the whole role
+    let whole = with_scope("openid");
+    assert_eq!(
+        status_with(&app, Method::DELETE, "/studies/x", &whole).await,
+        StatusCode::NOT_FOUND
+    );
+    // pacs:read only: reading, not deleting
+    let read = with_scope("openid pacs:read");
+    assert_eq!(
+        status_with(&app, Method::GET, "/studies", &read).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status_with(&app, Method::DELETE, "/studies/x", &read).await,
+        StatusCode::UNAUTHORIZED
+    );
+    // a scope the role does not give gives nothing: users is not a tool's, ever
+    let users = with_scope("pacs:users");
+    assert_eq!(
+        status_with(&app, Method::GET, "/users", &users).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        status_with(&app, Method::GET, "/studies", &users).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // a reader's tool asking for delete gets nothing it did not have
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = with_a_tool(&provider, dir.path(), "reader").await;
+    let delete = with_scope("pacs:delete");
+    assert_eq!(
+        status_with(&app, Method::DELETE, "/studies/x", &delete).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn a_tools_token_that_fails_a_check_is_refused() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = with_a_tool(&provider, dir.path(), "reader").await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    type Change = Box<dyn Fn(&mut Value)>;
+    let cases: Vec<(&str, Change)> = vec![
+        (
+            "for the tool itself, not this server",
+            Box::new(|c| c["aud"] = json!("tool-1")),
+        ),
+        (
+            "another issuer",
+            Box::new(|c| c["iss"] = json!("http://127.0.0.1:1")),
+        ),
+        ("expired", Box::new(move |c| c["exp"] = json!(now - 3600))),
+        (
+            "a tool not registered here",
+            Box::new(|c| c["client_id"] = json!("tool-2")),
+        ),
+        (
+            "no client",
+            Box::new(|c| {
+                c.as_object_mut().unwrap().remove("client_id");
+            }),
+        ),
+        ("an ID token", Box::new(|c| c["nonce"] = json!("n"))),
+    ];
+    for (case, change) in cases {
+        let token = provider.tool_token(change);
+        assert_eq!(
+            status_with(&app, Method::GET, "/studies", &token).await,
+            StatusCode::UNAUTHORIZED,
+            "{case}"
+        );
+    }
+    // signed with the client's secret, which this server holds too
+    let mut claims = json!({"iss": provider.issuer, "sub": "tool-1", "aud": AUDIENCE, "client_id": "tool-1", "exp": now + 300});
+    claims["iat"] = json!(now);
+    let hmac = jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(CLIENT_SECRET.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        status_with(&app, Method::GET, "/studies", &hmac).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn an_opaque_token_is_asked_of_the_providers_introspection_endpoint() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = with_a_tool(&provider, dir.path(), "reader").await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let good = json!({"active": true, "client_id": "tool-1", "aud": [AUDIENCE, "other"], "iss": provider.issuer, "exp": now + 300, "scope": "pacs:read"});
+    let cases = [
+        ("opaque-good", good.clone(), StatusCode::OK),
+        (
+            "opaque-inactive",
+            json!({"active": false, "client_id": "tool-1", "aud": AUDIENCE}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "opaque-active-string",
+            {
+                let mut g = good.clone();
+                g["active"] = json!("true");
+                g
+            },
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "opaque-no-audience",
+            {
+                let mut g = good.clone();
+                g.as_object_mut().unwrap().remove("aud");
+                g
+            },
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "opaque-other-issuer",
+            {
+                let mut g = good.clone();
+                g["iss"] = json!("http://127.0.0.1:1");
+                g
+            },
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "opaque-expired",
+            {
+                let mut g = good.clone();
+                g["exp"] = json!(now - 3600);
+                g
+            },
+            StatusCode::UNAUTHORIZED,
+        ),
+    ];
+    for (token, answer, _) in &cases {
+        provider
+            .shared
+            .lock()
+            .unwrap()
+            .introspected
+            .insert((*token).into(), answer.clone());
+    }
+    for (token, _, expected) in cases {
+        assert_eq!(
+            status_with(&app, Method::GET, "/studies", token).await,
+            expected,
+            "{token}"
+        );
+    }
+    // a token the provider does not know is inactive
+    assert_eq!(
+        status_with(&app, Method::GET, "/studies", "never-issued").await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn a_tool_is_registered_by_its_client_id_at_the_provider_and_only_with_one() {
+    let provider = Arc::new(Provider::start(None).await);
+    let dir = tempfile::tempdir().unwrap();
+    let (app, admin) = with_a_tool(&provider, dir.path(), "reader").await;
+    let bearer = [("authorization", format!("Bearer {admin}"))];
+    for body in [
+        json!({"name": "No id", "role": "reader"}),
+        json!({"client_id": "", "name": "Empty", "role": "reader"}),
+        json!({"client_id": "a b", "name": "Space", "role": "reader"}),
+    ] {
+        let made = send(&app, Method::POST, "/clients", &bearer, Some(body.clone())).await;
+        assert_eq!(made.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+    let again = send(
+        &app,
+        Method::POST,
+        "/clients",
+        &bearer,
+        Some(json!({"client_id": "tool-1", "name": "Twice", "role": "reader"})),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
 }
