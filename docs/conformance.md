@@ -10,7 +10,7 @@ this page and the code part. DICOMweb is described in [DICOMweb](dicomweb.md) an
 | | |
 |---|---|
 | Implementation Class UID | `2.25.198281755599061360028760269505564383885`, in the files pacs-rs writes |
-| Implementation Version Name | `PACS-RS 0.14.0` |
+| Implementation Version Name | `PACS-RS 0.15.0` |
 | On associations | the Implementation Class UID and Version Name of dicom-ul, the library pacs-rs negotiates with, which does not let them be set |
 | Maximum PDU length | 32762 bytes received; what the peer says sent |
 | Associations served at once | `PACS_DIMSE_MAX_ASSOCIATIONS`, 16 unless set; one more is rejected as transient, local limit exceeded |

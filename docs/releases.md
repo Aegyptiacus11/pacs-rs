@@ -34,15 +34,16 @@ cargo run -p pacs-dimse --example conformance
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash
-git tag -a v0.14.0 -m v0.14.0 && git push origin v0.14.0
+git tag -a v0.15.0 -m v0.15.0 && git push origin v0.15.0
 ```
 
 `.github/workflows/release.yml` first runs every job of `ci.yml` on the tagged commit, and stops
 there if one fails. Then it publishes, once every build has passed:
 
 - `pacs-rs-<version>-linux-amd64.tar.gz` and `-linux-arm64.tar.gz`: the static
-  `pacs-server` binary, no dependencies;
-- `pacs-rs-<version>-windows-amd64.zip`: `pacs-server.exe`, needs no Visual C++ runtime;
+  `pacs-server` binary, no dependencies, and the [command-line tools](tools.md) beside it;
+- `pacs-rs-<version>-windows-amd64.zip`: `pacs-server.exe` and the tools, needing no Visual
+  C++ runtime;
 - the image `ghcr.io/aegyptiacus11/pacs-rs:<version>` for linux/amd64 and linux/arm64, and
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
 - a GitHub release with those files and `SHA256SUMS`.
