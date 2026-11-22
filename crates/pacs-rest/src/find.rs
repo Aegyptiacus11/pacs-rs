@@ -7,13 +7,13 @@
 
 use axum::Json;
 use bytes::Bytes;
-use pacs_index::{Key, Kind, Match, StudySearch};
+use pacs_index::{Key, Kind, Level, Match, StudySearch};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::ToSchema;
 
 use crate::RestError;
-use crate::resources::{instance_json, patient_json, series_json, study_json};
+use crate::resources::{instance_json, labelled, patient_json, series_json, study_json};
 use crate::schema::{Error, Found};
 use crate::scope::Seen;
 
@@ -38,6 +38,42 @@ pub(crate) struct Find {
     /// Skip this many first.
     #[serde(rename = "Since")]
     since: Option<i64>,
+    /// Labels the resources must have, as `LabelsConstraint` says.
+    #[serde(rename = "Labels", default)]
+    labels: Vec<String>,
+    /// `All` (the default): every one of `Labels`; `Any`: at least one; `None`: none of them.
+    #[serde(rename = "LabelsConstraint")]
+    labels_constraint: Option<String>,
+}
+
+/// How a resource's labels must meet those a search names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Constraint {
+    All,
+    Any,
+    None,
+}
+
+impl Constraint {
+    fn parse(text: Option<&str>) -> Result<Self, RestError> {
+        match text {
+            None | Some("All") => Ok(Constraint::All),
+            Some("Any") => Ok(Constraint::Any),
+            Some("None") => Ok(Constraint::None),
+            Some(other) => Err(RestError::bad_request(
+                "Bad request",
+                format!("LabelsConstraint is All, Any or None, not {other:?}"),
+            )),
+        }
+    }
+
+    fn met_by(self, has: &[String], asked: &[String]) -> bool {
+        match self {
+            Constraint::All => asked.iter().all(|l| has.contains(l)),
+            Constraint::Any => asked.iter().any(|l| has.contains(l)),
+            Constraint::None => !asked.iter().any(|l| has.contains(l)),
+        }
+    }
 }
 
 /// The attributes a search may match at the study level, as (keyword, tag, how its values
@@ -136,6 +172,10 @@ fn uids(
 /// - `Series`: `SeriesInstanceUID`, needed. `Instance`: `SOPInstanceUID`, needed.
 ///
 /// Another attribute, or a value that is not a match for its attribute, is refused.
+///
+/// `Labels` keeps the resources with all of them (`LabelsConstraint` `All`, the default),
+/// any of them (`Any`) or none of them (`None`). With labels, a series or instance search
+/// needs no UID, unless the constraint is `None`.
 #[utoipa::path(
     post,
     path = "/tools/find",
@@ -149,9 +189,24 @@ fn uids(
 pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, RestError> {
     let find: Find = serde_json::from_slice(&body)
         .map_err(|e| RestError::bad_request("Bad request", format!("not a search: {e}")))?;
+    let constraint = Constraint::parse(find.labels_constraint.as_deref())?;
+    if let Some(bad) = find
+        .labels
+        .iter()
+        .find(|l| !pacs_index::labels::is_label(l))
+    {
+        return Err(RestError::bad_request(
+            "Bad request",
+            format!("{bad:?} is not a label"),
+        ));
+    }
+    let labelled = !find.labels.is_empty();
     let index = state.archive.index();
     let q = &find.query;
-    let found: Vec<Value> = match find.level.to_ascii_lowercase().as_str() {
+    let since = find.since.unwrap_or(0).max(0) as usize;
+    let limit = find.limit.map_or(usize::MAX, |l| l.max(0) as usize);
+    // with labels, every match is found first and the page taken after they are read
+    let (level, ids, paged) = match find.level.to_ascii_lowercase().as_str() {
         "patient" => {
             let keys = keys(q, PATIENT_KEYS)?;
             let ids = if keys.is_empty() {
@@ -174,21 +229,7 @@ pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, 
                 ids.sort();
                 ids
             };
-            let ids = ids
-                .into_iter()
-                .skip(find.since.unwrap_or(0).max(0) as usize)
-                .take(find.limit.map_or(usize::MAX, |l| l.max(0) as usize));
-            let mut found = Vec::new();
-            for id in ids {
-                if find.expand {
-                    if let Some(p) = index.rest_patient(&id).await? {
-                        found.push(patient_json(p));
-                    }
-                } else {
-                    found.push(json!(id));
-                }
-            }
-            found
+            (Level::Patient, ids, false)
         }
         "study" => {
             let search = StudySearch {
@@ -196,52 +237,63 @@ pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, 
                 // a range of dates and a range of times are read apart, as C-FIND reads
                 // them without negotiation (PS3.4 C.2.2.2.5.4)
                 combined_date_time: false,
-                limit: find.limit.map(|limit| limit.max(0) as usize),
-                offset: find.since.unwrap_or(0).max(0) as usize,
+                limit: (!labelled).then_some(limit).filter(|l| *l != usize::MAX),
+                offset: if labelled { 0 } else { since },
             };
             search
                 .check()
                 .map_err(|e| RestError::bad_request("Bad request", e))?;
-            let mut found = Vec::new();
-            for study in index.search_studies(&search).await? {
-                let Some(id) = study.public_id else { continue };
-                if find.expand {
-                    if let Some(s) = index.rest_study(&id).await? {
-                        found.push(study_json(s));
-                    }
-                } else {
-                    found.push(json!(id));
-                }
-            }
-            found
+            let ids = index
+                .search_studies(&search)
+                .await?
+                .into_iter()
+                .filter_map(|study| study.public_id)
+                .collect();
+            (Level::Study, ids, !labelled)
         }
         "series" => {
-            let mut found = Vec::new();
-            for uid in uids(q, "SeriesInstanceUID", "a series")? {
-                let Some(id) = index.series_public_id(&uid).await? else {
-                    continue;
-                };
-                if find.expand {
-                    found.extend(index.rest_series(&id).await?.map(series_json));
-                } else {
-                    found.push(json!(id));
+            let ids = if q.is_empty() && labelled && constraint != Constraint::None {
+                let mut seen = Vec::new();
+                for id in index
+                    .labelled(Level::Series, &find.labels, constraint == Constraint::All)
+                    .await?
+                {
+                    if index.rest_series(&id).await?.is_some() {
+                        seen.push(id);
+                    }
                 }
-            }
-            found
+                seen
+            } else {
+                let mut ids = Vec::new();
+                for uid in uids(q, "SeriesInstanceUID", "a series")? {
+                    ids.extend(index.series_public_id(&uid).await?);
+                }
+                ids
+            };
+            (Level::Series, ids, !labelled)
         }
         "instance" => {
-            let mut found = Vec::new();
-            for uid in uids(q, "SOPInstanceUID", "an instance")? {
-                let Some(instance) = index.rest_instance_by_uid(&uid).await? else {
-                    continue;
-                };
-                found.push(if find.expand {
-                    instance_json(instance)
-                } else {
-                    json!(instance.public_id)
-                });
-            }
-            found
+            let ids = if q.is_empty() && labelled && constraint != Constraint::None {
+                let mut seen = Vec::new();
+                for id in index
+                    .labelled(Level::Instance, &find.labels, constraint == Constraint::All)
+                    .await?
+                {
+                    if index.rest_instance(&id).await?.is_some() {
+                        seen.push(id);
+                    }
+                }
+                seen
+            } else {
+                let mut ids = Vec::new();
+                for uid in uids(q, "SOPInstanceUID", "an instance")? {
+                    if let Some(instance) = index.rest_instance_by_uid(&uid).await? {
+                        ids.push(instance.public_id);
+                    }
+                }
+                ids
+            };
+            (Level::Instance, ids, !labelled)
         }
         other => {
             return Err(RestError::bad_request(
@@ -250,5 +302,42 @@ pub(crate) async fn find(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, 
             ));
         }
     };
-    Ok(Json(Value::Array(found)))
+    let ids: Vec<String> = if labelled {
+        let labels = index.labels_of(&ids).await?;
+        ids.into_iter()
+            .filter(|id| {
+                let has = labels.get(id).map(Vec::as_slice).unwrap_or_default();
+                constraint.met_by(has, &find.labels)
+            })
+            .collect()
+    } else {
+        ids
+    };
+    // patients and labelled searches are paged here; studies by the index; series and
+    // instances, named by their UIDs, are not paged
+    let ids: Vec<String> = match (level, paged) {
+        (Level::Patient, _) | (_, false) => ids.into_iter().skip(since).take(limit).collect(),
+        _ => ids,
+    };
+    let mut found = Vec::new();
+    for id in ids {
+        if !find.expand {
+            found.push(json!(id));
+            continue;
+        }
+        match level {
+            Level::Patient => found.extend(index.rest_patient(&id).await?.map(patient_json)),
+            Level::Study => found.extend(index.rest_study(&id).await?.map(study_json)),
+            Level::Series => found.extend(index.rest_series(&id).await?.map(series_json)),
+            Level::Instance => found.extend(index.rest_instance(&id).await?.map(instance_json)),
+        }
+    }
+    labelled_answer(index, found).await
+}
+
+async fn labelled_answer(
+    index: &pacs_index::Index,
+    found: Vec<Value>,
+) -> Result<Json<Value>, RestError> {
+    labelled(index, Value::Array(found)).await
 }
