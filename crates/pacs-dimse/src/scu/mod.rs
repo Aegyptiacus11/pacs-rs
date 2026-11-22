@@ -103,7 +103,6 @@ impl Link {
 pub(crate) struct Connected {
     pub association: Link,
     pub context: u8,
-    pub transfer_syntax: String,
 }
 
 /// Associate with `remote` as `calling`, proposing `abstract_syntax` with
@@ -133,7 +132,6 @@ pub(crate) async fn connect(
     Ok(Connected {
         association,
         context: context.id,
-        transfer_syntax: context.transfer_syntax,
     })
 }
 
