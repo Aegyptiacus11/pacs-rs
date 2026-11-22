@@ -25,7 +25,7 @@ python3 scripts/build-site.py && python3 -m http.server -d target/site
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash
-git tag -a v0.13.0 -m v0.13.0 && git push origin v0.13.0
+git tag -a v0.14.0 -m v0.14.0 && git push origin v0.14.0
 ```
 
 `.github/workflows/release.yml` first runs every job of `ci.yml` on the tagged commit, and stops
