@@ -4,13 +4,15 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a rail down the left side to go places (Studies, Patients), a bar along the top
+- **Layout**: a rail down the left side to go places (Studies, Patients, Server for an
+  administrator, Settings), a bar along the top
   for the tools (the search, light or dark, a warning when the server doesn't answer), the page
   in between.
 - **Narrow screens**: below 768 pixels the rail lies along the bottom, the study list shows
   two lines a study (who and what, when and how) and the patients list takes the whole width;
-  a tap shows the study or the patient over the whole page, closed with its cross. Between
-  768 and 1024 pixels the chosen study opens the same way. In the viewer the tools stay on
+  a tap shows the study or the patient over the whole page, closed with its cross. Below 1280
+  pixels the list keeps the whole width, and the chosen study or patient opens as a sheet
+  over its right side; from 1280 pixels on it sits beside the list. In the viewer the tools stay on
   one line, scrolled sideways, and the series list slides over the images and closes once a
   series is chosen.
 - **Touch**: one finger runs the chosen tool; two fingers pinch to zoom and drag to pan. A drag
@@ -30,13 +32,25 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
   ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
   study or the patient. A double click or Enter opens it; ↑ ↓
-  move through the list. With no study chosen, the pane sums up what the list holds, for the
+  move through the list. With no study chosen, on a screen of 1280 pixels or more, the pane
+  sums up what the list holds, for the
   dates and filters chosen (patients, studies, series, images, studies by modality, the
   last received). The footer says how much of the list is shown (1–50
   of 1,234 studies), takes 25, 50 (the default), 100 or 200 rows a page, and goes to the
   first, previous, next or last page, a numbered one, or one typed in; ↑ ↓ go on to the next or previous page. The server filters, sorts, counts and pages the list
   (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
   studies at once (one ZIP from `/tools/create-archive`).
+- **Server** (an administrator, or anyone without a login): how the server is doing, asked
+  again every two seconds. Its figures (studies, images, bytes stored, deletions in the
+  [trash](trash.md), [file checks](integrity.md)); the DIMSE associations open now, each with
+  its calling and called AE titles, its address, how long it has been open and what it has
+  stored, queried or retrieved so far; the moves from remote archives, running and the last
+  five over; the quarantine (files and bytes, when `PACS_QUARANTINE` is set); and the last
+  hundred warnings and errors the server logged, each with its time, where it came from, its
+  message and its fields (`/ui/api/server`).
+- **Lists refresh themselves**: the study list, its counts and its summary are asked again
+  every 20 seconds and when the window comes back into focus, so studies that arrive show up
+  without a reload.
 - **Search**: two, with two jobs. The top bar's (`Ctrl K`, `⌘K` on a Mac) finds a patient or a
   study anywhere in the archive and shows it on the page already open: on the studies, the
   patient's studies or the study itself; on the patients, the patient's record. Each list has
