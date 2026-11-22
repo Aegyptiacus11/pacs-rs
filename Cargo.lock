@@ -1717,8 +1717,8 @@ dependencies = [
 
 [[package]]
 name = "jwt-sessions"
-version = "0.1.0-dev"
-source = "git+https://github.com/Aegyptiacus11/jwt-sessions-rs?rev=a43ecba210caf055f27955cd17845d14816386b6#a43ecba210caf055f27955cd17845d14816386b6"
+version = "0.1.0"
+source = "git+https://github.com/Aegyptiacus11/jwt-sessions-rs?rev=d805c17161271cb9e612ccecda08ec00c25b7d4c#d805c17161271cb9e612ccecda08ec00c25b7d4c"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2245,6 +2245,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper-util",
+ "jsonwebtoken",
  "jwt-sessions",
  "mimalloc",
  "pacs-archive",
@@ -2271,6 +2272,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "url",
  "utoipa",
  "utoipa-axum",
  "zip",
@@ -2637,6 +2639,9 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
