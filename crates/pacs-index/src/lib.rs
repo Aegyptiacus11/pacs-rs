@@ -290,6 +290,68 @@ fn sqlite_url(path: &Path) -> Result<String, Error> {
 }
 
 /// Milliseconds since the Unix epoch, now.
+/// The SHA-384 of a migration's text, as sqlx takes it.
+fn migration_checksum(sql: &str) -> Vec<u8> {
+    use sha2::Digest;
+    sha2::Sha384::digest(sql.as_bytes()).to_vec()
+}
+
+/// An index applied a migration from a build whose copy of it had other line endings: the
+/// Windows builds of 0.12.0 and before were made from a checkout with CRLF, and their indexes
+/// keep the checksums of that text. The same migration, line endings apart, is taken as
+/// applied: its recorded checksum becomes this build's. Any other difference stays an error
+/// of the migrator ("previously applied but has been modified").
+async fn same_line_endings(
+    pool: &sqlx::AnyPool,
+    dialect: Dialect,
+    migrator: &sqlx::migrate::Migrator,
+) -> Result<(), Error> {
+    let exists: Option<String> =
+        match dialect {
+            Dialect::Sqlite => sqlx::query_scalar(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+            )
+            .fetch_optional(pool)
+            .await?,
+            Dialect::Postgres => sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+                .fetch_optional(pool)
+                .await?
+                .flatten(),
+        };
+    if exists.is_none() {
+        return Ok(());
+    }
+    let applied: Vec<(i64, Vec<u8>)> =
+        sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations")
+            .fetch_all(pool)
+            .await?;
+    for migration in migrator.iter() {
+        let Some((_, recorded)) = applied.iter().find(|(v, _)| *v == migration.version) else {
+            continue;
+        };
+        if recorded.as_slice() == migration.checksum.as_ref() {
+            continue;
+        }
+        let lf = migration.sql.as_str().replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        let other_endings = [migration_checksum(&lf), migration_checksum(&crlf)]
+            .iter()
+            .any(|sum| sum == recorded);
+        if other_endings {
+            sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+                .bind(migration.checksum.to_vec())
+                .bind(migration.version)
+                .execute(pool)
+                .await?;
+            tracing::info!(
+                version = migration.version,
+                "a migration applied by a build with other line endings, taken as applied"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -327,10 +389,12 @@ impl Index {
                 .execute(&pool)
                 .await?;
         }
-        match dialect {
-            Dialect::Sqlite => sqlx::migrate!("./migrations/sqlite").run(&pool).await?,
-            Dialect::Postgres => sqlx::migrate!("./migrations/postgres").run(&pool).await?,
-        }
+        let migrator = match dialect {
+            Dialect::Sqlite => sqlx::migrate!("./migrations/sqlite"),
+            Dialect::Postgres => sqlx::migrate!("./migrations/postgres"),
+        };
+        same_line_endings(&pool, dialect, &migrator).await?;
+        migrator.run(&pool).await?;
         Ok(Index {
             pool,
             dialect,

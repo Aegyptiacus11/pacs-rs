@@ -2185,10 +2185,12 @@ dependencies = [
  "dicom-dictionary-std",
  "pacs-core",
  "serde_json",
+ "sha2 0.11.1",
  "sqlx",
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
