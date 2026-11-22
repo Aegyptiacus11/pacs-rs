@@ -232,9 +232,10 @@ fn rest_routes(ids: &Ids) -> Vec<String> {
         if !path.contains("{id}") || item.get("get").is_none() {
             continue;
         }
-        // a label's own route answers with an empty body, 404 for a label not there: its
-        // rights are tested apart (labels_stay_within_the_account_s_projects)
-        if path.contains("{label}") {
+        // a label's or a metadata's own route answers 404 for one not there, a label's with
+        // an empty body: their rights are those of the resource, tested apart
+        // (labels_stay_within_the_account_s_projects)
+        if path.contains("{label}") || path.contains("{name}") {
             continue;
         }
         let id = match path.split('/').nth(1).unwrap() {
@@ -1135,6 +1136,31 @@ async fn labels_stay_within_the_account_s_projects() {
             .body,
         json!([])
     );
+    // metadata the same: an editor sets and removes them on its own study
+    let note = format!("/studies/{}/metadata/note", liver.study);
+    let set = send(
+        app,
+        Method::PUT,
+        &note,
+        &token,
+        None,
+        Some(b"seen".to_vec()),
+    )
+    .await;
+    assert_eq!(set.status, StatusCode::OK);
+    let gone = send(app, Method::DELETE, &note, &token, None, None).await;
+    assert_eq!(gone.status, StatusCode::OK);
+    let elsewhere = format!("/studies/{}/metadata/note", lung.study);
+    let refused = send(
+        app,
+        Method::PUT,
+        &elsewhere,
+        &token,
+        None,
+        Some(b"x".to_vec()),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND);
     // a reader may not change them
     let (_, reader) = user(app, &s.admin, "bo", "reader", json!(["liver-2026"])).await;
     let refused = send(app, Method::PUT, &own, &reader, None, None).await;

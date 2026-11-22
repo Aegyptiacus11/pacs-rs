@@ -206,8 +206,12 @@ pub fn right_for(method: &Method, path: &str) -> Right {
         Method::POST if matches!(path, "/tools/find" | "/tools/create-archive") => Right::Read,
         Method::POST | Method::PUT | Method::PATCH => Right::Write,
         // the web interface's own documents are written and removed with the same right,
-        // and so are labels: taking one off deletes nothing of the archive
-        Method::DELETE if under("/ui/api") || path.contains("/labels/") => Right::Write,
+        // and so are labels and metadata: taking one off deletes nothing of the archive
+        Method::DELETE
+            if under("/ui/api") || path.contains("/labels/") || path.contains("/metadata/") =>
+        {
+            Right::Write
+        }
         Method::DELETE => Right::Delete,
         _ => Right::Admin,
     }

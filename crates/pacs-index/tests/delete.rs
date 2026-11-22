@@ -191,3 +191,44 @@ async fn deleting_a_patient_takes_everything_and_nothing_else() {
         );
     }
 }
+
+/// A deletion takes the labels and metadata of what it removed, at every level below it,
+/// and leaves those of what is still there.
+#[tokio::test]
+async fn a_deletion_takes_the_labels_and_metadata_of_what_it_removed() {
+    for index in common::indexes().await {
+        let [a, b, c] = patient(&index).await;
+        let (patient_id, study, series) = ids(&a);
+        let (_, kept_study, _) = ids(&c);
+        let resources = [
+            (Level::Patient, patient_id.clone()),
+            (Level::Study, study.clone()),
+            (Level::Series, series.clone()),
+            (Level::Series, ids(&b).2),
+            (Level::Instance, instance_id(&a, 0)),
+            (Level::Study, kept_study.clone()),
+        ];
+        for (level, id) in &resources {
+            index.add_label(*level, id, "cohort").await.unwrap();
+            index.set_metadata(*level, id, "note", "x").await.unwrap();
+        }
+        let count = async |table: &str| -> i64 {
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(index.pool())
+                .await
+                .unwrap()
+        };
+        assert_eq!((count("labels").await, count("metadata").await), (6, 6));
+        index.delete(Level::Study, &study).await.unwrap().unwrap();
+        // the study, its two series and the instance went; the patient and the other study stay
+        assert_eq!((count("labels").await, count("metadata").await), (2, 2));
+        assert_eq!(index.labels(&kept_study).await.unwrap(), ["cohort"]);
+        assert_eq!(index.labels(&patient_id).await.unwrap(), ["cohort"]);
+        index
+            .delete(Level::Patient, &patient_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((count("labels").await, count("metadata").await), (0, 0));
+    }
+}
