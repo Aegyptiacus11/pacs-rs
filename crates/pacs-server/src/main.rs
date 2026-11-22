@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
             &archive,
             &audit,
             settings.repair,
-            pacs_server::consistency::GRACE,
+            std::time::Duration::from_secs(settings.grace),
             &mut std::io::stdout(),
         )
         .await?;
