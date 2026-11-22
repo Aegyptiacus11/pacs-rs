@@ -326,6 +326,16 @@ pub struct Settings {
     #[arg(long, env = "PACS_DIMSE_CAPABILITIES", value_delimiter = ',')]
     pub dimse_capabilities: Vec<pacs_dimse::Capabilities>,
 
+    /// A C-STORE's data set larger than this many bytes is written to disk as it arrives
+    /// (PACS_DIMSE_SPOOL_DIR), so that memory does not grow with it. 0: kept in memory.
+    #[arg(long, env = "PACS_DIMSE_SPOOL_FROM", default_value_t = 64 << 20)]
+    pub dimse_spool_from: usize,
+
+    /// Where those data sets are written; the system's temporary folder unless set. Checked
+    /// at start when pacs-rs listens for DIMSE.
+    #[arg(long, env = "PACS_DIMSE_SPOOL_DIR")]
+    pub dimse_spool_dir: Option<PathBuf>,
+
     /// Accept associations only from the AE titles of PACS_DIMSE_REMOTES.
     #[arg(long, env = "PACS_DIMSE_KNOWN_CALLERS_ONLY", default_value_t = false)]
     pub dimse_known_callers_only: bool,
@@ -849,6 +859,29 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
             );
         }
         config.capabilities.push(capabilities.clone());
+    }
+    if settings.dimse_spool_from > 0 {
+        let dir = settings
+            .dimse_spool_dir
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        if settings.dimse_listen.is_some() {
+            // a folder that cannot take a file would end the association of the first large
+            // C-STORE: said now, not then
+            tempfile::Builder::new()
+                .prefix("pacs-spool-check-")
+                .tempfile_in(&dir)
+                .with_context(|| {
+                    format!(
+                        "PACS_DIMSE_SPOOL_DIR ({}) cannot take a file; set it to a folder that can, or PACS_DIMSE_SPOOL_FROM=0",
+                        dir.display()
+                    )
+                })?;
+        }
+        config.spool = Some(pacs_dimse::SpoolTo {
+            dir,
+            from_bytes: settings.dimse_spool_from,
+        });
     }
     let tls = dimse_tls::open(settings, config.remotes.iter().any(|remote| remote.secure))?;
     config.tls = tls.listener;

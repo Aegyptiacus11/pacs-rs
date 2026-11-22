@@ -2065,3 +2065,41 @@ fn capabilities_name_an_ae_title_of_pacs_rs_once() {
         assert!(error.contains(said), "{capabilities}: {error}");
     }
 }
+
+/// Large C-STOREs are spooled to the system's temporary folder unless told otherwise; a
+/// folder that cannot take a file stops the start of a server that listens for DIMSE, and
+/// `PACS_DIMSE_SPOOL_FROM=0` keeps every data set in memory.
+#[test]
+fn the_spool_is_checked_at_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let config =
+        dimse_config(&settings_in(dir.path(), &["--dimse-listen", "127.0.0.1:0"])).unwrap();
+    let spool = config.spool.unwrap();
+    assert_eq!(spool.from_bytes, 64 << 20);
+    assert_eq!(spool.dir, std::env::temp_dir());
+    let nowhere = dir.path().join("no such folder");
+    let error = dimse_config(&settings_in(
+        dir.path(),
+        &[
+            "--dimse-listen",
+            "127.0.0.1:0",
+            "--dimse-spool-dir",
+            nowhere.to_str().unwrap(),
+        ],
+    ))
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("PACS_DIMSE_SPOOL_DIR"),
+        "{error:#}"
+    );
+    // not listening: nothing to check
+    assert!(
+        dimse_config(&settings_in(
+            dir.path(),
+            &["--dimse-spool-dir", nowhere.to_str().unwrap()]
+        ))
+        .is_ok()
+    );
+    let off = dimse_config(&settings_in(dir.path(), &["--dimse-spool-from", "0"])).unwrap();
+    assert!(off.spool.is_none());
+}
