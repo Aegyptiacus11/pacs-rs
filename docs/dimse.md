@@ -102,6 +102,36 @@ both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE 
 into a project shows there de-identified. The order is in [the hospital interfaces
 plan](interop.md).
 
+## Forwarding by rule
+
+`PACS_FORWARD` sends what arrives on to other AEs, as a hospital routes a scanner's studies
+to a viewer or a research archive, without anyone asking each time. A rule is a destination,
+one of `PACS_DIMSE_MOVE_DESTINATIONS` by its id, and after a colon what a study must be to go
+there:
+
+```bash
+PACS_DIMSE_REMOTES=viewer=VIEWER@10.0.0.5:104,research=RESEARCH@10.0.0.9:104
+PACS_DIMSE_MOVE_DESTINATIONS=viewer,research
+PACS_FORWARD='viewer,research:Modality=CT;StudyDescription=*LIVER*|*HEPAT*'
+```
+
+The first rule sends every study to the viewer, the second the CT studies of the liver to
+the research archive. A key is matched as a search matches it (PS3.4 C.2.2.2): a value, or a
+wild card with `*` and `?`, person names without regard to case; values joined by `|` are
+alternatives, and every key of a rule must be met. The keys are those the index keeps:
+PatientID, PatientName, AccessionNumber, StudyDescription, StudyID, ReferringPhysicianName;
+Modality and SeriesDescription, met by one series of the study, the same one for both; and
+Project, the [project](de-identification.md) the study came in through. A rule that cannot be read,
+or whose destination is not one studies may be sent to, stops the start with the reason.
+
+A study goes once it has been quiet for `PACS_FORWARD_AFTER` seconds (30), no instance of it
+stored since, so that a scanner's study is sent whole rather than slice by slice. The index
+notes it with the instance, in the same write, so a study stored is forwarded even when the
+server stops before it is, and of several servers on one index only one sends it. Each
+destination it meets gets a job of sending (`/jobs`, `Type` `C-STORE`),
+taken up again after a restart like any other. A study that takes in instances later is
+forwarded again, whole; the remote AE keeps what it already has.
+
 ## Being retrieved from
 
 A viewer or a workstation has pacs-rs send it a study in one of two ways, on the Patient
