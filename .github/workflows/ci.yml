@@ -168,6 +168,17 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo test -p pacs-dimse --test interop --locked -- --ignored
 
+      # docs/backup.md as written: a running server backed up, restored, and checked
+      - name: Backup and restore
+        env:
+          PACS_TEST_PG_CONTAINER: pg
+          PACS_TEST_PG_URL: postgres://postgres:test@127.0.0.1:15432
+          PACS_TEST_S3_ENDPOINT: http://127.0.0.1:18333
+        run: |
+          cargo build -p pacs-server --locked
+          scripts/backup-restore.sh sqlite
+          scripts/backup-restore.sh postgres
+
       - name: Container logs
         if: failure()
         run: for c in pg pacs-pg-tls s3 ref rauthy; do echo "== $c"; docker logs --tail 50 "$c"; done
