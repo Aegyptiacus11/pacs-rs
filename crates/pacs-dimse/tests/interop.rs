@@ -541,6 +541,7 @@ async fn move_to(
     pacs_dimse::move_studies(
         remote,
         &AeTitle::new("PACSRS").unwrap(),
+        None,
         studies,
         &AeTitle::new(destination).unwrap(),
         Duration::from_secs(5),
@@ -646,6 +647,7 @@ async fn pacs_rs_pulls_from_pynetdicom() {
     let outcome = pacs_dimse::move_studies(
         &remote,
         &AeTitle::new("PACSRS").unwrap(),
+        None,
         &[series.study_uid()],
         &AeTitle::new("PACSRS").unwrap(),
         Duration::from_secs(5),
