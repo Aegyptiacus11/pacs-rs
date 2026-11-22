@@ -16,6 +16,7 @@
 //! | `remote` | everything about remote AEs (`/modalities`, `/jobs`), which reaches the hospital's PACS |
 //! | `delete` | deleting patients, studies, series and instances |
 //! | `users` | managing users and roles (`/users`, `/roles`) |
+//! | `identities` | the studies as stored; without it, only the studies of projects, de-identified |
 //!
 //! Roles are in the index and can be changed (`/roles`). A server starts with four: `reader`
 //! (read), `editor` (read, write, remote), `manager` (also delete) and `admin` (everything).
@@ -80,15 +81,19 @@ pub enum Permission {
     Remote,
     Delete,
     Users,
+    /// The studies as stored, with the patient's identity; without it, only the studies of
+    /// projects, de-identified.
+    Identities,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 5] = [
+    pub const ALL: [Permission; 6] = [
         Permission::Read,
         Permission::Write,
         Permission::Remote,
         Permission::Delete,
         Permission::Users,
+        Permission::Identities,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -98,6 +103,7 @@ impl Permission {
             Permission::Remote => "remote",
             Permission::Delete => "delete",
             Permission::Users => "users",
+            Permission::Identities => "identities",
         }
     }
 }
@@ -110,7 +116,9 @@ impl FromStr for Permission {
             .into_iter()
             .find(|permission| permission.as_str() == text)
             .ok_or_else(|| {
-                format!("{text:?} is not a permission: read, write, remote, delete or users")
+                format!(
+                    "{text:?} is not a permission: read, write, remote, delete, users or identities"
+                )
             })
     }
 }
@@ -702,9 +710,9 @@ fn client_refused(error: &'static str, detail: &str) -> Response {
 /// Before every route: let open requests through, refuse the others without a valid access
 /// token (401) or with a role that does not allow them (403). The answer to a request that
 /// came with a valid token carries its [`SignedIn`], refused or not.
-/// Rights per project: for an account limited to some projects, the request is marked with
-/// the account ([`SeenBy`], which bounds every read of the archive behind the guard) and
-/// with its projects ([`Limited`]). Read from the index at each request, so a change holds
+/// Rights per project: for an account limited to some projects, or whose role does not have
+/// `identities`, the request is marked with the account ([`SeenBy`], which bounds every
+/// read of the archive behind the guard), and a limited one with its projects ([`Limited`]). Read from the index at each request, so a change holds
 /// at once, for tokens already given out too.
 ///
 /// The answer is the mark, for an account that is limited: the guard leaves it on the
@@ -721,12 +729,23 @@ async fn bound(
         .account_projects(&key)
         .await
         .map_err(|e| internal("reading an account's projects", e))?;
-    let Some(projects) = projects else {
+    // read from the role now, not from the token: taking `identities` away holds at the
+    // account's next request
+    let role = login
+        .index
+        .role(&account.role)
+        .await
+        .map_err(|e| internal("reading a role", e))?;
+    let identities = account.permissions.contains(&Permission::Identities)
+        && role.is_some_and(|role| role.permissions.iter().any(|p| p == "identities"));
+    if projects.is_none() && identities {
         return Ok(None);
-    };
+    }
     let seen = SeenBy(key);
     request.extensions_mut().insert(seen.clone());
-    request.extensions_mut().insert(Limited(projects));
+    if let Some(projects) = projects {
+        request.extensions_mut().insert(Limited(projects));
+    }
     Ok(Some(seen))
 }
 
@@ -1529,11 +1548,12 @@ async fn delete_role(
 }
 
 /// What a client's token may hold: everything but the accounts.
-const CLIENT_SCOPES: [Permission; 4] = [
+const CLIENT_SCOPES: [Permission; 5] = [
     Permission::Read,
     Permission::Write,
     Permission::Remote,
     Permission::Delete,
+    Permission::Identities,
 ];
 
 /// Client secrets are 32 random bytes in hexadecimal: nothing to guess, so a plain SHA-256
