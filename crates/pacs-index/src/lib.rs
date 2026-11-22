@@ -392,6 +392,9 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+/// How long a SQLite connection waits for the write lock: a minute.
+pub const SQLITE_BUSY_TIMEOUT_MS: u32 = 60_000;
+
 impl Index {
     /// Open (creating if needed) the index in a SQLite file.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -415,6 +418,22 @@ impl Index {
         if url.starts_with("sqlite::memory:") {
             // each in-memory connection would be a database of its own
             options = options.max_connections(1);
+        }
+        if dialect == Dialect::Sqlite {
+            // Writers queue for the one write lock (BEGIN IMMEDIATE, [`Index::begin_write`]):
+            // each waits up to this long, not the driver's 5 s, which many uploads at once
+            // on a slow disk can pass, answering "database is locked" for a write that only
+            // had to wait its turn.
+            options = options.after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}"
+                    )))
+                    .execute(connection)
+                    .await?;
+                    Ok(())
+                })
+            });
         }
         let pool = options.connect(url).await?;
         if dialect == Dialect::Sqlite && !url.starts_with("sqlite::memory:") {
