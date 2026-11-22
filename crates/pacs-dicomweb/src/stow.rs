@@ -100,16 +100,12 @@ async fn store_parts(
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        None | Some("application/dicom") => false,
-        Some("application/dicom+json") => true,
-        Some("application/dicom+xml") => {
-            return Err(unsupported(
-                "metadata in DICOM XML is not taken: send it as application/dicom+json, or the files as application/dicom",
-            ));
-        }
+        None | Some("application/dicom") => None,
+        Some("application/dicom+json") => Some(Metadata::Json),
+        Some("application/dicom+xml") => Some(Metadata::Xml),
         Some(t) => {
             return Err(unsupported(format!(
-                "the parts are application/dicom, or application/dicom+json with bulk data, not {t}"
+                "the parts are application/dicom, or DICOM JSON or XML with bulk data, not {t}"
             )));
         }
     };
@@ -125,9 +121,13 @@ async fn store_parts(
     let mut stored: Vec<Ingested> = Vec::new();
     let mut failed: Vec<Failure> = Vec::new();
     // with metadata, each instance is made a file first, then stored as one sent whole
-    let parts = if metadata {
+    let parts = if let Some(metadata) = metadata {
+        let made = match metadata {
+            Metadata::Json => from_metadata(&parts)?,
+            Metadata::Xml => from_xml_metadata(&parts),
+        };
         let mut files = Vec::new();
-        for made in from_metadata(&parts)? {
+        for made in made {
             match made {
                 Ok(file) => files.push(multipart::Part {
                     content_type: None,
@@ -261,7 +261,7 @@ fn unsupported(message: impl Into<String>) -> ApiError {
         (status = 400, description = "The body is not `multipart/related` with parts.", body = Problem),
         (status = 403, description = "The account is limited to some projects: it stores nothing over HTTP.", body = Problem),
         (status = 409, description = "None was stored; the answer names each failure with its reason.", body = Attributes, content_type = "application/dicom+json"),
-        (status = 415, description = "The parts are neither `application/dicom` nor DICOM JSON with bulk data; DICOM XML is not taken.", body = Problem)
+        (status = 415, description = "The parts are neither `application/dicom` nor DICOM JSON or XML with bulk data.", body = Problem)
     )
 )]
 pub(crate) async fn store(
@@ -287,7 +287,7 @@ pub(crate) async fn store(
         (status = 400, description = "The body is not `multipart/related` with parts.", body = Problem),
         (status = 403, description = "The account is limited to some projects: it stores nothing over HTTP.", body = Problem),
         (status = 409, description = "None was stored; the answer names each failure with its reason.", body = Attributes, content_type = "application/dicom+json"),
-        (status = 415, description = "The parts are neither `application/dicom` nor DICOM JSON with bulk data; DICOM XML is not taken.", body = Problem)
+        (status = 415, description = "The parts are neither `application/dicom` nor DICOM JSON or XML with bulk data.", body = Problem)
     )
 )]
 pub(crate) async fn store_in_study(
@@ -327,6 +327,45 @@ fn part_named<'a>(parts: &'a [multipart::Part], uri: &str) -> Option<&'a multipa
             .as_deref()
             .is_some_and(|at| at == uri || at.ends_with(uri) || uri.ends_with(at))
     })
+}
+
+/// How a metadata request gives its data sets.
+#[derive(Clone, Copy)]
+enum Metadata {
+    /// One first part of DICOM JSON, an array of them (PS3.18 F.2).
+    Json,
+    /// One part of the Native DICOM Model a data set (PS3.19 A.1).
+    Xml,
+}
+
+/// Each instance of a request of XML metadata made a Part 10 file, or why it could not be:
+/// each `application/dicom+xml` part read as DICOM JSON ([`crate::xml`]), the other parts its
+/// bulk data. A part that is not the Native DICOM Model fails, named by nothing.
+fn from_xml_metadata(parts: &[multipart::Part]) -> Vec<Result<Bytes, Failure>> {
+    let is_xml = |part: &multipart::Part| {
+        part.content_type
+            .as_deref()
+            .and_then(MediaType::parse)
+            .is_some_and(|m| {
+                matches!(
+                    m.essence.as_str(),
+                    "application/dicom+xml" | "application/xml"
+                )
+            })
+    };
+    let bulk: Vec<multipart::Part> = parts.iter().filter(|p| !is_xml(p)).cloned().collect();
+    parts
+        .iter()
+        .filter(|p| is_xml(p))
+        .map(|part| match crate::xml::native_to_json(&part.content) {
+            Ok(data_set) => instance_file(data_set, &bulk),
+            Err(_) => Err(Failure {
+                sop_class_uid: None,
+                sop_instance_uid: None,
+                reason: reason::CANNOT_UNDERSTAND,
+            }),
+        })
+        .collect()
 }
 
 /// Each instance of a metadata request made a Part 10 file, or why it could not be.

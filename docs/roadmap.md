@@ -73,7 +73,6 @@ more than 16 bits in deflated frames. What remains:
 | Item | Done when |
 |---|---|
 | Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
-| DICOMweb to the end | STOW-RS of DICOM XML metadata (`includefield`, rendered instances and frames, BulkDataURI in metadata, STOW-RS of DICOM JSON with bulk data are built) |
 | Conformance Statement | the PS3.2 document, generated from what the code negotiates |
 
 ## 5. The research workflow

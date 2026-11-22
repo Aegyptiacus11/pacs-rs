@@ -24,6 +24,7 @@ pub mod schema;
 mod scope;
 mod stow;
 mod wado;
+mod xml;
 
 pub use error::ApiError;
 
