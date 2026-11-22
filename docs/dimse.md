@@ -77,8 +77,15 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   stored, indexed; an instance sent again is kept as first stored unless
   `PACS_OVERWRITE_INSTANCES` is set, and answered Success either way.
 - **AE titles**: `PACS_DIMSE_AE_TITLE` and any `PACS_DIMSE_EXTRA_AE_TITLES` are accepted on one
-  port with one set of presentation contexts; another called AE title is rejected (PS3.8 reason
-  7), and with `PACS_DIMSE_KNOWN_CALLERS_ONLY` so is a calling AE title not among the remotes
+  port; another called AE title is rejected (PS3.8 reason 7). Each offers every service in every
+  transfer syntax unless `PACS_DIMSE_CAPABILITIES` gives it its own: `RESEARCH=storage+verification/uncompressed`
+  makes RESEARCH a storage destination that takes uncompressed images only, its other
+  presentation contexts rejected at negotiation (PS3.8 9.3.3.2: abstract syntax, or transfer
+  syntaxes, not supported) while pacs-rs's own AE title on the same port offers everything.
+  The services are `verification`, `storage`, `find`, `move` and `get`, each with its SOP
+  classes; the called AE title is read from the association request before it is negotiated.
+  Over [TLS](#dimse-over-tls) that request is inside the session, so every service is
+  negotiated and the AE title's own capabilities hold per operation instead, answered `0122`; and with `PACS_DIMSE_KNOWN_CALLERS_ONLY` so is a calling AE title not among the remotes
   (reason 3). Over `PACS_DIMSE_MAX_ASSOCIATIONS`, an association is rejected as transient,
   local limit exceeded, for the sender to retry.
 

@@ -2036,3 +2036,32 @@ async fn a_rule_that_cannot_work_stops_the_start() {
         .to_string();
     assert!(error.contains("not a remote AE"), "{error}");
 }
+
+/// Capabilities are for pacs-rs's own AE titles, each once.
+#[test]
+fn capabilities_name_an_ae_title_of_pacs_rs_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dimse_config(&settings_in(
+        dir.path(),
+        &[
+            "--dimse-extra-ae-titles",
+            "RESEARCH",
+            "--dimse-capabilities",
+            "RESEARCH=storage+verification/uncompressed",
+        ],
+    ))
+    .unwrap();
+    assert_eq!(config.capabilities.len(), 1);
+    for (capabilities, said) in [
+        ("ELSEWHERE=storage", "not one of pacs-rs's AE titles"),
+        ("PACSRS=storage,PACSRS=find", "twice"),
+    ] {
+        let error = dimse_config(&settings_in(
+            dir.path(),
+            &["--dimse-capabilities", capabilities],
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(said), "{capabilities}: {error}");
+    }
+}

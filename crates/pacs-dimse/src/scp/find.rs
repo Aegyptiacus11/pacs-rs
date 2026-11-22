@@ -1018,11 +1018,6 @@ async fn prepare(
     Ok((query, matches, ts))
 }
 
-/// Whether `sop_class` is a Query/Retrieve Information Model pacs-rs answers C-FIND on.
-pub(super) fn is_find(sop_class: &str) -> bool {
-    Model::of_find(sop_class).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

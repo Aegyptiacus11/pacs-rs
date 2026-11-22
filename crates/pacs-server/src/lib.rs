@@ -319,6 +319,13 @@ pub struct Settings {
     #[arg(long, env = "PACS_DIMSE_MOVE_DESTINATIONS", value_delimiter = ',')]
     pub dimse_move_destinations: Vec<String>,
 
+    /// What some of pacs-rs's AE titles offer, comma-separated, each
+    /// `AE_TITLE=service+service[/syntax|syntax]`: the services among verification, storage,
+    /// find, move and get, the transfer syntaxes by UID or `uncompressed`. An AE title not
+    /// listed offers every service in every transfer syntax.
+    #[arg(long, env = "PACS_DIMSE_CAPABILITIES", value_delimiter = ',')]
+    pub dimse_capabilities: Vec<pacs_dimse::Capabilities>,
+
     /// Accept associations only from the AE titles of PACS_DIMSE_REMOTES.
     #[arg(long, env = "PACS_DIMSE_KNOWN_CALLERS_ONLY", default_value_t = false)]
     pub dimse_known_callers_only: bool,
@@ -816,6 +823,33 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
     config.timeout = std::time::Duration::from_secs(settings.dimse_timeout.max(1));
     config.move_timeout = std::time::Duration::from_secs(settings.dimse_move_timeout.max(1));
     config.max_data_set_bytes = settings.max_upload_bytes;
+    let own: Vec<pacs_dimse::AeTitle> = std::iter::once(config.ae_title.clone())
+        .chain(config.extra_ae_titles.iter().cloned())
+        .chain(
+            projects::project_configs(settings)?
+                .into_iter()
+                .map(|p| p.ae_title),
+        )
+        .collect();
+    for capabilities in &settings.dimse_capabilities {
+        if !own.contains(&capabilities.ae_title) {
+            bail!(
+                "PACS_DIMSE_CAPABILITIES names {}, which is not one of pacs-rs's AE titles (PACS_DIMSE_AE_TITLE, PACS_DIMSE_EXTRA_AE_TITLES, a project's)",
+                capabilities.ae_title
+            );
+        }
+        if config
+            .capabilities
+            .iter()
+            .any(|known| known.ae_title == capabilities.ae_title)
+        {
+            bail!(
+                "PACS_DIMSE_CAPABILITIES names {} twice",
+                capabilities.ae_title
+            );
+        }
+        config.capabilities.push(capabilities.clone());
+    }
     let tls = dimse_tls::open(settings, config.remotes.iter().any(|remote| remote.secure))?;
     config.tls = tls.listener;
     for remote in config.remotes.iter_mut().filter(|remote| remote.secure) {
