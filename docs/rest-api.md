@@ -38,5 +38,13 @@ its `Labels`, and `/tools/find` keeps the resources with all, any or none of tho
 (`Labels`, `LabelsConstraint`). Putting and taking them off needs `write`; a deletion takes
 the labels of what it removed.
 
-Not yet: metadata, modifications; searching series or instances by anything but their UID or
-their labels.
+**Metadata** are values under names on a patient, study, series or instance
+(`GET /{level}/{id}/metadata`, `?expand` for the values; `GET`, `PUT` with the value as the body,
+and `DELETE` on `/{level}/{id}/metadata/{name}`). The server's own are read only: `LastUpdate`
+at every level, and of an instance `IndexInSeries`, `ReceptionDate`, `SopClassUid` and
+`TransferSyntax`. A user's name is 1 to 64 ASCII letters, digits, `_` and `-`, its value UTF-8
+text of at most 64 KiB. Setting and removing them needs `write`; a deletion takes the
+metadata of what it removed.
+
+Not yet: modifications; searching series or instances by anything but their UID or their
+labels.

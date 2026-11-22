@@ -161,6 +161,75 @@ Permission, when the login is on: `write`.
 | 400 | [Error](#error) | Not a label. |
 | 404 | nothing | No such resource; the body is empty. |
 
+### `GET /patients/{id}/metadata`
+
+The metadata of a patient: their names, or names and values.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `expand` | query, optional | boolean | Names and values instead of names. `?expand` alone means true. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | object | The names, sorted, or an object of names and values. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /patients/{id}/metadata/{name}`
+
+One metadata of a patient, as text.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `text/plain` | The value, as text. |
+| 404 | nothing | No such resource, or no such metadata; the body is empty. |
+
+### `PUT /patients/{id}/metadata/{name}`
+
+Set a user's metadata of a patient: the body is the value.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+| the body | | `text/plain` | The value: UTF-8 text, at most 64 KiB. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | Set; the body is empty. |
+| 400 | [Error](#error) | Not a name, or not a value. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /patients/{id}/metadata/{name}`
+
+Remove a user's metadata of a patient. Removing one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has no such metadata now; the body is empty. |
+| 400 | [Error](#error) | Not a name. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
+| 404 | nothing | No such resource; the body is empty. |
+
 ### `GET /patients/{id}/series`
 
 A patient's series, of every study.
@@ -357,6 +426,75 @@ Permission, when the login is on: `write`.
 | 400 | [Error](#error) | Not a label. |
 | 404 | nothing | No such resource; the body is empty. |
 
+### `GET /studies/{id}/metadata`
+
+The metadata of a study: their names, or names and values.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `expand` | query, optional | boolean | Names and values instead of names. `?expand` alone means true. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | object | The names, sorted, or an object of names and values. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /studies/{id}/metadata/{name}`
+
+One metadata of a study, as text.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `text/plain` | The value, as text. |
+| 404 | nothing | No such resource, or no such metadata; the body is empty. |
+
+### `PUT /studies/{id}/metadata/{name}`
+
+Set a user's metadata of a study: the body is the value.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+| the body | | `text/plain` | The value: UTF-8 text, at most 64 KiB. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | Set; the body is empty. |
+| 400 | [Error](#error) | Not a name, or not a value. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /studies/{id}/metadata/{name}`
+
+Remove a user's metadata of a study. Removing one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has no such metadata now; the body is empty. |
+| 400 | [Error](#error) | Not a name. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
+| 404 | nothing | No such resource; the body is empty. |
+
 ### `GET /studies/{id}/patient`
 
 The patient of a study.
@@ -517,6 +655,75 @@ Permission, when the login is on: `write`.
 |---|---|---|
 | 200 | nothing | It does not have the label; the body is empty. |
 | 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /series/{id}/metadata`
+
+The metadata of a series: their names, or names and values.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `expand` | query, optional | boolean | Names and values instead of names. `?expand` alone means true. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | object | The names, sorted, or an object of names and values. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /series/{id}/metadata/{name}`
+
+One metadata of a series, as text.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `text/plain` | The value, as text. |
+| 404 | nothing | No such resource, or no such metadata; the body is empty. |
+
+### `PUT /series/{id}/metadata/{name}`
+
+Set a user's metadata of a series: the body is the value.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+| the body | | `text/plain` | The value: UTF-8 text, at most 64 KiB. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | Set; the body is empty. |
+| 400 | [Error](#error) | Not a name, or not a value. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /series/{id}/metadata/{name}`
+
+Remove a user's metadata of a series. Removing one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has no such metadata now; the body is empty. |
+| 400 | [Error](#error) | Not a name. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
 | 404 | nothing | No such resource; the body is empty. |
 
 ### `GET /series/{id}/patient`
@@ -689,6 +896,75 @@ Permission, when the login is on: `write`.
 |---|---|---|
 | 200 | nothing | It does not have the label; the body is empty. |
 | 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /instances/{id}/metadata`
+
+The metadata of an instance: their names, or names and values.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `expand` | query, optional | boolean | Names and values instead of names. `?expand` alone means true. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | object | The names, sorted, or an object of names and values. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /instances/{id}/metadata/{name}`
+
+One metadata of an instance, as text.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `text/plain` | The value, as text. |
+| 404 | nothing | No such resource, or no such metadata; the body is empty. |
+
+### `PUT /instances/{id}/metadata/{name}`
+
+Set a user's metadata of an instance: the body is the value.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+| the body | | `text/plain` | The value: UTF-8 text, at most 64 KiB. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | Set; the body is empty. |
+| 400 | [Error](#error) | Not a name, or not a value. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /instances/{id}/metadata/{name}`
+
+Remove a user's metadata of an instance. Removing one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `name` | path | string | The metadata's name. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has no such metadata now; the body is empty. |
+| 400 | [Error](#error) | Not a name. |
+| 403 | [Error](#error) | A name of the server's own metadata. |
 | 404 | nothing | No such resource; the body is empty. |
 
 ### `GET /instances/{id}/patient`
