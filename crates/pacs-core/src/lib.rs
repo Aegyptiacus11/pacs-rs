@@ -20,6 +20,7 @@ pub mod metrics;
 pub mod public_ids;
 #[cfg(feature = "real")]
 pub mod real;
+pub mod render;
 pub mod transcode;
 pub mod wire;
 
