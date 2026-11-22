@@ -1718,7 +1718,7 @@ dependencies = [
 [[package]]
 name = "jwt-sessions"
 version = "0.1.0"
-source = "git+https://github.com/Aegyptiacus11/jwt-sessions-rs?rev=d805c17161271cb9e612ccecda08ec00c25b7d4c#d805c17161271cb9e612ccecda08ec00c25b7d4c"
+source = "git+https://github.com/Aegyptiacus11/jwt-sessions-rs?rev=24aba3ee63c98dcfe3cb09f15498408ccf908e1e#24aba3ee63c98dcfe3cb09f15498408ccf908e1e"
 dependencies = [
  "axum",
  "base64 0.23.1",
