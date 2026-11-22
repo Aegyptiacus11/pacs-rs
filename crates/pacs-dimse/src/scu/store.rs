@@ -1,5 +1,6 @@
 //! C-STORE SCU (PS3.4 Annex B; PS3.7 9.1.1, 9.3.1): instances of the archive sent to another
-//! AE, as the sub-operations of a C-MOVE or of a C-GET are.
+//! AE, as the sub-operations of a C-MOVE or of a C-GET are, or on pacs-rs's own initiative
+//! ([`send_instances`]).
 //!
 //! An instance goes in the transfer syntax it is stored in when the peer accepts that one,
 //! and otherwise decoded to an uncompressed one the peer accepts: every AE takes Implicit VR
@@ -320,6 +321,119 @@ impl Sender {
     pub async fn abort(self) {
         self.link.abort().await;
     }
+}
+
+/// Send `instances` of `archive` to `remote`, as `calling`, on one association: pacs-rs
+/// sending without being asked, from its REST API or by a rule. Each instance sent, refused
+/// or not sent goes to `on_progress` with the counts so far, whose `Break` stops before the
+/// next one; the counts and final status are a retrieval's (PS3.4 C.4.2.1.5-9: Success,
+/// Warning when some failed or warned, Cancel when stopped), and a send of which none
+/// arrived is a Failure, A702, with the instances that failed named.
+pub async fn send_instances<F>(
+    remote: &RemoteAe,
+    calling: &AeTitle,
+    archive: &pacs_archive::Archive,
+    instances: &[pacs_index::InstanceEntry],
+    timeout: Duration,
+    mut on_progress: F,
+) -> Result<super::retrieve::MoveOutcome, super::retrieve::MoveError>
+where
+    F: FnMut(super::retrieve::Progress) -> std::ops::ControlFlow<()>,
+{
+    use super::retrieve::{MoveError, MoveOutcome, Progress};
+
+    if instances.is_empty() {
+        return Err(MoveError::Request("no instance to send".into()));
+    }
+    let stored: Vec<(String, String)> = instances
+        .iter()
+        .map(|entry| {
+            (
+                entry.sop_class_uid.clone(),
+                entry.transfer_syntax_uid.clone(),
+            )
+        })
+        .collect();
+    let mut sender = Sender::open(remote, calling, &stored, timeout, None).await?;
+    let total = u16::try_from(instances.len()).unwrap_or(u16::MAX);
+    let (mut completed, mut failed, mut warning) = (0u16, 0u16, 0u16);
+    let mut failed_instances = Vec::new();
+    let mut holds = true;
+    let mut cancelled = false;
+    for entry in instances {
+        let outcome = if holds {
+            match archive.file(entry).await {
+                Ok(file) => sender
+                    .send(
+                        file,
+                        &entry.sop_class_uid,
+                        &entry.sop_instance_uid,
+                        &entry.transfer_syntax_uid,
+                    )
+                    .await
+                    .map_err(|e| {
+                        holds = e.association_holds();
+                        e.to_string()
+                    }),
+                Err(e) => Err(format!("its file cannot be read: {e}")),
+            }
+        } else {
+            Err("the association is over".into())
+        };
+        match outcome {
+            Ok(status) if status == Status::SUCCESS => completed += 1,
+            Ok(_) => warning += 1,
+            Err(reason) => {
+                tracing::warn!(instance = %entry.sop_instance_uid, remote = %remote.id, reason, "C-STORE: an instance was not stored");
+                failed += 1;
+                failed_instances.push(entry.sop_instance_uid.clone());
+            }
+        }
+        let done = completed + failed + warning;
+        let progress = Progress {
+            remaining: Some(total.saturating_sub(done)),
+            completed: Some(completed),
+            failed: Some(failed),
+            warning: Some(warning),
+        };
+        if done < total && on_progress(progress).is_break() {
+            cancelled = true;
+            break;
+        }
+    }
+    if holds {
+        sender.release().await;
+    } else {
+        sender.abort().await;
+    }
+    let done = completed + failed + warning;
+    let progress = Progress {
+        remaining: cancelled.then(|| total.saturating_sub(done)),
+        completed: Some(completed),
+        failed: Some(failed),
+        warning: Some(warning),
+    };
+    let status = if cancelled {
+        Status::CANCEL
+    } else if failed == 0 && warning == 0 {
+        Status::SUCCESS
+    } else if completed == 0 && warning == 0 {
+        return Err(MoveError::Failed {
+            status: Status::UNABLE_TO_PERFORM_SUB_OPERATIONS,
+            comment: Some(format!("{} stored none of the instances", remote.id)),
+            destination: remote.ae_title.to_string(),
+            progress,
+            failed_instances,
+        });
+    } else {
+        Status::SUB_OPERATIONS_WARNING
+    };
+    Ok(MoveOutcome {
+        status,
+        progress,
+        failed_instances,
+        cancelled,
+    })
 }
 
 #[cfg(test)]
