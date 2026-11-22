@@ -18,9 +18,11 @@ What holds across the requests:
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
 then moves the files to the [trash](trash.md) (or removes them, with `PACS_TRASH_DAYS=0`), so
 the index never names a missing file. A file that cannot be moved or removed is logged and
-left in the store, unindexed. Uploads wait while a deletion runs, so a file sent
-again during a deletion is not lost. This holds within one server process: two pacs-rs
-processes on one index do not coordinate yet.
+left in the store, unindexed. Each stored file has a key of its own
+(its UIDs and a random part), so a deletion removes only the files it took out of the index,
+never one an upload is storing meanwhile; and the index decides inside one transaction whether
+an upload adds, replaces (the replaced file then goes) or finds the instance there already.
+This holds across [several servers on one Postgres index](running.md#several-servers).
 
 **The [login](login.md) is off by default:** anyone who can reach the REST API can then delete.
 Turn it on, or keep the server on a private network (see [Running](running.md)).
