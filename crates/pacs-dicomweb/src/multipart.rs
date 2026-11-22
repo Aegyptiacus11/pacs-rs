@@ -44,6 +44,8 @@ pub fn body(boundary: &str, parts: impl IntoIterator<Item = (String, Bytes)>) ->
 pub struct Part {
     /// The part's Content-Type, if it has one.
     pub content_type: Option<String>,
+    /// Its Content-Location: what a BulkDataURI of STOW-RS metadata names it by.
+    pub content_location: Option<String>,
     pub content: Bytes,
 }
 
@@ -89,13 +91,17 @@ pub fn parse(boundary: &str, body: &Bytes) -> Result<Vec<Part>, ParseError> {
             .find(&body[content_start..])
             .map(|i| content_start + i)
             .ok_or_else(|| ParseError("no closing boundary".into()))?;
-        parts.push(Part {
-            content_type: headers.split("\r\n").find_map(|line| {
+        let header = |wanted: &str| {
+            headers.split("\r\n").find_map(|line| {
                 let (name, value) = line.split_once(':')?;
                 name.trim()
-                    .eq_ignore_ascii_case("content-type")
+                    .eq_ignore_ascii_case(wanted)
                     .then(|| value.trim().to_owned())
-            }),
+            })
+        };
+        parts.push(Part {
+            content_type: header("content-type"),
+            content_location: header("content-location"),
             content: body.slice(content_start..content_end),
         });
         at = content_end + next_delimiter.len();

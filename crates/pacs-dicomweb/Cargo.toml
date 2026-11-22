@@ -25,6 +25,8 @@ pacs-index = { path = "../pacs-index" }
 pacs-store = { path = "../pacs-store" }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+dicom-json = "0.10.0"
+base64 = "0.23.1"
 
 [dev-dependencies]
 http-body-util = "0.1.5"

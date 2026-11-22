@@ -1564,3 +1564,183 @@ async fn large_binary_values_are_bulk_data() {
     let json = get(&app, &path, "application/dicom+json").await;
     assert_eq!(json.status, StatusCode::NOT_ACCEPTABLE);
 }
+
+/// A multipart/related body of parts with a Content-Type and a Content-Location each.
+fn located_body(boundary: &str, parts: &[(&str, Option<&str>, Vec<u8>)]) -> Bytes {
+    let mut body = Vec::new();
+    for (content_type, location, content) in parts {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Type: {content_type}\r\n").as_bytes(),
+        );
+        if let Some(location) = location {
+            body.extend_from_slice(format!("Content-Location: {location}\r\n").as_bytes());
+        }
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    Bytes::from(body)
+}
+
+async fn stow_metadata(app: &Router, parts: &[(&str, Option<&str>, Vec<u8>)]) -> Reply {
+    let boundary = multipart::new_boundary();
+    let content_type =
+        format!(r#"multipart/related; type="application/dicom+json"; boundary={boundary}"#);
+    send(
+        app,
+        "POST",
+        "/studies",
+        &[("content-type", &content_type)],
+        located_body(&boundary, parts),
+    )
+    .await
+}
+
+/// STOW-RS of metadata and bulk data (PS3.18 10.5.1.2.2): the real CT's data set in DICOM
+/// JSON with its pixel data and its large private value in parts of their own, and the real
+/// MR's JPEG-LS codestream in an image/jls part, each stored as the file it was.
+#[tokio::test]
+async fn metadata_and_bulk_data_are_stored_as_files() {
+    let app = app().await;
+    let ct = RealSeries::new(991, 1);
+    let original = pacs_core::Instance::from_bytes(&ct.slice_bytes(0)).unwrap();
+    let mut metadata = original.metadata_json().unwrap();
+    metadata["00431029"] = serde_json::json!({"vr": "OB", "BulkDataURI": "private/1"});
+    metadata["7FE00010"] = serde_json::json!({"vr": "OW", "BulkDataURI": "http://client/pixels/1"});
+    let element = |instance: &pacs_core::Instance, tag| {
+        instance
+            .object
+            .element(tag)
+            .unwrap()
+            .to_bytes()
+            .unwrap()
+            .to_vec()
+    };
+    let pixel_data = dicom_dictionary_std::tags::PIXEL_DATA;
+    let private = dicom_core::Tag(0x0043, 0x1029);
+    let reply = stow_metadata(
+        &app,
+        &[
+            (
+                "application/dicom+json",
+                None,
+                serde_json::to_vec(&[&metadata]).unwrap(),
+            ),
+            (
+                "application/octet-stream",
+                Some("http://client/pixels/1"),
+                element(&original, pixel_data),
+            ),
+            (
+                "application/octet-stream",
+                Some("private/1"),
+                element(&original, private),
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    let stored = get(
+        &app,
+        &format!(
+            "/studies/{}/series/{}/instances/{}",
+            ct.study_uid(),
+            ct.series_uid(),
+            ct.instance_uid(0)
+        ),
+        "multipart/related; type=\"application/dicom\"; transfer-syntax=*",
+    )
+    .await;
+    let back = pacs_core::Instance::from_bytes(&stored.parts()[0].content).unwrap();
+    assert_eq!(element(&back, pixel_data), element(&original, pixel_data));
+    assert_eq!(element(&back, private), element(&original, private));
+
+    // a JPEG-LS codestream, encapsulated as it came
+    let mr = pacs_core::Instance::from_bytes(&pacs_core::real::file_bytes(
+        "MR_small_jpeg_ls_lossless.dcm",
+    ))
+    .unwrap();
+    let mut metadata = mr.metadata_json().unwrap();
+    metadata["7FE00010"] = serde_json::json!({"vr": "OB", "BulkDataURI": "frame"});
+    let codestream = mr.frame(1).unwrap().bytes;
+    let reply = stow_metadata(
+        &app,
+        &[
+            (
+                "application/dicom+json",
+                None,
+                serde_json::to_vec(&[&metadata]).unwrap(),
+            ),
+            ("image/jls", Some("frame"), codestream),
+        ],
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    let key = &mr.key;
+    let stored = get(
+        &app,
+        &format!(
+            "/studies/{}/series/{}/instances/{}",
+            key.study_instance_uid, key.series_instance_uid, key.sop_instance_uid
+        ),
+        "multipart/related; type=\"application/dicom\"; transfer-syntax=*",
+    )
+    .await;
+    let back = pacs_core::Instance::from_bytes(&stored.parts()[0].content).unwrap();
+    assert_eq!(back.key.transfer_syntax_uid, "1.2.840.10008.1.2.4.80");
+    let shape = mr.shape().unwrap();
+    assert_eq!(
+        back.native_frame(1, shape).unwrap(),
+        mr.native_frame(1, shape).unwrap()
+    );
+
+    // a BulkDataURI no part has: that instance fails, named
+    let mut metadata = original.metadata_json().unwrap();
+    metadata["7FE00010"] = serde_json::json!({"vr": "OW", "BulkDataURI": "nowhere"});
+    let reply = stow_metadata(
+        &app,
+        &[(
+            "application/dicom+json",
+            None,
+            serde_json::to_vec(&[&metadata]).unwrap(),
+        )],
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    let failed = &reply.json()["00081198"]["Value"][0];
+    assert_eq!(failed["00081197"]["Value"][0], 0xC000);
+    assert_eq!(failed["00081155"]["Value"][0], ct.instance_uid(0));
+
+    // DICOM XML is not taken
+    let boundary = multipart::new_boundary();
+    let xml = send(
+        &app,
+        "POST",
+        "/studies",
+        &[(
+            "content-type",
+            &format!(r#"multipart/related; type="application/dicom+xml"; boundary={boundary}"#),
+        )],
+        located_body(
+            &boundary,
+            &[(
+                "application/dicom+xml",
+                None,
+                b"<NativeDicomModel/>".to_vec(),
+            )],
+        ),
+    )
+    .await;
+    assert_eq!(xml.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
