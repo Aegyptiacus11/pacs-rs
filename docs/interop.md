@@ -84,13 +84,13 @@ Built:
   De-identification Method naming the profile and each override (E.1.1); new File Meta Information.
 - Quarantine instead of Clean Pixel Data (E.3.1), Clean Structured Content and Clean Graphics: Secondary
   Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
-  SCREEN SAVE.
+  SCREEN SAVE; kept apart in `PACS_QUARANTINE`, or refused.
+- No staging on disk: the identified instance is held in memory while it is de-identified, never stored.
 
-Changing in 0.16.0: the profile is applied when a role without `identities` reads, not on the way in.
-Studies are stored once, as received, so there is no re-identification key to keep; what the profile
-would quarantine stays in the archive, hidden from those roles. Not planned: the Encrypted Attributes
-Sequence, Retain Safe Private, Clean Structured Content, Clean Graphics, Clean Pixel Data and a run on
-the MIDI-B validation data.
+Not planned: the re-identification key (the Encrypted Attributes Sequence of E.1.1, or an encrypted
+table), since the originals stay in the hospital's archive; Retain Safe Private, Clean Structured Content,
+Clean Graphics and Clean Pixel Data, whose cases are quarantined; a review of the quarantine in the web
+interface; a run on the MIDI-B validation data.
 
 ## Rules for the SCP side (step 8)
 
