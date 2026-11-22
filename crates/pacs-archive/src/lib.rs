@@ -118,6 +118,13 @@ pub struct Archive {
     spooled_header_max: usize,
 }
 
+/// Where an instance is stored: its project, and whether it is a result made on a
+/// project's de-identified copy, to be written back.
+struct Where {
+    project: Option<String>,
+    result: bool,
+}
+
 /// Room in the archive's read limit, for as long as it is held.
 #[derive(Debug)]
 pub struct Admitted(#[allow(dead_code)] OwnedSemaphorePermit);
@@ -200,11 +207,19 @@ impl Archive {
         self.overwrite
     }
 
-    /// The same archive for what comes in through `project`: its studies are recorded as
-    /// that project's, and an instance for a study of another project, or of none, is
-    /// refused.
+    /// The same archive for what comes in through `project`, its de-identified copies: their
+    /// studies are recorded as that project's, and an instance for a study of another
+    /// project, or of none, is refused.
     pub fn for_project(mut self, project: &str) -> Self {
         self.project = Some(project.to_owned());
+        self
+    }
+
+    /// The same archive for what comes in as received, in no project: what
+    /// [`Archive::for_project`] set is undone. A result for a project's copy still goes
+    /// to that project.
+    pub fn as_received(mut self) -> Self {
+        self.project = None;
         self
     }
 
@@ -271,7 +286,7 @@ impl Archive {
         let _reading = self.admit(&bytes).await?;
         let _writing = self.writes.read().await;
         let instance = Instance::from_bytes(&bytes)?;
-        let project = self.project_of(&instance.key.study_instance_uid).await?;
+        let place = self.project_of(&instance.key.study_instance_uid).await?;
         // whose it is, for who accounts for what was stored (see `observed`)
         let patient = (
             instance.string(tags::PATIENT_ID),
@@ -314,7 +329,7 @@ impl Archive {
         let size = bytes.len();
         let hash = sha256_hex(&bytes);
         let object_key = self.store.put_new(&instance.key, bytes).await?;
-        self.index_stored(instance, project, object_key, size, hash, noted)
+        self.index_stored(instance, place, object_key, size, hash, noted)
             .await
     }
 
@@ -323,7 +338,7 @@ impl Archive {
     async fn index_stored(
         &self,
         instance: Instance,
-        project: Option<String>,
+        place: Where,
         object_key: String,
         size: usize,
         hash: String,
@@ -331,7 +346,8 @@ impl Archive {
     ) -> Result<Ingested, IngestError> {
         let new = NewInstance::new(&instance, object_key.clone(), size).map(|new| {
             new.with_sha256(hash)
-                .in_project(project.as_deref())
+                .in_project(place.project.as_deref())
+                .a_result(place.result)
                 .keeping_existing(!self.overwrite)
                 .forwarded(self.forwarding)
         });
@@ -416,7 +432,7 @@ impl Archive {
             return self.ingest(Bytes::from(bytes)).await;
         }
         let instance = self.spooled_header(path).await?;
-        let project = self.project_of(&instance.key.study_instance_uid).await?;
+        let place = self.project_of(&instance.key.study_instance_uid).await?;
         let _writing = self.writes.read().await;
         let patient = (
             instance.string(tags::PATIENT_ID),
@@ -458,7 +474,7 @@ impl Archive {
             .map(|b| format!("{b:02x}"))
             .collect();
         let size = usize::try_from(size).unwrap_or(usize::MAX);
-        self.index_stored(instance, project, object_key, size, hash, noted)
+        self.index_stored(instance, place, object_key, size, hash, noted)
             .await
     }
 
@@ -467,16 +483,25 @@ impl Archive {
     /// that project as they come, from anyone who sees the study; everything else goes
     /// where this archive stores ([`Archive::for_project`]), and nothing through an archive
     /// limited to an account ([`Archive::limited_to`]).
-    async fn project_of(&self, study: &str) -> Result<Option<String>, IngestError> {
+    ///
+    /// [`Where::result`] says whether it is such a result: what comes through
+    /// [`Archive::for_project`] is the project's own copy, not one.
+    async fn project_of(&self, study: &str) -> Result<Where, IngestError> {
         if let Some(Some(project)) = self.index.study_project(study).await?
             && self.index.original_study(&project, study).await?.is_some()
         {
-            return Ok(Some(project));
+            return Ok(Where {
+                result: self.project.is_none(),
+                project: Some(project),
+            });
         }
         if self.index.account().is_some() {
             return Err(IngestError::Limited);
         }
-        Ok(self.project.clone())
+        Ok(Where {
+            project: self.project.clone(),
+            result: false,
+        })
     }
 
     /// `instance` as it is to be stored: compressed when it is native and compression is
