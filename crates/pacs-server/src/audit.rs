@@ -13,7 +13,7 @@
 //! | Event | When |
 //! |---|---|
 //! | Application Activity | the server starts, and stops |
-//! | User Authentication, Login | `POST /auth/login` and a tool's `POST /auth/token`, accepted or refused |
+//! | User Authentication, Login | `POST /auth/login`, a sign-in through the OpenID provider (`GET /auth/oidc/callback`) and a tool's `POST /auth/token`, accepted or refused |
 //! | User Authentication, Logout | `POST /auth/logout` and `/auth/logout-all` |
 //! | Security Alert, User Security Attributes Changed | a user or a tool is made, changed or removed; a password is changed |
 //! | Security Alert, Security Roles Changed | a role is made, changed or removed |
@@ -1152,6 +1152,27 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             &trail.process,
             outcome_of(status),
             said(),
+        ));
+    } else if let Some(signed) = response.extensions().get::<crate::auth::ProviderSignIn>() {
+        // a sign-in through the OpenID provider: a redirect either way, so its outcome is
+        // what the callback found, not the status
+        let mut who = claimed(&trail, &signed.login, true, ip);
+        if signed.accepted {
+            who = who.named(signed.login.clone());
+        }
+        let outcome = if signed.accepted {
+            Outcome::Success
+        } else {
+            Outcome::MinorFailure
+        };
+        audit.record(events::user_authentication(
+            &trail.source,
+            now,
+            true,
+            who,
+            &trail.process,
+            outcome,
+            signed.detail.clone(),
         ));
     } else if posted("/auth/logout") || posted("/auth/logout-all") {
         // a session ended by its cookie alone does not say whose it was
