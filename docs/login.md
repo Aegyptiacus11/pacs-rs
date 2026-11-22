@@ -296,9 +296,10 @@ there.
 - **The attempt is recorded.** The answer is 404, and the [audit
   trail](audit.md#what-is-recorded) names the account and the study it asked for.
 - **Writing.** Measurements go on the studies it sees. Deleting takes only what it sees: of
-  a patient, the studies in its projects, and the others stay. It stores nothing over HTTP
-  (403): what it sent would be in no project, out of its own sight. A study comes into a
-  project through the project's AE title.
+  a patient, the studies in its projects, and the others stay. Over HTTP it stores only
+  [results](de-identification.md) for its projects' studies: anything else would be in no
+  project, out of its own sight (403 for an upload, the instance's failure in a STOW-RS
+  answer). A study comes into a project through the project's AE title.
 - **Remote archives.** With the `remote` permission it may search them, and bring studies in
   only with `"Project"` naming one of its own (403 otherwise). A search there shows the
   hospital's patients, identified: `remote` is not for an account that must not see them.
