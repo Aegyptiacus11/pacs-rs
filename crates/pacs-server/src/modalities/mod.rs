@@ -5,6 +5,7 @@
 
 pub(crate) mod jobs;
 mod retrieve;
+pub(crate) mod retriever;
 pub mod schema;
 mod studies;
 
@@ -24,11 +25,12 @@ use utoipa_axum::routes;
 
 use schema::{Echo, Error, RemoteAes};
 
-/// What the routes share: the DIMSE configuration, whether pacs-rs listens for DIMSE
-/// (without which nothing moved to it can arrive), and the moves running in the background.
+/// What the routes share: the DIMSE configuration, what retrievals go through, and the
+/// jobs running in the background.
 pub(crate) struct Remotes {
     pub config: Config,
-    pub receiving: bool,
+    /// What a move or a get from a remote AE goes through.
+    pub retriever: Arc<retriever::Retriever>,
     /// Project names and their AE titles, the destinations a move may name.
     pub projects: Vec<(String, AeTitle)>,
     /// Where the jobs are kept.
@@ -54,15 +56,14 @@ pub(crate) fn api() -> OpenApi {
 }
 
 pub(crate) fn router(
-    config: Config,
-    receiving: bool,
+    retriever: Arc<retriever::Retriever>,
     projects: Vec<(String, AeTitle)>,
     index: pacs_index::Index,
 ) -> Router {
     described()
         .with_state(Arc::new(Remotes {
-            config,
-            receiving,
+            config: retriever.config.clone(),
+            retriever,
             projects,
             index,
         }))

@@ -1,12 +1,13 @@
-//! Moves run in the background: `GET /jobs`, `GET /jobs/{id}` with the C-MOVE's counts as its
-//! Pending responses bring them (PS3.4 C.4.2.1.6-9), and `POST /jobs/{id}/cancel`, which
-//! sends C-CANCEL-MOVE-RQ.
+//! Retrievals run in the background: `GET /jobs`, `GET /jobs/{id}` with the counts of the
+//! C-MOVE or C-GET as its Pending responses bring them (PS3.4 C.4.2.1.6-9, C.4.3.1.3), and
+//! `POST /jobs/{id}/cancel`, which sends C-CANCEL-MOVE-RQ or C-CANCEL-GET-RQ. A job starts as
+//! a C-MOVE and its `Type` becomes `C-GET` when it gives way to one ([`super::retriever`]).
 //!
 //! Jobs are kept in the index, not in memory. A running move shows it is alive with a
 //! heartbeat; one silent for [`STALE_AFTER`] is a stopped server's, and any server on the
 //! index takes it up again ([`take_up_stale`]), from the start: what had arrived stays, and
 //! comes again as already stored. A move taken up three times, or whose remote AE is no longer
-//! configured, or that can no longer arrive here, ends as a failure that says why. A cancel
+//! configured, ends as a failure that says why. A cancel
 //! goes through the index too: the move reads it within a quarter of a second, and stops
 //! with the remote AE's next response.
 
@@ -20,12 +21,13 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use pacs_dimse::{AeTitle, Config, MoveError, MoveOutcome, Progress, StatusClass};
+use pacs_dimse::{AeTitle, MoveError, MoveOutcome, Progress, StatusClass};
 use pacs_index::{Index, StoredJob};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
 
 use super::Remotes;
+use super::retriever::{Method, Retriever};
 
 /// Takes up a job left running at most this many times; the next start ends it.
 pub const MAX_RESTARTS: i64 = 3;
@@ -136,14 +138,14 @@ async fn finish(index: &Index, id: i64, result: Result<MoveOutcome, MoveError>) 
 /// a cancel asked there comes back: the move's own callback cannot wait on the index.
 async fn run(
     index: Index,
-    config: Arc<Config>,
+    retriever: Arc<Retriever>,
     id: i64,
     remote_id: String,
     patient_id: Option<String>,
     studies: Vec<String>,
     destination: AeTitle,
 ) {
-    let Some(remote) = config.remote(&remote_id) else {
+    let Some(remote) = retriever.config.remote(&remote_id) else {
         let error = format!("the remote AE {remote_id} is not configured");
         if let Err(e) = index
             .finish_job(id, "Failure", &json!({}), &[], Some(&error))
@@ -179,30 +181,33 @@ async fn run(
             }
         })
     };
-    let result = pacs_dimse::move_studies(
-        remote,
-        &config.ae_title,
-        patient_id.as_deref(),
-        &studies,
-        &destination,
-        config.timeout,
-        config.move_timeout,
-        |progress| {
-            if let Ok(mut latest) = latest.lock() {
-                *latest = Some(progress);
-            }
-            if cancel.load(Ordering::Relaxed) {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        },
-    )
-    .await;
+    let (result, method) = retriever
+        .retrieve(
+            remote,
+            patient_id.as_deref(),
+            &studies,
+            &destination,
+            |progress| {
+                if let Ok(mut latest) = latest.lock() {
+                    *latest = Some(progress);
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+        )
+        .await;
     done.store(true, Ordering::Relaxed);
     ticker.abort();
+    if method == Method::Get
+        && let Err(e) = index.job_kind(id, method.name()).await
+    {
+        tracing::error!(job = id, error = %e, "a job's operation was not written to the index");
+    }
     if let Err(e) = &result {
-        tracing::info!(remote = %remote_id, job = id, error = %e, "C-MOVE failed");
+        tracing::info!(remote = %remote_id, job = id, error = %e, operation = method.name(), "a retrieval failed");
     }
     finish(&index, id, result).await;
 }
@@ -239,7 +244,7 @@ pub(super) async fn spawn_move(
     };
     tokio::spawn(run(
         remotes.index.clone(),
-        Arc::new(remotes.config.clone()),
+        remotes.retriever.clone(),
         id,
         remote_id,
         patient_id,
@@ -260,14 +265,13 @@ const SWEEP_EVERY: Duration = Duration::from_secs(10);
 
 /// Take up the jobs a stopped server left running, its heartbeat silent for `stale_after`:
 /// each is claimed first, so that of several servers on one index only one takes it, then
-/// starts again or ends as a failure that says why it cannot. `receiving`: whether this server
-/// listens for DIMSE, without which nothing moved here can arrive. How many start again.
+/// starts again or ends as a failure that says why it cannot. How many start again.
 pub async fn take_up_stale(
     index: &Index,
-    config: Arc<Config>,
-    receiving: bool,
+    retriever: Arc<Retriever>,
     stale_after: Duration,
 ) -> Result<usize, pacs_index::Error> {
+    let config = &retriever.config;
     let before = now_ms() - i64::try_from(stale_after.as_millis()).unwrap_or(i64::MAX);
     let mut resumed = 0;
     for job in index.stale_jobs(before).await? {
@@ -285,11 +289,6 @@ pub async fn take_up_stale(
                 "the server restarted, and the remote AE {} is no longer configured",
                 job.remote
             ))
-        } else if !receiving {
-            Some(
-                "the server restarted without DIMSE (PACS_DIMSE_LISTEN): nothing moved can arrive"
-                    .into(),
-            )
         } else {
             None
         };
@@ -326,7 +325,7 @@ pub async fn take_up_stale(
                 tracing::info!(job = job.id, remote = %job.remote, restarts, "a job left running is taken up again");
                 tokio::spawn(run(
                     index.clone(),
-                    config.clone(),
+                    retriever.clone(),
                     job.id,
                     job.remote.clone(),
                     job.patient_id.clone(),
@@ -343,10 +342,10 @@ pub async fn take_up_stale(
 /// Look for jobs left running every ten seconds, for the life of the server: one stopped by
 /// this server's own restart is taken up once its heartbeat is stale, as is one of another
 /// server on the same index.
-pub fn spawn_sweeps(index: Index, config: Arc<Config>, receiving: bool) {
+pub fn spawn_sweeps(index: Index, retriever: Arc<Retriever>) {
     tokio::spawn(async move {
         loop {
-            match take_up_stale(&index, config.clone(), receiving, STALE_AFTER).await {
+            match take_up_stale(&index, retriever.clone(), STALE_AFTER).await {
                 Ok(0) => {}
                 Ok(resumed) => tracing::info!(resumed, "moves left running taken up again"),
                 Err(error) => {

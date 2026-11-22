@@ -471,6 +471,8 @@ async fn move_scp(
     let port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
+        // one association: a C-GET after it finds no one
+        drop(listener);
         let mut association = ServerAssociationOptions::new()
             .ae_title("QRSCP")
             .with_abstract_syntax(STUDY_ROOT_MOVE)
@@ -589,8 +591,8 @@ async fn move_to_an_archive_that_does_not_know_pacs_rs_is_502() {
     );
 }
 
-/// Without a DIMSE port nothing moved could arrive: 409, before any association. A body
-/// without valid UIDs is 400, an unknown id 404.
+/// A body without valid UIDs is 400, an unknown id 404; without a DIMSE port the
+/// retrieval is a C-GET, and an AE that cannot be reached is 502.
 #[tokio::test]
 async fn move_refuses_what_cannot_work() {
     let dir = tempfile::tempdir().unwrap();
@@ -601,7 +603,9 @@ async fn move_refuses_what_cannot_work() {
         move_request("qr", r#"{"StudyInstanceUID": "2.25.1"}"#),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    // not listening: a C-GET, to an AE that cannot be reached
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["Message"], "C-GET from qr failed");
     assert_eq!(
         send(&app, move_request("nobody", "{}")).await.0,
         StatusCode::NOT_FOUND
@@ -1519,12 +1523,12 @@ async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
 const STALE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A server stopped with a move running, as the next start finds it: the job is in the
-/// index, still running. Its settings, and the index of a server opened on them.
+/// index, still running. Its settings, and the archive of a server opened on them.
 async fn left_running(
     dir: &Path,
     remotes: &str,
     listen: bool,
-) -> (Settings, pacs_index::Index, i64) {
+) -> (Settings, pacs_archive::Archive, i64) {
     let mut args = vec!["--dimse-remotes", remotes];
     if listen {
         args.extend(["--dimse-listen", "127.0.0.1:0"]);
@@ -1542,7 +1546,7 @@ async fn left_running(
         .execute(index.pool())
         .await
         .unwrap();
-    (settings, index, id)
+    (settings, archive, id)
 }
 
 /// A restart takes up a move that was running: it starts again, counts again, and ends as
@@ -1552,8 +1556,8 @@ async fn a_restart_takes_up_a_move_that_was_running() {
     let (port, _scp) = slow_move_scp(3, 50).await;
     let dir = tempfile::tempdir().unwrap();
     let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
-    let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
-    assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 1);
+    let (settings, archive, id) = left_running(dir.path(), &remotes, true).await;
+    assert_eq!(resume_jobs(&settings, &archive, STALE).await.unwrap(), 1);
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
     let job = job_over(&app, &format!("/jobs/{id}")).await;
     assert_eq!(job["State"], "Success", "{job}");
@@ -1564,23 +1568,25 @@ async fn a_restart_takes_up_a_move_that_was_running() {
     // listed as before the restart
     assert_eq!(get(&app, "/jobs").await.1, json!([id.to_string()]));
     // nothing left to take up
-    assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 0);
+    assert_eq!(resume_jobs(&settings, &archive, STALE).await.unwrap(), 0);
 }
 
-/// A move that cannot be taken up ends as a failure that says why: taken up too often, its
-/// remote AE gone from the settings, or nothing able to arrive.
+/// A move that cannot be taken up ends as a failure that says why: taken up too often, or
+/// its remote AE gone from the settings. (Without DIMSE it is still taken up: it can end by
+/// C-GET.)
 #[tokio::test]
 async fn a_move_that_cannot_be_taken_up_fails_saying_why() {
     let dir = tempfile::tempdir().unwrap();
     let reason = async |dir: &Path, remotes: &str, listen: bool, restarts: i64| {
-        let (settings, index, id) = left_running(dir, remotes, listen).await;
+        let (settings, archive, id) = left_running(dir, remotes, listen).await;
+        let index = archive.index().clone();
         sqlx::query("UPDATE jobs SET restarts = $1 WHERE id = $2")
             .bind(restarts)
             .bind(id)
             .execute(index.pool())
             .await
             .unwrap();
-        assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 0);
+        assert_eq!(resume_jobs(&settings, &archive, STALE).await.unwrap(), 0);
         let job = index.job(id).await.unwrap().unwrap();
         assert_eq!(job.state, "Failure");
         assert!(job.finished_ms.is_some());
@@ -1594,8 +1600,6 @@ async fn a_move_that_cannot_be_taken_up_fails_saying_why() {
         gone.contains("remote AE qr is no longer configured"),
         "{gone}"
     );
-    let deaf = reason(&dir.path().join("c"), known, false, 0).await;
-    assert!(deaf.contains("PACS_DIMSE_LISTEN"), "{deaf}");
 }
 
 /// A cancel goes through the index: one asked of a move taken up after a restart stops it.
@@ -1604,8 +1608,8 @@ async fn a_move_taken_up_again_can_be_cancelled() {
     let (port, scp) = slow_move_scp(50, 200).await;
     let dir = tempfile::tempdir().unwrap();
     let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
-    let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
-    resume_jobs(&settings, &index, STALE).await.unwrap();
+    let (settings, archive, id) = left_running(dir.path(), &remotes, true).await;
+    resume_jobs(&settings, &archive, STALE).await.unwrap();
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
     let (status, _) = send(
         &app,
@@ -1627,10 +1631,11 @@ async fn a_live_move_is_left_alone_and_a_stale_one_is_taken_up_once() {
     let (port, _scp) = slow_move_scp(2, 20).await;
     let dir = tempfile::tempdir().unwrap();
     let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
-    let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
+    let (settings, archive, id) = left_running(dir.path(), &remotes, true).await;
+    let index = archive.index().clone();
     // alive again: another server beats for it
     index.job_heartbeat(id, None).await.unwrap();
-    assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 0);
+    assert_eq!(resume_jobs(&settings, &archive, STALE).await.unwrap(), 0);
     assert_eq!(index.job(id).await.unwrap().unwrap().restarts, 0);
     // silent again; two servers look at once
     sqlx::query("UPDATE jobs SET heartbeat_ms = 0 WHERE id = $1")
@@ -1639,9 +1644,148 @@ async fn a_live_move_is_left_alone_and_a_stale_one_is_taken_up_once() {
         .await
         .unwrap();
     let (a, b) = tokio::join!(
-        resume_jobs(&settings, &index, STALE),
-        resume_jobs(&settings, &index, STALE)
+        resume_jobs(&settings, &archive, STALE),
+        resume_jobs(&settings, &archive, STALE)
     );
     assert_eq!(a.unwrap() + b.unwrap(), 1);
     assert_eq!(index.job(id).await.unwrap().unwrap().restarts, 1);
+}
+
+/// A hospital archive, a pacs-rs serving `series` as HOSPITAL: it answers the retrievals
+/// of RESEARCH, and sends by C-MOVE to no one, so a C-MOVE to RESEARCH is refused A801.
+async fn hospital_of(dir: &Path, series: &[&RealSeries]) -> u16 {
+    let settings = settings_in(
+        dir,
+        &[
+            "--dimse-ae-title",
+            "HOSPITAL",
+            "--dimse-remotes",
+            "research=RESEARCH@127.0.0.1:1",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    for one in series {
+        for bytes in one.all_bytes() {
+            archive.ingest(bytes.into()).await.unwrap();
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(serve_dimse(
+        listener,
+        archive,
+        dimse_config(&settings).unwrap(),
+        Vec::new(),
+        std::future::pending(),
+    ));
+    port
+}
+
+/// An archive that does not know pacs-rs as a C-MOVE destination: the move gives way to a
+/// C-GET, the study comes back on pacs-rs's own association and is stored and indexed,
+/// the answer says which operation brought it, and the audit trail has the instances
+/// received from the hospital. A job gives way the same, and says so in its `Type`.
+#[tokio::test]
+async fn a_refused_move_gives_way_to_a_get() {
+    use pacs_server::app_with_audit;
+    use pacs_server::audit::open_audit;
+
+    let first = RealSeries::new(941, 3).with_patient("DOE^JANE", None);
+    let second = RealSeries::new(942, 2).with_patient("ROE^RICHARD", None);
+    let hospital_dir = tempfile::tempdir().unwrap();
+    let port = hospital_of(hospital_dir.path(), &[&first, &second]).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("hospital=HOSPITAL@127.0.0.1:{port}");
+    let settings = audited_settings(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-listen",
+            "127.0.0.1:0",
+            "--dimse-ae-title",
+            "RESEARCH",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let app = app_with_audit(
+        archive.clone(),
+        &settings,
+        None,
+        open_audit(&settings).unwrap(),
+    )
+    .unwrap();
+    let body = format!(r#"{{"StudyInstanceUID": "{}"}}"#, first.study_uid());
+    let (status, answer) = send(&app, move_request("hospital", &body)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    described::<Moved>(&answer);
+    assert_eq!(answer["Method"], "C-GET");
+    assert_eq!(answer["Status"], "Success");
+    assert_eq!(
+        (answer["Completed"].as_u64(), answer["Failed"].as_u64()),
+        (Some(3), Some(0))
+    );
+    let arrived = archive
+        .index()
+        .instances(&first.study_uid(), &first.series_uid(), None)
+        .await
+        .unwrap();
+    assert_eq!(arrived.len(), 3);
+    // the request's own line (Begin Transferring), and the instances received
+    let lines = audit_lines(dir.path(), 2).await;
+    let received = lines
+        .iter()
+        .find(|line| line.contains("UserID=\"HOSPITAL\"") && line.contains("110104"))
+        .unwrap_or_else(|| panic!("no line of the instances received:\n{lines:#?}"));
+    has(
+        received,
+        &[
+            "<EventID csd-code=\"110104\"",
+            &format!("ParticipantObjectID=\"{}\"", first.study_uid()),
+            "NumberOfInstances=\"3\"",
+        ],
+    );
+
+    // as a job
+    let body = format!(
+        r#"{{"StudyInstanceUID": "{}", "Asynchronous": true}}"#,
+        second.study_uid()
+    );
+    let (status, started) = send(&app, move_request("hospital", &body)).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let job = job_over(&app, started["Path"].as_str().unwrap()).await;
+    assert_eq!(job["State"], "Success", "{job}");
+    assert_eq!(job["Type"], "C-GET");
+    assert_eq!(job["Completed"], 2);
+}
+
+/// Without a DIMSE port nothing moved could arrive, so pacs-rs asks by C-GET at once.
+#[tokio::test]
+async fn without_dimse_a_study_is_got() {
+    let series = RealSeries::new(951, 2);
+    let hospital_dir = tempfile::tempdir().unwrap();
+    let port = hospital_of(hospital_dir.path(), &[&series]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("hospital=HOSPITAL@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &["--dimse-remotes", &remotes, "--dimse-ae-title", "RESEARCH"],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let app = app(archive.clone(), &settings).unwrap();
+    let body = format!(r#"{{"StudyInstanceUID": "{}"}}"#, series.study_uid());
+    let (status, answer) = send(&app, move_request("hospital", &body)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["Method"], "C-GET");
+    assert_eq!(answer["Completed"], 2);
+    assert_eq!(
+        archive
+            .index()
+            .instances(&series.study_uid(), &series.series_uid(), None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
