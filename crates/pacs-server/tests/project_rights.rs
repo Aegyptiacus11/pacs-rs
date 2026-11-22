@@ -942,3 +942,53 @@ async fn a_request_outside_the_account_s_projects_is_in_the_audit_trail() {
     );
     assert!(audited(&s, &mut seen).is_empty());
 }
+
+/// The trash holds what every project deleted: an account limited to projects deletes
+/// within its own, into the trash, but cannot list, restore or empty it; an account that
+/// is not limited can.
+#[tokio::test]
+async fn the_trash_is_not_for_an_account_limited_to_projects() {
+    let s = server().await;
+    let app = &s.app;
+    let liver = ids(&s.liver);
+    let (_, token) = user(app, &s.admin, "second", "admin", json!(["liver-2026"])).await;
+    let deleted = delete(app, &format!("/studies/{}", liver.study), &token).await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+
+    let listed = get(app, "/trash", &token).await;
+    assert_eq!(listed.status, StatusCode::FORBIDDEN, "{}", listed.body);
+    assert!(
+        listed.body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("limited to projects")
+    );
+    let restore = post(app, "/trash/1/restore", &token, json!({})).await;
+    assert_eq!(restore.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        delete(app, "/trash/1", &token).await.status,
+        StatusCode::FORBIDDEN
+    );
+
+    // the administrator, limited to nothing, puts it back into its project
+    let entries = get(app, "/trash", &s.admin).await;
+    assert_eq!(entries.status, StatusCode::OK);
+    let id = entries.body[0]["ID"].as_str().unwrap().to_owned();
+    let mut from = audited(&s, &mut 0).len();
+    let restored = post(app, &format!("/trash/{id}/restore"), &s.admin, json!({})).await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.body);
+    // the audit trail has the instances back as received (DICOM Instances Transferred)
+    let lines = audited(&s, &mut from);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("110104") && l.contains(&liver.study_uid)),
+        "{lines:#?}"
+    );
+    assert_eq!(
+        get(app, &format!("/studies/{}", liver.study), &token)
+            .await
+            .status,
+        StatusCode::OK
+    );
+}
