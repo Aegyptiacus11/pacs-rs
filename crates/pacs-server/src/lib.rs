@@ -27,6 +27,7 @@ pub mod audit_forward;
 mod audit_routes;
 pub mod auth;
 pub mod auth_schema;
+pub mod checks;
 mod dimse_tls;
 pub mod limits;
 mod modalities;
@@ -103,6 +104,16 @@ pub struct Settings {
     /// 1 if not, and do nothing else: a health check for images without a shell or curl.
     #[arg(long)]
     pub healthcheck: bool,
+
+    /// Check every stored file against the index (its size and SHA-256), say what failed,
+    /// exit 1 if anything did and 0 if not, and do nothing else: see `pacs_server::checks`.
+    #[arg(long)]
+    pub check_files: bool,
+
+    /// Check a stored file against the index again once its last check is this many days old,
+    /// in the background, one file at a time. 0: no scheduled checks.
+    #[arg(long, env = "PACS_CHECK_FILES_DAYS", default_value_t = 30)]
+    pub check_files_days: u64,
 
     /// Origins browsers may call from, comma-separated, or `*`. None by default.
     #[arg(long, env = "PACS_CORS_ORIGINS", value_delimiter = ',')]
@@ -717,6 +728,7 @@ pub fn app_with_audit(
         ));
     let index = archive.index().clone();
     let audit_index = index.clone();
+    let checks = checks::router(archive.clone());
     let dicomweb = pacs_dicomweb::router(
         archive,
         pacs_dicomweb::Config {
@@ -732,6 +744,7 @@ pub fn app_with_audit(
             get(|| async { axum::Json(api::description()) }),
         )
         .merge(rest)
+        .merge(checks)
         .nest(&path, dicomweb);
     if settings.ui {
         if !ui::built() {
