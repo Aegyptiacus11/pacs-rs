@@ -10,10 +10,11 @@ with its parameters and statuses, is in the [reference](api-reference.md#dicomwe
 | `GET .../metadata` (study, series, instance) | DICOM JSON without pixel data |
 | `GET .../instances/{instance}/frames/{list}` | frames as stored or transcoded: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
 | `GET .../instances/{instance}/rendered`, `.../frames/{frame}/rendered` | a frame as a picture, JPEG or PNG ([below](#rendered)) |
+| `GET .../instances/{instance}/bulkdata/{path}` | a value metadata names by a BulkDataURI ([below](#bulk-data)) |
 | `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
 
 Not yet: fuzzy, empty value and multiple value matching ([below](#searching)); JSON/XML +
-bulk data STOW; BulkDataURI in metadata; rendered series and studies, thumbnails.
+bulk data STOW; rendered series and studies, thumbnails.
 
 ## Searching
 
@@ -69,6 +70,15 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
 
 SQLite and Postgres answer the same: one rule in the code decides every match, and the
 database only narrows what it is asked about.
+
+## Bulk data
+
+In metadata, a binary value of more than 1 KiB is not written inline (`InlineBinary`) but named
+by a `BulkDataURI` (PS3.18 8.6.1.3, Annex F.2.6): `.../instances/{instance}/bulkdata/{path}`, the
+path being the element's tag, or the tags and item numbers from 0 down to it inside sequences
+(`00400275/0/00081032`). That address answers the value's bytes, `multipart/related;
+type="application/octet-stream"`, or alone for `Accept: application/octet-stream`. Smaller values
+stay inline. The pixel data is not in metadata, and is retrieved by its frames.
 
 ## Rendered
 
