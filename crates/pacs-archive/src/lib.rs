@@ -356,8 +356,13 @@ impl Archive {
             return (instance, bytes);
         }
         let compressed = tokio::task::spawn_blocking(move || {
+            // JPEG-LS codes 16 bits at most; beyond, each frame is deflated
+            let target = match instance.shape() {
+                Ok(shape) if shape.bits_allocated > 16 => codec::DEFLATED_FRAMES,
+                _ => JPEG_LS_LOSSLESS,
+            };
             let result = instance
-                .transcoded(JPEG_LS_LOSSLESS, true)
+                .transcoded(target, true)
                 .map_err(|e| e.to_string())
                 .and_then(|file| {
                     let parsed = Instance::from_bytes(&file).map_err(|e| e.to_string())?;
