@@ -11,10 +11,10 @@ with its parameters and statuses, is in the [reference](api-reference.md#dicomwe
 | `GET .../instances/{instance}/frames/{list}` | frames as stored or transcoded: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
 | `GET .../instances/{instance}/rendered`, `.../frames/{frame}/rendered` | a frame as a picture, JPEG or PNG ([below](#rendered)) |
 | `GET .../instances/{instance}/bulkdata/{path}` | a value metadata names by a BulkDataURI ([below](#bulk-data)) |
-| `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts, or DICOM JSON with bulk data ([below](#storing-metadata-and-bulk-data)) |
+| `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts, or DICOM JSON or XML with bulk data ([below](#storing-metadata-and-bulk-data)) |
 
-Not yet: fuzzy, empty value and multiple value matching ([below](#searching)); STOW-RS of
-DICOM XML; rendered series and studies, thumbnails.
+Not yet: fuzzy, empty value and multiple value matching ([below](#searching)); rendered
+series and studies, thumbnails.
 
 ## Searching
 
@@ -94,7 +94,10 @@ sent whole, with the same answers.
   fragment, and an instance of several frames in one compressed part fails.
 - **Other bulk data**, at any depth in sequences, is put in place; a BulkDataURI no part has
   fails that instance (Failure Reason C000), the others are stored.
-- DICOM XML metadata (`application/dicom+xml`) is not taken: 415.
+- **DICOM XML** (`type="application/dicom+xml"`, the Native DICOM Model of PS3.19 A.1): one
+  part a data set instead of the JSON array, the other parts its bulk data, named by the `uri`
+  of `BulkData`; read as the same DICOM JSON and stored the same way. A part that is not the
+  model fails, the others are stored.
 
 ## Rendered
 
