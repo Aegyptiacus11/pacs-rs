@@ -99,3 +99,43 @@ async fn only_the_latest_finished_jobs_are_kept_and_running_ones_always() {
         assert!(!kept.contains(&finished[4]) && kept.contains(&finished[5]));
     }
 }
+
+/// A study noted for forwarding with its instance is taken out once quiet, by one caller,
+/// and noted again by its next instance.
+#[tokio::test]
+async fn a_quiet_study_is_taken_out_for_forwarding_once() {
+    use pacs_core::real::RealSeries;
+    for index in common::indexes().await {
+        let series = RealSeries::new(81, 2);
+        let instance = |slice| {
+            let bytes = series.slice_bytes(slice);
+            let instance = pacs_core::Instance::from_bytes(&bytes).unwrap();
+            pacs_index::NewInstance::new(&instance, format!("k{slice}"), bytes.len())
+                .unwrap()
+                .forwarded(true)
+        };
+        let other = RealSeries::new(82, 1);
+        let unforwarded = {
+            let bytes = other.slice_bytes(0);
+            let instance = pacs_core::Instance::from_bytes(&bytes).unwrap();
+            pacs_index::NewInstance::new(&instance, "o".into(), bytes.len()).unwrap()
+        };
+        index.record(&instance(0)).await.unwrap();
+        index.record(&unforwarded).await.unwrap();
+        // not quiet yet
+        assert!(index.claim_forwards(0).await.unwrap().is_empty());
+        let (a, b) = tokio::join!(
+            index.claim_forwards(i64::MAX),
+            index.claim_forwards(i64::MAX)
+        );
+        let mut taken = a.unwrap();
+        taken.extend(b.unwrap());
+        assert_eq!(taken, [series.study_uid()]);
+        // the next instance notes it again
+        index.record(&instance(1)).await.unwrap();
+        assert_eq!(
+            index.claim_forwards(i64::MAX).await.unwrap(),
+            [series.study_uid()]
+        );
+    }
+}

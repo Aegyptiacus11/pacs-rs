@@ -110,6 +110,8 @@ pub struct Archive {
     layouts: Arc<Mutex<frames::Layouts>>,
     /// Days a deletion keeps its files in the trash; 0: deleted at once ([`trash`]).
     trash_days: u64,
+    /// Note each study that takes in an instance, for the rules that forward studies.
+    forwarding: bool,
 }
 
 /// Room in the archive's read limit, for as long as it is held.
@@ -132,6 +134,7 @@ impl Archive {
             frames_alone_from: frames::DEFAULT_FRAMES_ALONE_FROM,
             layouts: Arc::default(),
             trash_days: 0,
+            forwarding: false,
         }
     }
 
@@ -204,6 +207,13 @@ impl Archive {
             index: self.index.limited_to(account),
             ..self.clone()
         }
+    }
+
+    /// Note, with each instance it takes in, that its study is to be forwarded by a rule
+    /// once quiet ([`pacs_index::Index::claim_forwards`]).
+    pub fn with_forwarding(mut self, forwarding: bool) -> Self {
+        self.forwarding = forwarding;
+        self
     }
 
     /// How native pixel data is stored; JPEG-LS lossless unless set otherwise.
@@ -293,6 +303,7 @@ impl Archive {
             new.with_sha256(hash)
                 .in_project(self.project.as_deref())
                 .keeping_existing(!self.overwrite)
+                .forwarded(self.forwarding)
         });
         let new = match new {
             Ok(new) => new,

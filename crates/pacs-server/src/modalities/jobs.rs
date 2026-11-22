@@ -51,7 +51,7 @@ fn count(progress: &Value, name: &str) -> Option<u16> {
         .and_then(|c| u16::try_from(c).ok())
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
@@ -287,44 +287,54 @@ pub(super) async fn spawn_move(
         .into_response()
 }
 
+/// Start a job of sending `studies` to `remote_id`: kept in the index, then run. Its id.
+pub(crate) async fn start_send(
+    index: Index,
+    retriever: Arc<Retriever>,
+    remote_id: String,
+    studies: Vec<String>,
+) -> Result<i64, pacs_index::Error> {
+    let destination = retriever
+        .config
+        .remote(&remote_id)
+        .map(|remote| remote.ae_title.to_string())
+        .unwrap_or_default();
+    let id = index
+        .create_job(SEND, &remote_id, &destination, None, &studies)
+        .await?;
+    tokio::spawn(run(index, retriever, id, remote_id, studies, Work::Send));
+    Ok(id)
+}
+
 /// Send studies as a job; answers at once with its id and path.
 pub(super) async fn spawn_send(
     remotes: Arc<Remotes>,
     remote_id: String,
     studies: Vec<String>,
 ) -> Response {
-    let Some(remote) = remotes.config.remote(&remote_id) else {
-        return RestError::NotFound.into_response();
-    };
-    let id = match remotes
-        .index
-        .create_job(SEND, &remote_id, remote.ae_title.as_str(), None, &studies)
-        .await
-    {
-        Ok(id) => id,
+    let started = start_send(
+        remotes.index.clone(),
+        remotes.retriever.clone(),
+        remote_id,
+        studies,
+    )
+    .await;
+    match started {
+        Ok(id) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"ID": id.to_string(), "Path": format!("/jobs/{id}")})),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "a job could not be written to the index");
-            return RestError::Status {
+            RestError::Status {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
                 message: "the job could not be kept".into(),
                 details: None,
             }
-            .into_response();
+            .into_response()
         }
-    };
-    tokio::spawn(run(
-        remotes.index.clone(),
-        remotes.retriever.clone(),
-        id,
-        remote_id,
-        studies,
-        Work::Send,
-    ));
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({"ID": id.to_string(), "Path": format!("/jobs/{id}")})),
-    )
-        .into_response()
+    }
 }
 
 /// A running job whose heartbeat stopped this long ago is a stopped server's.
