@@ -21,6 +21,7 @@ Where the server listens and how it names itself.
 | Variable | Default | |
 |---|---|---|
 | `PACS_LISTEN` | `127.0.0.1:8080` | address to listen on |
+| `PACS_METRICS_LISTEN` | none | serve [metrics](running.md#metrics) for Prometheus at `/metrics` on this address, apart from the rest, e.g. `127.0.0.1:9100` |
 | `PACS_DICOMWEB_PATH` | `/dicom-web` | where the DICOMweb root is served |
 | `PACS_BASE_URL` | from the request | public URL of the DICOMweb root, for Retrieve URLs |
 | `PACS_CORS_ORIGINS` | none | comma-separated origins, or `*` |
