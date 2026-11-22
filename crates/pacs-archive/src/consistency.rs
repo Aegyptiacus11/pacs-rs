@@ -10,7 +10,9 @@ use bytes::Bytes;
 use pacs_index::{AuditedStudy, Level, StoredFile};
 use pacs_store::StoredObject;
 
-use crate::{Archive, CheckError, Outcome};
+use pacs_index::{NewInstance, Recorded};
+
+use crate::{Archive, CheckError};
 
 /// What the store and the index disagree on.
 #[derive(Debug, Default)]
@@ -107,30 +109,29 @@ impl Archive {
             Ok(instance) => instance,
             Err(e) => return Ok(OrphanRepair::Unreadable(format!("not DICOM: {e}"))),
         };
-        if let Some((_, indexed_at)) = self
-            .index
-            .instance_file(&instance.key.sop_instance_uid)
-            .await?
-        {
-            return Ok(OrphanRepair::Copy { indexed_at });
-        }
-        match self.ingest(bytes).await {
-            Ok(ingested) if ingested.outcome == Outcome::AlreadyStored => Ok(OrphanRepair::Copy {
-                indexed_at: String::new(),
-            }),
-            Ok(_) => {
-                // stored again under its own key; a file that was elsewhere stays as a copy
-                let at = self
-                    .index
-                    .instance_file(&instance.key.sop_instance_uid)
-                    .await?
-                    .map(|(_, key)| key);
-                if at.as_deref() != Some(orphan.key.as_str()) {
-                    tracing::info!(orphan = %orphan.key, indexed_at = ?at, "an orphan indexed again from another key");
-                }
+        // indexed where it is, under its own key: storing it again would leave it behind
+        let _writing = self.writes.read().await;
+        let new = match NewInstance::new(&instance, orphan.key.clone(), bytes.len()) {
+            Ok(new) => new
+                .with_sha256(crate::sha256_hex(&bytes))
+                .keeping_existing(true),
+            Err(e) => return Ok(OrphanRepair::Unreadable(format!("not indexable: {e}"))),
+        };
+        match self.index.record(&new).await {
+            Ok(Recorded::Added) => {
+                tracing::info!(orphan = %orphan.key, "an orphan indexed again");
                 Ok(OrphanRepair::Indexed)
             }
-            Err(e) => Ok(OrphanRepair::Unreadable(format!("not taken: {e}"))),
+            Ok(Recorded::Kept { existing_key })
+            | Ok(Recorded::Replaced {
+                previous_key: existing_key,
+            }) => Ok(OrphanRepair::Copy {
+                indexed_at: existing_key,
+            }),
+            Err(pacs_index::Error::Conflict(why)) => {
+                Ok(OrphanRepair::Unreadable(format!("not taken: {why}")))
+            }
+            Err(e) => Err(e.into()),
         }
     }
 

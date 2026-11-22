@@ -287,9 +287,12 @@ impl Archive {
         let (instance, bytes) = self.compress(instance, bytes).await;
         let size = bytes.len();
         let hash = sha256_hex(&bytes);
-        let object_key = self.store.put(&instance.key, bytes).await?;
-        let new = NewInstance::new(&instance, object_key.clone(), size)
-            .map(|new| new.with_sha256(hash).in_project(self.project.as_deref()));
+        let object_key = self.store.put_new(&instance.key, bytes).await?;
+        let new = NewInstance::new(&instance, object_key.clone(), size).map(|new| {
+            new.with_sha256(hash)
+                .in_project(self.project.as_deref())
+                .keeping_existing(!self.overwrite)
+        });
         let new = match new {
             Ok(new) => new,
             Err(e) => {
@@ -299,10 +302,22 @@ impl Archive {
         };
         match self.index.record(&new).await {
             Ok(recorded) => {
-                let outcome = match recorded {
-                    Recorded::Added => Outcome::Added,
-                    Recorded::Replaced => Outcome::Replaced,
+                // each file has a key of its own: the one the index no longer names goes
+                let (outcome, unnamed) = match recorded {
+                    Recorded::Added => (Outcome::Added, None),
+                    Recorded::Replaced { previous_key } => (Outcome::Replaced, Some(previous_key)),
+                    // stored meanwhile by another upload, or another server
+                    Recorded::Kept { .. } => (Outcome::AlreadyStored, Some(object_key.clone())),
                 };
+                if let Some(unnamed) = unnamed {
+                    match self.store.delete(&unnamed).await {
+                        Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
+                        // left for the consistency check to find
+                        Err(error) => {
+                            tracing::warn!(object_key = %unnamed, %error, "a file the index no longer names was not removed")
+                        }
+                    }
+                }
                 noted(&instance.key, outcome);
                 Ok(Ingested {
                     key: instance.key,
@@ -310,8 +325,9 @@ impl Archive {
                 })
             }
             Err(e) => {
-                if matches!(e, pacs_index::Error::Conflict(_)) {
-                    self.store.delete(&object_key).await?;
+                // not indexed: the new file goes, whatever the error
+                if let Err(error) = self.store.delete(&object_key).await {
+                    tracing::warn!(object_key = %object_key, %error, "a file not indexed was not removed");
                 }
                 Err(e.into())
             }
