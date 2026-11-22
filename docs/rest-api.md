@@ -31,4 +31,12 @@ An instance sent again is kept as first stored (`AlreadyStored`) unless `PACS_OV
 is set. Lists of a study's series and a series' instances come in Series and Instance Number
 order.
 
-Not yet: labels, metadata, modifications; searching series or instances by anything but their UID.
+**Labels** are free words put on a patient, study, series or instance to group and find them
+(`PUT`, `GET` and `DELETE` on `/{level}/{id}/labels/{label}`, `GET /{level}/{id}/labels`,
+`GET /tools/labels`): 1 to 64 ASCII letters, digits, `_` and `-`. Each resource's answer has
+its `Labels`, and `/tools/find` keeps the resources with all, any or none of those it names
+(`Labels`, `LabelsConstraint`). Putting and taking them off needs `write`; a deletion takes
+the labels of what it removed.
+
+Not yet: metadata, modifications; searching series or instances by anything but their UID or
+their labels.

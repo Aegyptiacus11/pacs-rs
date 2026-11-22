@@ -72,6 +72,45 @@ pub(crate) fn instance_json(instance: RestInstance) -> Value {
     value
 }
 
+/// `value` with the `Labels` of each resource in it filled in from the index, as the answer:
+/// a resource object, or a list of them (identifiers and other values are left as they are).
+pub(crate) async fn labelled(
+    index: &pacs_index::Index,
+    mut value: Value,
+) -> Result<Json<Value>, RestError> {
+    let mut ids = Vec::new();
+    let objects: Vec<&Value> = match &value {
+        Value::Array(items) => items.iter().collect(),
+        object => vec![object],
+    };
+    for object in objects {
+        if object.get("Labels").is_some()
+            && let Some(id) = object.get("ID").and_then(Value::as_str)
+        {
+            ids.push(id.to_owned());
+        }
+    }
+    if ids.is_empty() {
+        return Ok(Json(value));
+    }
+    let mut labels = index.labels_of(&ids).await?;
+    let mut fill = |object: &mut Value| {
+        if object.get("Labels").is_some()
+            && let Some(found) = object
+                .get("ID")
+                .and_then(Value::as_str)
+                .and_then(|id| labels.remove(id))
+        {
+            object["Labels"] = json!(found);
+        }
+    };
+    match &mut value {
+        Value::Array(items) => items.iter_mut().for_each(&mut fill),
+        object => fill(object),
+    }
+    Ok(Json(value))
+}
+
 /// `?expand`, `?expand=true`: objects instead of IDs. `?expand=false` is IDs.
 fn expand(params: &HashMap<String, String>) -> bool {
     params
@@ -120,7 +159,7 @@ pub(crate) async fn patients(
     let index = state.archive.index();
     let ids = page(index.patient_public_ids(None).await?, &params)?;
     if !expand(&params) {
-        return Ok(Json(json!(ids)));
+        return labelled(state.archive.index(), json!(ids)).await;
     }
     let mut patients = Vec::with_capacity(ids.len());
     for id in ids {
@@ -128,7 +167,7 @@ pub(crate) async fn patients(
             patients.push(patient_json(patient));
         }
     }
-    Ok(Json(Value::Array(patients)))
+    labelled(state.archive.index(), Value::Array(patients)).await
 }
 
 /// A patient.
@@ -147,7 +186,11 @@ pub(crate) async fn patient(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let patient = state.archive.index().rest_patient(&id).await?;
-    Ok(Json(patient_json(patient.ok_or(RestError::NotFound)?)))
+    labelled(
+        state.archive.index(),
+        patient_json(patient.ok_or(RestError::NotFound)?),
+    )
+    .await
 }
 
 /// A patient's studies.
@@ -173,7 +216,7 @@ pub(crate) async fn patient_studies(
             studies.push(study_json(s));
         }
     }
-    Ok(Json(Value::Array(studies)))
+    labelled(state.archive.index(), Value::Array(studies)).await
 }
 
 /// A patient's series, of every study.
@@ -201,7 +244,7 @@ pub(crate) async fn patient_series(
             series.push(series_json(s));
         }
     }
-    Ok(Json(Value::Array(series)))
+    labelled(state.archive.index(), Value::Array(series)).await
 }
 
 /// A patient's instances, of every study.
@@ -224,9 +267,11 @@ pub(crate) async fn patient_instances(
         return Err(RestError::NotFound);
     }
     let instances = index.rest_patient_instances(&id).await?;
-    Ok(Json(Value::Array(
-        instances.into_iter().map(instance_json).collect(),
-    )))
+    labelled(
+        state.archive.index(),
+        Value::Array(instances.into_iter().map(instance_json).collect()),
+    )
+    .await
 }
 
 /// How much a patient holds.
@@ -252,7 +297,7 @@ pub(crate) async fn patient_statistics(
         .ok_or(RestError::NotFound)?;
     let mut value = statistics_json(stats);
     value["CountStudies"] = stats.studies.into();
-    Ok(Json(value))
+    labelled(state.archive.index(), value).await
 }
 
 /// Lists the studies.
@@ -277,7 +322,7 @@ pub(crate) async fn studies(
     let index = state.archive.index();
     let ids = page(index.study_public_ids().await?, &params)?;
     if !expand(&params) {
-        return Ok(Json(json!(ids)));
+        return labelled(state.archive.index(), json!(ids)).await;
     }
     let mut studies = Vec::with_capacity(ids.len());
     for id in ids {
@@ -285,7 +330,7 @@ pub(crate) async fn studies(
             studies.push(study_json(study));
         }
     }
-    Ok(Json(Value::Array(studies)))
+    labelled(state.archive.index(), Value::Array(studies)).await
 }
 
 /// A study.
@@ -304,7 +349,11 @@ pub(crate) async fn study(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let study = state.archive.index().rest_study(&id).await?;
-    Ok(Json(study_json(study.ok_or(RestError::NotFound)?)))
+    labelled(
+        state.archive.index(),
+        study_json(study.ok_or(RestError::NotFound)?),
+    )
+    .await
 }
 
 /// A study's series, in Series Number order.
@@ -330,7 +379,7 @@ pub(crate) async fn study_series(
             series.push(series_json(s));
         }
     }
-    Ok(Json(Value::Array(series)))
+    labelled(state.archive.index(), Value::Array(series)).await
 }
 
 /// A study's instances, of every series.
@@ -353,9 +402,11 @@ pub(crate) async fn study_instances(
         return Err(RestError::NotFound);
     }
     let instances = index.rest_study_instances(&id).await?;
-    Ok(Json(Value::Array(
-        instances.into_iter().map(instance_json).collect(),
-    )))
+    labelled(
+        state.archive.index(),
+        Value::Array(instances.into_iter().map(instance_json).collect()),
+    )
+    .await
 }
 
 /// How much a study holds.
@@ -379,7 +430,7 @@ pub(crate) async fn study_statistics(
         .study_statistics(&id)
         .await?
         .ok_or(RestError::NotFound)?;
-    Ok(Json(statistics_json(stats)))
+    labelled(state.archive.index(), statistics_json(stats)).await
 }
 
 fn statistics_json(stats: Statistics) -> Value {
@@ -417,7 +468,11 @@ pub(crate) async fn series(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let series = state.archive.index().rest_series(&id).await?;
-    Ok(Json(series_json(series.ok_or(RestError::NotFound)?)))
+    labelled(
+        state.archive.index(),
+        series_json(series.ok_or(RestError::NotFound)?),
+    )
+    .await
 }
 
 /// A series' instances, in Instance Number order.
@@ -443,7 +498,7 @@ pub(crate) async fn series_instances(
             instances.push(instance_json(i));
         }
     }
-    Ok(Json(Value::Array(instances)))
+    labelled(state.archive.index(), Value::Array(instances)).await
 }
 
 /// An instance.
@@ -462,7 +517,11 @@ pub(crate) async fn instance(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, RestError> {
     let instance = state.archive.index().rest_instance(&id).await?;
-    Ok(Json(instance_json(instance.ok_or(RestError::NotFound)?)))
+    labelled(
+        state.archive.index(),
+        instance_json(instance.ok_or(RestError::NotFound)?),
+    )
+    .await
 }
 
 /// An instance's DICOM file.
@@ -501,12 +560,20 @@ pub(crate) mod parents {
         let index = state.archive.index();
         let study = index.rest_study(study).await?.ok_or(RestError::NotFound)?;
         let patient = index.rest_patient(&study.patient_public_id).await?;
-        Ok(Json(patient_json(patient.ok_or(RestError::NotFound)?)))
+        labelled(
+            state.archive.index(),
+            patient_json(patient.ok_or(RestError::NotFound)?),
+        )
+        .await
     }
 
     async fn study(state: &AppState, study: &str) -> Result<Json<Value>, RestError> {
         let study = state.archive.index().rest_study(study).await?;
-        Ok(Json(study_json(study.ok_or(RestError::NotFound)?)))
+        labelled(
+            state.archive.index(),
+            study_json(study.ok_or(RestError::NotFound)?),
+        )
+        .await
     }
 
     async fn series_of(state: &AppState, id: &str) -> Result<pacs_index::RestSeries, RestError> {
@@ -597,9 +664,11 @@ pub(crate) mod parents {
         Path(id): Path<String>,
     ) -> Result<Json<Value>, RestError> {
         let instance = instance_of(&state, &id).await?;
-        Ok(Json(series_json(
-            series_of(&state, &instance.parent_series).await?,
-        )))
+        labelled(
+            state.archive.index(),
+            series_json(series_of(&state, &instance.parent_series).await?),
+        )
+        .await
     }
 
     /// The study of an instance.

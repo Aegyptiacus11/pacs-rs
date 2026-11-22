@@ -398,8 +398,10 @@ async fn every_operation_is_described_in_full() {
             }
         }
     }
-    // the routes of `router_with_api`: 26 paths, four of them with DELETE too, one with POST
-    assert_eq!((paths.len(), operations), (26, 31));
+    // the routes of `router_with_api`: 26 paths, four of them with DELETE too, one with
+    // POST; and the labels: a list and a label at each of four levels (GET, PUT, DELETE on
+    // the label), and /tools/labels
+    assert_eq!((paths.len(), operations), (35, 48));
     let schemas = api["components"]["schemas"].as_object().unwrap();
     for name in [
         "Patient",

@@ -232,6 +232,11 @@ fn rest_routes(ids: &Ids) -> Vec<String> {
         if !path.contains("{id}") || item.get("get").is_none() {
             continue;
         }
+        // a label's own route answers with an empty body, 404 for a label not there: its
+        // rights are tested apart (labels_stay_within_the_account_s_projects)
+        if path.contains("{label}") {
+            continue;
+        }
         let id = match path.split('/').nth(1).unwrap() {
             "patients" => &ids.patient,
             "studies" => &ids.study,
@@ -1084,4 +1089,54 @@ async fn a_result_for_a_project_s_copy_is_stored_in_its_study() {
         index.study_project(&s.lung.study_uid()).await.unwrap(),
         Some(Some("lung-2026".into()))
     );
+}
+
+/// Labels follow what an account sees: on its project's studies it reads, puts and takes
+/// them off (with `write`: taking one off deletes nothing); the others' labels it neither
+/// changes nor is told of.
+#[tokio::test]
+async fn labels_stay_within_the_account_s_projects() {
+    let s = server().await;
+    let app = &s.app;
+    let (liver, lung) = (ids(&s.liver), ids(&s.lung));
+    for (study, label) in [(&liver.study, "liver-cohort"), (&lung.study, "lung-cohort")] {
+        let put = send(
+            app,
+            Method::PUT,
+            &format!("/studies/{study}/labels/{label}"),
+            &s.admin,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(put.status, StatusCode::OK);
+    }
+    // an editor: read and write, no delete
+    let (_, token) = user(app, &s.admin, "ana", "editor", json!(["liver-2026"])).await;
+    assert_eq!(
+        get(app, "/tools/labels", &token).await.body,
+        json!(["liver-cohort"])
+    );
+    assert_eq!(
+        get(app, "/tools/labels", &s.admin).await.body,
+        json!(["liver-cohort", "lung-cohort"])
+    );
+    let lung_label = format!("/studies/{}/labels/lung-cohort", lung.study);
+    for method in [Method::PUT, Method::DELETE, Method::GET] {
+        let reply = send(app, method.clone(), &lung_label, &token, None, None).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{method}");
+    }
+    let own = format!("/studies/{}/labels/liver-cohort", liver.study);
+    let off = send(app, Method::DELETE, &own, &token, None, None).await;
+    assert_eq!(off.status, StatusCode::OK);
+    assert_eq!(
+        get(app, &format!("/studies/{}/labels", liver.study), &token)
+            .await
+            .body,
+        json!([])
+    );
+    // a reader may not change them
+    let (_, reader) = user(app, &s.admin, "bo", "reader", json!(["liver-2026"])).await;
+    let refused = send(app, Method::PUT, &own, &reader, None, None).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
 }
