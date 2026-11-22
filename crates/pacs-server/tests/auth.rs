@@ -1155,17 +1155,17 @@ async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
     assert_eq!(ids(&roles), ["reader", "editor", "manager", "admin"]);
     assert_eq!(
         roles.body[0],
-        json!({"id": "reader", "name": "Reader", "permissions": ["read"], "locked": false})
+        json!({"id": "reader", "name": "Reader", "permissions": ["read", "identities"], "locked": false})
     );
     assert_eq!(roles.body[3]["locked"], true);
     assert_eq!(
         roles.body[3]["permissions"],
-        json!(["read", "write", "remote", "delete", "users"])
+        json!(["read", "write", "remote", "delete", "users", "identities"])
     );
     let me = get(&app, "/auth/me", Some(&admin)).await;
     assert_eq!(
         me.body["permissions"],
-        json!(["read", "write", "remote", "delete", "users"])
+        json!(["read", "write", "remote", "delete", "users", "identities"])
     );
 
     // A new role: its id comes from its name, its permissions are stored in one order.
@@ -1268,12 +1268,12 @@ async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
     // The role gains a permission: the user has it at their next refresh, not before.
     let widened = put(
         "/roles/night-shift".into(),
-        json!({"permissions": ["read", "write", "delete"]}),
+        json!({"permissions": ["read", "write", "delete", "identities"]}),
     )
     .await;
     assert_eq!(
         widened.body["permissions"],
-        json!(["read", "write", "delete"])
+        json!(["read", "write", "delete", "identities"])
     );
     assert_eq!(
         upload(token.clone()).await,
@@ -1461,7 +1461,7 @@ async fn a_client_from_secret_to_revocation(settings: Settings) {
     assert_eq!(reply.headers["cache-control"], "no-store");
     assert_eq!(reply.headers["pragma"], "no-cache");
     assert_eq!(reply.body["token_type"], "Bearer");
-    assert_eq!(reply.body["scope"], "read write remote");
+    assert_eq!(reply.body["scope"], "read write remote identities");
     assert_eq!(reply.body["expires_in"], 300);
     let token = reply.token();
     let claims = claims_of(&token);
@@ -1469,7 +1469,7 @@ async fn a_client_from_secret_to_revocation(settings: Settings) {
     assert_eq!(claims["aud"], "pacs-rs");
     assert_eq!(claims["sub"], id.as_str());
     assert_eq!(claims["client_id"], id.as_str());
-    assert_eq!(claims["scope"], "read write remote");
+    assert_eq!(claims["scope"], "read write remote identities");
     assert!(claims["jti"].as_str().is_some_and(|jti| !jti.is_empty()));
     assert_eq!(
         claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap(),
@@ -1524,7 +1524,7 @@ async fn a_client_from_secret_to_revocation(settings: Settings) {
     // Nothing of the accounts, whatever the role: not the users, the clients, or /auth.
     let (root_id, root_secret) = make_client(&app, &admin, "Everything", "admin").await;
     let root = ask_token(&app, Some((&root_id, &root_secret)), GRANT).await;
-    assert_eq!(root.body["scope"], "read write remote delete");
+    assert_eq!(root.body["scope"], "read write remote delete identities");
     let root = root.token();
     for (method, path) in [
         (Method::GET, "/users"),

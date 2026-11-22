@@ -992,3 +992,55 @@ async fn the_trash_is_not_for_an_account_limited_to_projects() {
         StatusCode::OK
     );
 }
+
+/// A role without `identities` sees the studies of every project and none stored as
+/// received, limited or not; taking the permission away holds at the next request, before
+/// the token is renewed.
+#[tokio::test]
+async fn a_role_without_identities_sees_only_the_studies_of_projects() {
+    let s = server().await;
+    let app = &s.app;
+    let made = post(
+        app,
+        "/roles",
+        &s.admin,
+        json!({"name": "Researcher", "permissions": ["read"]}),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    let (_, researcher) = user(app, &s.admin, "ana", "researcher", Value::Null).await;
+    let (_, clinician) = user(app, &s.admin, "bo", "reader", Value::Null).await;
+    let count = async |token: &str| {
+        let reply = get(app, "/studies", token).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        reply.body.as_array().unwrap().len()
+    };
+    assert_eq!(count(&clinician).await, 3);
+    assert_eq!(count(&researcher).await, 2);
+    let received = ids(&s.received);
+    for path in rest_routes(&received)
+        .into_iter()
+        .chain(other_routes(&received))
+    {
+        let reply = get(app, &path, &researcher).await;
+        assert!(nothing(&reply), "{path}: {} {}", reply.status, reply.body);
+    }
+    let liver = ids(&s.liver);
+    assert_eq!(
+        get(app, &format!("/studies/{}", liver.study), &researcher)
+            .await
+            .status,
+        StatusCode::OK
+    );
+
+    // the reader role loses identities: the clinician's token, unchanged, sees less at once
+    let narrowed = put(
+        app,
+        "/roles/reader",
+        &s.admin,
+        json!({"permissions": ["read"]}),
+    )
+    .await;
+    assert_eq!(narrowed.status, StatusCode::OK, "{}", narrowed.body);
+    assert_eq!(count(&clinician).await, 2);
+}
