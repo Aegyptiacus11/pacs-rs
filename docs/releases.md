@@ -38,5 +38,9 @@ there if one fails. Then it publishes, once every build has passed:
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
 - a GitHub release with those files and `SHA256SUMS`.
 
+Once the image is published, the index it writes is kept for the upgrade tests: run
+`scripts/upgrade-fixtures.sh <version>`, add the version to `RELEASES` in
+`crates/pacs-index/tests/upgrades.rs`, and commit both. Every later release must open it.
+
 Started by hand (Actions, *release*, *Run workflow*), the same workflow is a dry run: it tests,
 builds and smoke-tests everything at the workspace version and publishes nothing.
