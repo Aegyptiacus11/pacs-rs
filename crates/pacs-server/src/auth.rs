@@ -205,8 +205,9 @@ pub fn right_for(method: &Method, path: &str) -> Right {
         // searches and archives of what the user may already read
         Method::POST if matches!(path, "/tools/find" | "/tools/create-archive") => Right::Read,
         Method::POST | Method::PUT | Method::PATCH => Right::Write,
-        // the web interface's own documents are written and removed with the same right
-        Method::DELETE if under("/ui/api") => Right::Write,
+        // the web interface's own documents are written and removed with the same right,
+        // and so are labels: taking one off deletes nothing of the archive
+        Method::DELETE if under("/ui/api") || path.contains("/labels/") => Right::Write,
         Method::DELETE => Right::Delete,
         _ => Right::Admin,
     }
