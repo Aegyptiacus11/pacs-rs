@@ -96,6 +96,71 @@ Permission, when the login is on: `read`.
 | 200 | list of [Instance](#instance) | The instances. |
 | 404 | nothing | No patient has this identifier; the body is empty. |
 
+### `GET /patients/{id}/labels`
+
+The labels of a patient, sorted.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | Its labels. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /patients/{id}/labels/{label}`
+
+Whether a patient has a label: 200 if so, 404 if not; the body is empty.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 404 | nothing | No such resource, or it does not have the label; the body is empty. |
+
+### `PUT /patients/{id}/labels/{label}`
+
+Put a label on a patient: 1 to 64 ASCII letters, digits, `_` and `-`. Putting one it has changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /patients/{id}/labels/{label}`
+
+Take a label off a patient. Taking one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It does not have the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
 ### `GET /patients/{id}/series`
 
 A patient's series, of every study.
@@ -227,6 +292,71 @@ Permission, when the login is on: `read`.
 | 200 | list of [Instance](#instance) | The instances. |
 | 404 | nothing | No study has this identifier; the body is empty. |
 
+### `GET /studies/{id}/labels`
+
+The labels of a study, sorted.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | Its labels. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /studies/{id}/labels/{label}`
+
+Whether a study has a label: 200 if so, 404 if not; the body is empty.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 404 | nothing | No such resource, or it does not have the label; the body is empty. |
+
+### `PUT /studies/{id}/labels/{label}`
+
+Put a label on a study: 1 to 64 ASCII letters, digits, `_` and `-`. Putting one it has changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /studies/{id}/labels/{label}`
+
+Take a label off a study. Taking one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It does not have the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
 ### `GET /studies/{id}/patient`
 
 The patient of a study.
@@ -323,6 +453,71 @@ Permission, when the login is on: `read`.
 |---|---|---|
 | 200 | list of [Instance](#instance) | The instances. |
 | 404 | nothing | No series has this identifier; the body is empty. |
+
+### `GET /series/{id}/labels`
+
+The labels of a series, sorted.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | Its labels. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /series/{id}/labels/{label}`
+
+Whether a series has a label: 200 if so, 404 if not; the body is empty.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 404 | nothing | No such resource, or it does not have the label; the body is empty. |
+
+### `PUT /series/{id}/labels/{label}`
+
+Put a label on a series: 1 to 64 ASCII letters, digits, `_` and `-`. Putting one it has changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /series/{id}/labels/{label}`
+
+Take a label off a series. Taking one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It does not have the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
 
 ### `GET /series/{id}/patient`
 
@@ -431,6 +626,71 @@ Permission, when the login is on: `read`.
 | 200 | `application/dicom` | The DICOM file. |
 | 404 | nothing | No instance has this identifier; the body is empty. |
 
+### `GET /instances/{id}/labels`
+
+The labels of an instance, sorted.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | Its labels. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `GET /instances/{id}/labels/{label}`
+
+Whether an instance has a label: 200 if so, 404 if not; the body is empty.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 404 | nothing | No such resource, or it does not have the label; the body is empty. |
+
+### `PUT /instances/{id}/labels/{label}`
+
+Put a label on an instance: 1 to 64 ASCII letters, digits, `_` and `-`. Putting one it has changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It has the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
+### `DELETE /instances/{id}/labels/{label}`
+
+Take a label off an instance. Taking one it does not have changes nothing.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The resource's identifier. |
+| `label` | path | string | The label. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | It does not have the label; the body is empty. |
+| 400 | [Error](#error) | Not a label. |
+| 404 | nothing | No such resource; the body is empty. |
+
 ### `GET /instances/{id}/patient`
 
 The patient of an instance.
@@ -532,6 +792,10 @@ with. An empty value, or `*`, asks nothing.
 
 Another attribute, or a value that is not a match for its attribute, is refused.
 
+`Labels` keeps the resources with all of them (`LabelsConstraint` `All`, the default),
+any of them (`Any`) or none of them (`None`). With labels, a series or instance search
+needs no UID, unless the constraint is `None`.
+
 Permission, when the login is on: `read`.
 
 | Send | Where | Type | |
@@ -542,6 +806,16 @@ Permission, when the login is on: `read`.
 |---|---|---|
 | 200 | [Found](#found) | The identifiers found, or the resources. |
 | 400 | [Error](#error) | The body is not a search, names an attribute its level cannot search on, or gives a value that is not a match for its attribute. |
+
+### `GET /tools/labels`
+
+Every label in use on what the account sees, sorted.
+
+Permission, when the login is on: `read`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of string | The labels. |
 
 ## DICOMweb
 
@@ -1597,6 +1871,8 @@ A search.
 | Field | Type | |
 |---|---|---|
 | `Expand` | boolean, optional | Answer with the resources instead of their identifiers. |
+| `Labels` | list of string, optional | Labels the resources must have, as `LabelsConstraint` says. |
+| `LabelsConstraint` | string or null, optional | `All` (the default): every one of `Labels`; `Any`: at least one; `None`: none of them. |
 | `Level` | string | `Patient`, `Study`, `Series` or `Instance`, in any case. |
 | `Limit` | integer or null, optional | At most this many. |
 | `Query` | object, optional | Attributes by keyword and the value each must equal: `{"PatientID": "LITS-0"}`. Empty or left out, a patient or study search finds them all; a series or instance search needs its UID. |
