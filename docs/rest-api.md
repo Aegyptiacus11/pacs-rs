@@ -46,5 +46,5 @@ at every level, and of an instance `IndexInSeries`, `ReceptionDate`, `SopClassUi
 text of at most 64 KiB. Setting and removing them needs `write`; a deletion takes the
 metadata of what it removed.
 
-Not yet: modifications; searching series or instances by anything but their UID or their
-labels.
+Not yet: searching series or instances by anything but their UID or their labels. Not
+planned: modifications (`/modify`).
