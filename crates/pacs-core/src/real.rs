@@ -130,6 +130,9 @@ pub struct RealSeries {
     referrer: Option<String>,
     /// Series Description; the file's own (neither has one) unless set.
     description: Option<String>,
+    /// Request Attributes Sequence, one item per (Scheduled Procedure Step ID, Requested
+    /// Procedure ID); neither file has one, so none unless set.
+    requests: Vec<(String, String)>,
 }
 
 impl RealSeries {
@@ -148,6 +151,7 @@ impl RealSeries {
             born: None,
             referrer: None,
             description: None,
+            requests: Vec::new(),
         }
     }
 
@@ -204,6 +208,17 @@ impl RealSeries {
     /// The same series, of a study asked for by `name`.
     pub fn referred_by(mut self, name: &str) -> Self {
         self.referrer = Some(name.into());
+        self
+    }
+
+    /// The same series, made for these requests: one item of Request Attributes Sequence
+    /// for each (Scheduled Procedure Step ID, Requested Procedure ID), as a modality
+    /// writes from its worklist (PS3.3 C.4.10).
+    pub fn requested(mut self, requests: &[(&str, &str)]) -> Self {
+        self.requests = requests
+            .iter()
+            .map(|(step, procedure)| ((*step).into(), (*procedure).into()))
+            .collect();
         self
     }
 
@@ -359,6 +374,31 @@ impl RealSeries {
         }
         if let Some(referrer) = &self.referrer {
             put(tags::REFERRING_PHYSICIAN_NAME, VR::PN, referrer.clone());
+        }
+        if !self.requests.is_empty() {
+            let items: Vec<InMemDicomObject> = self
+                .requests
+                .iter()
+                .map(|(step, procedure)| {
+                    InMemDicomObject::from_element_iter([
+                        DataElement::new(
+                            tags::SCHEDULED_PROCEDURE_STEP_ID,
+                            VR::SH,
+                            PrimitiveValue::from(step.as_str()),
+                        ),
+                        DataElement::new(
+                            tags::REQUESTED_PROCEDURE_ID,
+                            VR::SH,
+                            PrimitiveValue::from(procedure.as_str()),
+                        ),
+                    ])
+                })
+                .collect();
+            object.put(DataElement::new(
+                tags::REQUEST_ATTRIBUTES_SEQUENCE,
+                VR::SQ,
+                DicomValue::from(dicom_core::value::DataSetSequence::from(items)),
+            ));
         }
         object
     }
