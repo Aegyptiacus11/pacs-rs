@@ -1,6 +1,18 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+# named one by one, not "crates/*": deps.rs, which the README's badge asks, skips glob members
+members = [
+    "crates/pacs-archive",
+    "crates/pacs-audit",
+    "crates/pacs-core",
+    "crates/pacs-deid",
+    "crates/pacs-dicomweb",
+    "crates/pacs-dimse",
+    "crates/pacs-index",
+    "crates/pacs-rest",
+    "crates/pacs-server",
+    "crates/pacs-store",
+]
 
 [workspace.package]
 version = "0.11.0"
