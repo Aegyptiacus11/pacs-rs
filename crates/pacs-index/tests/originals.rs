@@ -2,7 +2,9 @@
 
 mod common;
 
-use pacs_index::OriginalStudy;
+use pacs_core::Instance;
+use pacs_core::real::RealSeries;
+use pacs_index::{NewInstance, OriginalStudy};
 use serde_json::{Map, Value, json};
 
 fn tags(value: Value) -> Map<String, Value> {
@@ -72,5 +74,51 @@ async fn a_damaged_original_is_an_error() {
         .await
         .unwrap();
         assert!(index.original_study("liver", "2.25.1").await.is_err());
+    }
+}
+
+async fn record(index: &pacs_index::Index, series: &RealSeries, result: bool) {
+    let bytes = series.header_bytes(0);
+    let instance = Instance::from_bytes(&bytes).unwrap();
+    let new = NewInstance::new(&instance, format!("dicom/{}.dcm", series.seed), bytes.len())
+        .unwrap()
+        .in_project(Some("liver"))
+        .a_result(result);
+    index.record(&new).await.unwrap();
+}
+
+/// A result is noted for write-back with its instance, taken out once by one claimer; the
+/// results of a study are its instances the project did not make.
+#[tokio::test]
+async fn a_result_is_due_for_write_back_and_told_apart_from_the_copy() {
+    for index in common::indexes().await {
+        let copy = RealSeries::new(71, 1);
+        let result = RealSeries::new(72, 1).in_study(71, 2);
+        record(&index, &copy, false).await;
+        // the copy's instance is one the project made by replacing an original
+        index
+            .record_originals(
+                "liver",
+                &[(copy.instance_uid(0), "1.2.3.9".to_owned())],
+                &copy.study_uid(),
+                &OriginalStudy {
+                    patient: Map::new(),
+                    study: Map::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(index.claim_write_backs(i64::MAX).await.unwrap().is_empty());
+        record(&index, &result, true).await;
+        // not quiet yet
+        assert!(index.claim_write_backs(0).await.unwrap().is_empty());
+        assert_eq!(
+            index.claim_write_backs(i64::MAX).await.unwrap(),
+            [copy.study_uid()]
+        );
+        assert!(index.claim_write_backs(i64::MAX).await.unwrap().is_empty());
+        let results = index.results_of("liver", &copy.study_uid()).await.unwrap();
+        let uids: Vec<_> = results.iter().map(|r| r.sop_instance_uid.clone()).collect();
+        assert_eq!(uids, [result.instance_uid(0)]);
     }
 }
