@@ -32,6 +32,18 @@ image's health check is the binary itself: `pacs-server --healthcheck` asks `/he
 address of `PACS_LISTEN` and exits 0 or 1. For DIMSE, set `PACS_DIMSE_LISTEN=0.0.0.0:11112` and
 publish that port.
 
+Two checks, both open without a token and answered even when the server is at its
+[limits](#limits-on-requests):
+
+| | Answers 200 when | For |
+|---|---|---|
+| `GET /healthz` | the process is up | restarting a process that hangs (the image's health check) |
+| `GET /readyz` | the index and the store both answer, within 5 seconds each | a load balancer or an orchestrator sending requests only to a server that can serve them |
+
+`/readyz` answers `{"index": "ok", "store": "ok"}`, or 503 with the error of the part that does
+not answer in its place. It is not the image's health check on purpose: a database down for a
+minute should take the server out of rotation, not have it restarted.
+
 A study to try it with, the [sample](sample-study.md) of the quickstart:
 
 ```bash

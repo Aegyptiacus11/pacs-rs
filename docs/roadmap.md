@@ -43,9 +43,11 @@ change, on SQLite with disk and on Postgres with S3. Nothing remains of this mil
 
 ## 3. Operable
 
+Built: a [readiness check](running.md), `/readyz`, that fails when the index or the store
+does not answer. What remains:
+
 | Item | Done when |
 |---|---|
-| Health that means it | a readiness check that fails when the index or the store does not answer (`/healthz` only says the process is up) |
 | Metrics | requests, associations, ingest rate, storage used and errors, in Prometheus format |
 | Administration page | open associations as they open and close, running jobs, storage, the quarantine and the last errors, in the web interface |
 | Settings in a file | one configuration file beside the `PACS_*` variables, checked whole at start |

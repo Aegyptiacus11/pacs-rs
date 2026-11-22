@@ -780,6 +780,7 @@ pub fn app_with_audit(
         ));
     let index = archive.index().clone();
     let audit_index = index.clone();
+    let ready_archive = archive.clone();
     let checks = checks::router(archive.clone()).merge(trash::router(archive.clone()));
     let dicomweb = pacs_dicomweb::router(
         archive,
@@ -791,6 +792,7 @@ pub fn app_with_audit(
     );
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
+        .route("/readyz", get(ready).with_state(ready_archive))
         .route(
             "/openapi.json",
             get(|| async { axum::Json(api::description()) }),
@@ -871,6 +873,27 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     limits::serve(listener, app, limits::Limits::default(), shutdown).await
+}
+
+/// `GET /readyz`: 200 when the index and the store both answer within 5 seconds, 503 with
+/// what failed when not. `/healthz` says the process is up; this says it can serve.
+async fn ready(
+    axum::extract::State(archive): axum::extract::State<Archive>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (index, store) = archive.ready(std::time::Duration::from_secs(5)).await;
+    let ok = index.is_ok() && store.is_ok();
+    let said = |part: Result<(), String>| part.map_or_else(|e| e, |()| "ok".to_owned());
+    let body = serde_json::json!({ "index": said(index), "store": said(store) });
+    if !ok {
+        tracing::warn!(%body, "not ready");
+    }
+    let status = if ok {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, axum::Json(body)).into_response()
 }
 
 /// Whether the server listening at `listen` answers 200 on `/healthz` within 5 seconds.

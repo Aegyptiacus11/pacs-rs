@@ -113,6 +113,12 @@ impl Index {
         Ok(())
     }
 
+    /// Whether the database answers: one round trip.
+    pub async fn ping(&self) -> Result<(), Error> {
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        Ok(())
+    }
+
     /// The public ID and storage key of an instance, by SOP Instance UID.
     pub async fn instance_file(
         &self,

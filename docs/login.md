@@ -60,7 +60,7 @@ A server starts with four roles, which can be changed or removed, and others add
 Changing roles needs `users`. A change reaches the users who have the role at their next
 refresh, within 15 minutes; `GET /auth/me` gives a user's `role` and `permissions`.
 
-Open without a token: `/healthz`, the web interface's own files (not `/ui/api/`), the three
+Open without a token: `/healthz` and `/readyz`, the web interface's own files (not `/ui/api/`), the three
 sign-in routes below, `/auth/token` for [tools](#tools), and `OPTIONS` (CORS preflight). Everything else answers 401 without a
 valid token, a route that does not exist included, and 403 with a role that does not allow it.
 Errors are `{"detail": "..."}`; a 401 carries `WWW-Authenticate: Bearer`.

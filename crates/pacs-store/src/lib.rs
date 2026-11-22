@@ -112,6 +112,16 @@ impl Store {
         Ok(path.to_string())
     }
 
+    /// Whether the store answers: one request for an object that is not there, which an
+    /// answering store says is not found.
+    pub async fn ping(&self) -> Result<(), Error> {
+        let probe = self.prefix.clone().join("pacs-rs-ready-probe");
+        match self.backend.head(&probe).await {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Where a file waits in trash entry `trash_id`: under `trash/<id>/` beside the
     /// instances, which are under their Study Instance UID and so never named `trash`.
     pub fn trash_key(&self, trash_id: i64, object_key: &str) -> String {
