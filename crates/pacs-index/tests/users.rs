@@ -296,3 +296,105 @@ async fn a_role_a_client_has_stays() {
         assert!(index.delete_role("robot").await.unwrap());
     }
 }
+
+fn through_provider<'a>(
+    subject: &'a str,
+    id: &'a str,
+    login: &'a str,
+) -> pacs_index::ProviderUser<'a> {
+    pacs_index::ProviderUser {
+        issuer: "https://idp.example",
+        subject,
+        id,
+        login,
+        password_hash: "unmatchable",
+        role: "reader",
+        link_by_login: false,
+    }
+}
+
+#[tokio::test]
+async fn a_provider_sign_in_makes_the_user_once_and_finds_them_after() {
+    use pacs_index::ProviderLink::{Created, Known};
+    for index in common::indexes().await {
+        let (made, link) = index
+            .provider_user(&through_provider("sub-1", "u1", "ada@example.com"))
+            .await
+            .unwrap();
+        assert_eq!(link, Created);
+        assert_eq!((made.id.as_str(), made.role.as_str()), ("u1", "reader"));
+        // the subject is the key: a new id or login offered later changes nothing
+        let (again, link) = index
+            .provider_user(&through_provider("sub-1", "u9", "renamed@example.com"))
+            .await
+            .unwrap();
+        assert_eq!((again, link), (made.clone(), Known));
+        assert_eq!(
+            index
+                .user_by_identity("https://idp.example", "sub-1")
+                .await
+                .unwrap(),
+            Some(made)
+        );
+        // the same subject at another provider is someone else
+        assert_eq!(
+            index
+                .user_by_identity("https://other.example", "sub-1")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(index.user_count().await.unwrap(), 1);
+    }
+}
+
+#[tokio::test]
+async fn a_taken_login_is_linked_only_when_the_provider_vouches_for_it() {
+    use pacs_index::ProviderLink::Linked;
+    for index in common::indexes().await {
+        index
+            .create_user("u1", "ada@example.com", "hash", "admin")
+            .await
+            .unwrap();
+        // not vouched for: refused, and nothing is linked
+        let refused = index
+            .provider_user(&through_provider("sub-1", "u2", "ada@example.com"))
+            .await;
+        assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
+        assert_eq!(
+            index
+                .user_by_identity("https://idp.example", "sub-1")
+                .await
+                .unwrap(),
+            None
+        );
+        // vouched for: the existing user, role kept
+        let vouched = pacs_index::ProviderUser {
+            link_by_login: true,
+            ..through_provider("sub-1", "u2", "ada@example.com")
+        };
+        let (linked, link) = index.provider_user(&vouched).await.unwrap();
+        assert_eq!(link, Linked);
+        assert_eq!((linked.id.as_str(), linked.role.as_str()), ("u1", "admin"));
+        // a second subject at the same provider cannot take the same account
+        let other = pacs_index::ProviderUser {
+            link_by_login: true,
+            ..through_provider("sub-2", "u3", "ada@example.com")
+        };
+        let refused = index.provider_user(&other).await;
+        assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
+        // a deleted user takes their identity with them
+        index
+            .create_user("u4", "boss", "hash", "admin")
+            .await
+            .unwrap();
+        assert!(index.delete_user("u1", "admin").await.unwrap());
+        assert_eq!(
+            index
+                .user_by_identity("https://idp.example", "sub-1")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+}
