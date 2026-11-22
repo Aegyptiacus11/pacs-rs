@@ -1933,6 +1933,11 @@ async fn methods(State(login): State<Login>) -> Json<Value> {
 }
 
 impl Login {
+    /// Whether people sign in through an OpenID provider, and never with a password.
+    pub fn has_provider(&self) -> bool {
+        self.provider.is_some()
+    }
+
     /// The state cookie of a sign-in through the provider, scoped to `/auth/oidc` (behind the
     /// proxy's prefix when there is one); `max_age` 0 removes it.
     fn state_cookie(&self, value: &str, max_age: u64) -> String {

@@ -82,12 +82,15 @@ pub(crate) fn built() -> bool {
 }
 
 /// `/ui/` and its files; `/` and `/ui` redirect there. `dicomweb_path` is where DICOMweb is
-/// served, e.g. `/dicom-web`; `auth` says whether the server asks for a login.
-pub fn router(dicomweb_path: &str, auth: bool) -> Router {
+/// served, e.g. `/dicom-web`; `auth` says whether the server asks for a login, `provider`
+/// whether people sign in through an OpenID provider rather than with a password.
+pub fn router(dicomweb_path: &str, auth: bool, provider: bool) -> Router {
     let config = serde_json::json!({
         "dicomweb": dicomweb_path,
         // whether the server asks for a login
         "auth": auth,
+        // whether the sign-in goes through an OpenID provider (no passwords then)
+        "provider": provider,
         "version": env!("CARGO_PKG_VERSION"),
     })
     .to_string();

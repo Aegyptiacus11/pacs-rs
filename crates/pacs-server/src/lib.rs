@@ -734,7 +734,11 @@ pub fn app_with_audit(
             );
         }
         app = app
-            .merge(ui::router(&path, login.is_some()))
+            .merge(ui::router(
+                &path,
+                login.is_some(),
+                login.as_ref().is_some_and(auth::Login::has_provider),
+            ))
             .merge(protocols::router(index.clone()))
             .merge(annotations::router(index.clone()))
             .merge(worklist::router(index));

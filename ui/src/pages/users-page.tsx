@@ -33,7 +33,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { summary, useRoles, type RoleInfo } from "@/lib/roles";
-import { useSession } from "@/lib/session";
+import { throughProvider, useSession } from "@/lib/session";
 import { limitLabel, ProjectsChoice, ProjectsDialog, useProjects, type Projects } from "@/pages/projects-choice";
 
 type Account = { id: string; login: string; role: string; active: boolean; created_ms: number; projects: Projects };
@@ -238,9 +238,13 @@ export function UsersSection() {
           <h2 className="text-base font-semibold tracking-tight">Users</h2>
           <p className="mt-1 text-sm text-muted-foreground">Who may sign in to this server, and what each of them may do.</p>
         </div>
-        <Button size="sm" onClick={() => setAdding(true)}>
-          <Plus /> Add user
-        </Button>
+        {throughProvider ? (
+          <p className="max-w-xs text-sm text-muted-foreground">Accounts are made when people first sign in through your organisation.</p>
+        ) : (
+          <Button size="sm" onClick={() => setAdding(true)}>
+            <Plus /> Add user
+          </Button>
+        )}
       </div>
       <div className="mt-5 rounded-lg border bg-card">
         {users.isError ? (
@@ -303,9 +307,11 @@ export function UsersSection() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={() => setResetting(u)}>
-                          <KeyRound /> Set a new password
-                        </DropdownMenuItem>
+                        {!throughProvider && (
+                          <DropdownMenuItem onSelect={() => setResetting(u)}>
+                            <KeyRound /> Set a new password
+                          </DropdownMenuItem>
+                        )}
                         {(projects.length > 0 || u.projects !== null) && (
                           <DropdownMenuItem onSelect={() => setLimiting(u)}>
                             <FolderLock /> Studies they see
