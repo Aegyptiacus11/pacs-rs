@@ -38,6 +38,10 @@ projects sees their studies and nothing else.
   references stay linked. Keep the secret as safe as the data.
 - **Recorded**: Patient Identity Removed YES, the De-identification Method Code Sequence (CID 7050) and a
   De-identification Method naming the profile and each override, new File Meta Information.
+- **The way back, for write-back**: the index records each UID the profile replaced with the
+  one it replaced, and the original patient and study (their main tags) of each de-identified
+  study, so that a result made on the copy can go back to the original study. No route serves
+  them; a backup of the index holds them, so keep it as safe as the data.
 - **Quarantine**: what may carry identification pacs-rs cannot remove is not de-identified: Secondary
   Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
   SCREEN SAVE (each profile may change the list). It is kept as received in `PACS_QUARANTINE`, never indexed
