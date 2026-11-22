@@ -1,8 +1,8 @@
 # Hospital interfaces: the plan
 
-Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), C-GET aside, and of
-step 8 the C-FIND, C-MOVE and C-GET SCP on both information models; the rest is not yet. pacs-rs speaks DICOMweb, its REST API and DIMSE
-C-ECHO, C-STORE, C-FIND and C-MOVE today.
+Steps 1 to 4 are built (`crates/pacs-dimse`, see [DIMSE](dimse.md)), and of step 8 the
+C-FIND, C-MOVE and C-GET SCP on both information models; the rest is not yet. pacs-rs speaks
+DICOMweb, its REST API and DIMSE C-ECHO, C-STORE, C-FIND, C-MOVE and C-GET today.
 
 It is meant to be both kinds of PACS in one program:
 
@@ -49,9 +49,10 @@ destination the hospital names.
 4. **C-MOVE SCU** (PS3.4 C.4.2.2) with pacs-rs's own AE title as the destination; progress from the
    pending responses' Remaining, Completed, Failed and Warning counts. **C-GET SCU** (PS3.4 C.4.3.2) where
    the hospital supports it, with SCP/SCU Role Selection for the storage SOP classes (PS3.7 D.3.3.4). When
-   the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP. *C-MOVE done for Study
-   Root (`POST /modalities/{id}/move`), synchronous or as a job with its progress (`/jobs/{id}`). C-GET
-   not yet.*
+   the hospital offers DICOMweb, QIDO-RS and WADO-RS are the same steps over HTTP. *Done (`POST
+   /modalities/{id}/move`), on both models, synchronous or as a job with its progress
+   (`/jobs/{id}`): C-MOVE first, C-GET when the hospital refuses pacs-rs as a destination,
+   takes no C-MOVE, or pacs-rs does not listen for DIMSE.*
 5. **De-identification on ingest** (research mode), below. *Built: `pacs-deid` and projects
    (`PACS_PROJECTS`); what is not yet is said below.*
 6. **TLS** on associations, following the BCP 195 TLS profile of PS3.15 B.12. *Built: see
