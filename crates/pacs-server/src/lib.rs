@@ -161,6 +161,12 @@ pub struct Settings {
     #[arg(long, env = "PACS_OIDC_SCOPES", default_value = "openid email profile")]
     pub oidc_scopes: String,
 
+    /// What a tool's access token from the provider must name as its audience (`aud`), and
+    /// what the tool asks for as `resource` (RFC 8707). By default the origin of
+    /// PACS_OIDC_REDIRECT_URL, e.g. `https://pacs.example.org`.
+    #[arg(long, env = "PACS_OIDC_AUDIENCE")]
+    pub oidc_audience: Option<String>,
+
     /// The role of an account made at its first sign-in through the provider.
     #[arg(long, env = "PACS_OIDC_ROLE", default_value = "reader")]
     pub oidc_role: String,

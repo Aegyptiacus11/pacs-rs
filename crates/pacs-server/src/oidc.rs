@@ -85,6 +85,9 @@ pub struct ProviderSettings {
     pub role: String,
     /// Lower case.
     pub admins: Vec<String>,
+    /// What a tool's access token from the provider must name as its audience: this server
+    /// (RFC 9068 4, RFC 8707).
+    pub audience: String,
 }
 
 /// What the discovery document says, of what is used here.
@@ -215,6 +218,79 @@ impl Provider {
         self.0.discovery.introspection_endpoint.as_deref()
     }
 
+    pub fn audience(&self) -> &str {
+        &self.0.settings.audience
+    }
+
+    /// The claims of a tool's access token: a JWT checked with the provider's keys (RFC
+    /// 9068), anything else asked of its introspection endpoint (RFC 7662, IUA ITI-102).
+    /// Either way the provider issued it, for this server, and it has not expired.
+    pub async fn access_claims(&self, token: &str) -> Result<Map<String, Value>, Failure> {
+        let bad = |why: &str| Failure::Token(why.to_owned());
+        if jsonwebtoken::decode_header(token).is_ok() {
+            let claims = self.verified(token, &self.0.settings.audience).await?;
+            // an ID token says who signed in, to a client: it is not an access token
+            if claims.contains_key("nonce") {
+                return Err(bad("an ID token, not an access token"));
+            }
+            return Ok(claims);
+        }
+        let Some(endpoint) = &self.0.discovery.introspection_endpoint else {
+            return Err(bad(
+                "not a JWT, and the provider has no introspection endpoint",
+            ));
+        };
+        let response = self
+            .0
+            .http
+            .post(endpoint)
+            .header(axum::http::header::AUTHORIZATION, self.client_basic())
+            .form(&[("token", token), ("token_type_hint", "access_token")])
+            .send()
+            .await
+            .map_err(|e| Failure::Provider(format!("the introspection endpoint: {e}")))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Failure::Provider(format!(
+                "the introspection endpoint answered {status}"
+            )));
+        }
+        let claims: Map<String, Value> = response
+            .json()
+            .await
+            .map_err(|e| Failure::Provider(format!("the introspection endpoint's answer: {e}")))?;
+        // RFC 7662 2.2: only "active": true says anything; every other claim is optional
+        if claims.get("active") != Some(&Value::Bool(true)) {
+            return Err(bad("not active"));
+        }
+        if let Some(issuer) = claims.get("iss")
+            && issuer.as_str() != Some(self.0.settings.issuer.as_str())
+        {
+            return Err(bad("issued by another provider"));
+        }
+        let audience = self.0.settings.audience.as_str();
+        let for_us = match claims.get("aud") {
+            Some(Value::String(aud)) => aud == audience,
+            Some(Value::Array(aud)) => aud.iter().any(|a| a.as_str() == Some(audience)),
+            _ => false,
+        };
+        if !for_us {
+            return Err(bad("issued for another audience"));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| Failure::Internal(e.to_string()))?
+            .as_secs();
+        if claims
+            .get("exp")
+            .and_then(Value::as_u64)
+            .is_some_and(|exp| exp + LEEWAY_SECONDS < now)
+        {
+            return Err(bad("expired"));
+        }
+        Ok(claims)
+    }
+
     pub fn http(&self) -> &reqwest::Client {
         &self.0.http
     }
@@ -342,7 +418,9 @@ impl Provider {
         let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[&self.0.settings.issuer]);
         validation.set_audience(&[audience]);
-        validation.set_required_spec_claims(&["iss", "sub", "aud", "exp"]);
+        // `sub` is required of an ID token by `identity`; a tool's access token is known by its
+        // client, and Rauthy's (client credentials) has no `sub`
+        validation.set_required_spec_claims(&["iss", "aud", "exp"]);
         validation.leeway = LEEWAY_SECONDS;
         validation.validate_nbf = true;
         let data = jsonwebtoken::decode::<Map<String, Value>>(token, &key, &validation)
