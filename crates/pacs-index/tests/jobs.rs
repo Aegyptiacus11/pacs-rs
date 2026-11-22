@@ -22,11 +22,13 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
             (job.restarts, job.cancel_asked, job.finished_ms),
             (0, false, None)
         );
-        assert_eq!(index.running_jobs().await.unwrap().len(), 1);
+        // just started: alive, not stale
+        assert_eq!(index.stale_jobs(job.started_ms - 1).await.unwrap(), []);
+        assert_eq!(index.stale_jobs(i64::MAX).await.unwrap().len(), 1);
 
         assert!(
             !index
-                .job_progress(id, &json!({"Completed": 2}))
+                .job_heartbeat(id, Some(&json!({"Completed": 2})))
                 .await
                 .unwrap()
         );
@@ -36,19 +38,13 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
         );
         let asked = index.ask_cancel(id).await.unwrap().unwrap();
         assert!(asked.cancel_asked);
-        assert!(
-            index
-                .job_progress(id, &json!({"Completed": 3}))
-                .await
-                .unwrap()
-        );
+        assert!(index.job_heartbeat(id, None).await.unwrap());
 
-        index.restart_job(id).await.unwrap();
-        let restarted = index.job(id).await.unwrap().unwrap();
-        assert_eq!(
-            (restarted.restarts, restarted.progress.clone()),
-            (1, json!({}))
-        );
+        // claimed once its heartbeat is older than asked; claimed, it is fresh again
+        assert!(index.claim_job(id, i64::MAX).await.unwrap());
+        assert!(!index.claim_job(id, 0).await.unwrap());
+        let claimed = index.job(id).await.unwrap().unwrap();
+        assert_eq!((claimed.restarts, claimed.progress.clone()), (1, json!({})));
 
         index
             .finish_job(
@@ -64,10 +60,10 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
         assert_eq!(over.state, "Cancelled");
         assert_eq!(over.failed_instances, ["9.9"]);
         assert!(over.finished_ms.is_some());
-        assert_eq!(index.running_jobs().await.unwrap(), []);
-        // over: a cancel changes nothing, a restart neither
+        assert_eq!(index.stale_jobs(i64::MAX).await.unwrap(), []);
+        // over: a cancel changes nothing, a claim neither
         index.ask_cancel(id).await.unwrap();
-        index.restart_job(id).await.unwrap();
+        assert!(!index.claim_job(id, i64::MAX).await.unwrap());
         assert_eq!(index.job(id).await.unwrap().unwrap().restarts, 1);
         assert_eq!(index.ask_cancel(999_999).await.unwrap(), None);
         assert_eq!(index.job(999_999).await.unwrap(), None);

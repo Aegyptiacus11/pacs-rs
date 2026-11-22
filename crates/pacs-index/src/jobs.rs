@@ -73,8 +73,9 @@ impl Index {
         let mut tx = self.begin_write().await?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO jobs (kind, remote, destination, studies, state, progress,
-                               failed_instances, error, cancel_asked, restarts, started_ms)
-             VALUES ($1, $2, $3, $4, 'Running', '{}', '[]', NULL, 0, 0, $5) RETURNING id",
+                               failed_instances, error, cancel_asked, restarts, started_ms,
+                               heartbeat_ms)
+             VALUES ($1, $2, $3, $4, 'Running', '{}', '[]', NULL, 0, 0, $5, $5) RETURNING id",
         )
         .bind(kind)
         .bind(remote)
@@ -103,22 +104,42 @@ impl Index {
         rows.iter().map(job).collect()
     }
 
-    /// The jobs left running: at a start, those of a server that stopped.
-    pub async fn running_jobs(&self) -> Result<Vec<StoredJob>, Error> {
-        let rows = sqlx::query(select("WHERE state = 'Running' ORDER BY id"))
-            .fetch_all(&self.pool)
-            .await?;
+    /// The jobs running whose heartbeat stopped before `before_ms`: those of a server that
+    /// stopped.
+    pub async fn stale_jobs(&self, before_ms: i64) -> Result<Vec<StoredJob>, Error> {
+        let rows = sqlx::query(select(
+            "WHERE state = 'Running' AND (heartbeat_ms IS NULL OR heartbeat_ms < $1) ORDER BY id",
+        ))
+        .bind(before_ms)
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter().map(job).collect()
     }
 
-    /// The job's counts as they are now; whether a cancel was asked of it.
-    pub async fn job_progress(&self, id: i64, progress: &Value) -> Result<bool, Error> {
+    /// The server running job `id` is alive: its heartbeat, with its counts when there are
+    /// new ones. Whether a cancel was asked of it.
+    pub async fn job_heartbeat(&self, id: i64, progress: Option<&Value>) -> Result<bool, Error> {
         let mut tx = self.begin_write().await?;
-        sqlx::query("UPDATE jobs SET progress = $1 WHERE id = $2 AND state = 'Running'")
-            .bind(progress.to_string())
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        match progress {
+            Some(progress) => {
+                sqlx::query(
+                    "UPDATE jobs SET progress = $1, heartbeat_ms = $2
+                     WHERE id = $3 AND state = 'Running'",
+                )
+                .bind(progress.to_string())
+                .bind(now_ms())
+                .bind(id)
+                .execute(&mut *tx)
+                .await?
+            }
+            None => {
+                sqlx::query("UPDATE jobs SET heartbeat_ms = $1 WHERE id = $2 AND state = 'Running'")
+                    .bind(now_ms())
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?
+            }
+        };
         let asked: Option<i64> = sqlx::query_scalar("SELECT cancel_asked FROM jobs WHERE id = $1")
             .bind(id)
             .fetch_optional(&mut *tx)
@@ -143,19 +164,25 @@ impl Index {
         row.as_ref().map(job).transpose()
     }
 
-    /// A job taken up again by a start of the server: running, its counts reset, one
-    /// restart more.
-    pub async fn restart_job(&self, id: i64) -> Result<(), Error> {
+    /// Claim a job a stopped server left running, to take it up or end it: `true` for the
+    /// one server that gets it, its heartbeat now this server's, its counts reset, one
+    /// restart more. `false`: alive again, over, or claimed by another server first.
+    pub async fn claim_job(&self, id: i64, stale_before_ms: i64) -> Result<bool, Error> {
         let mut tx = self.begin_write().await?;
-        sqlx::query(
-            "UPDATE jobs SET restarts = restarts + 1, progress = '{}', failed_instances = '[]'
-             WHERE id = $1 AND state = 'Running'",
+        let claimed = sqlx::query(
+            "UPDATE jobs SET heartbeat_ms = $1, restarts = restarts + 1, progress = '{}',
+                    failed_instances = '[]'
+             WHERE id = $2 AND state = 'Running'
+               AND (heartbeat_ms IS NULL OR heartbeat_ms < $3)",
         )
+        .bind(now_ms())
         .bind(id)
+        .bind(stale_before_ms)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
         tx.commit().await?;
-        Ok(())
+        Ok(claimed == 1)
     }
 
     /// The end of a job; the finished jobs past [`KEPT_FINISHED`] go.
