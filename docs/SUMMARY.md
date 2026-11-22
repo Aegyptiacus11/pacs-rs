@@ -38,6 +38,7 @@
 - [REST API reference](api-reference.md)
 - [DICOMweb](dicomweb.md)
 - [DIMSE](dimse.md)
+- [Command-line tools](tools.md)
 
 # Where it is going
 
