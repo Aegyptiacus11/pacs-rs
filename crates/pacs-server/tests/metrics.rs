@@ -158,11 +158,23 @@ fn associations_are_counted_while_they_last() {
     let open = || pacs_core::metrics::ASSOCIATIONS_OPEN.load(Ordering::Relaxed);
     let accepted = || pacs_core::metrics::ASSOCIATIONS_ACCEPTED.load(Ordering::Relaxed);
     let (before, before_accepted) = (open(), accepted());
-    let association = pacs_core::metrics::OpenAssociation::new();
+    let association = pacs_core::metrics::OpenAssociation::new("10.0.0.7:4100", "CT1", "PACSRS");
     assert_eq!(open(), before + 1);
     assert_eq!(accepted(), before_accepted + 1);
+    association.served(3, 1, 0);
+    let listed = pacs_core::metrics::active_associations();
+    let mine = listed.iter().find(|a| a.peer == "10.0.0.7:4100").unwrap();
+    assert_eq!(
+        (mine.calling.as_str(), mine.stored, mine.queries),
+        ("CT1", 3, 1)
+    );
     drop(association);
     assert_eq!(open(), before);
+    assert!(
+        !pacs_core::metrics::active_associations()
+            .iter()
+            .any(|a| a.peer == "10.0.0.7:4100")
+    );
 }
 
 #[test]
