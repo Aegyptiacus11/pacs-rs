@@ -2185,6 +2185,7 @@ dependencies = [
  "bytes",
  "dicom-core",
  "dicom-dictionary-std",
+ "dicom-object",
  "futures",
  "http-body-util",
  "memchr",
