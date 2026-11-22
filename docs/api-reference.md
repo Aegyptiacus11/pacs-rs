@@ -930,6 +930,61 @@ Permission, when the login is on: `remote`.
 | 404 | nothing | No job has this id; the body is empty. |
 | 409 | [Error](#error) | The job is over already. |
 
+## Trash
+
+Deletions that can still be undone, for `PACS_TRASH_DAYS` days (30). For a role with `delete`, on an account not limited to projects.
+
+### `GET /trash`
+
+Lists the trash.
+
+The deletions that can still be undone, the latest first. Empty when `PACS_TRASH_DAYS` is 0.
+
+Permission, when the login is on: `delete`.
+
+| Status | Answer | |
+|---|---|---|
+| 200 | list of [TrashEntry](#trashentry) | The deletions in the trash. |
+| 403 | nothing | An account limited to projects. |
+
+### `DELETE /trash/{id}`
+
+Empties a deletion now.
+
+Its files are removed for good; it cannot be restored after this.
+
+Permission, when the login is on: `delete`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The entry's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 204 | nothing | Emptied. |
+| 403 | nothing | An account limited to projects. |
+| 404 | nothing | No such entry. |
+| 503 | nothing | The store or the index did not answer. |
+
+### `POST /trash/{id}/restore`
+
+Restores a deletion.
+
+Its files are indexed again as if received, each study in the project it was in, with the viewer's annotations of a whole study. An instance stored again since the deletion keeps the newer copy, and that file stays in the trash. The entry goes once no file is left in it.
+
+Permission, when the login is on: `delete`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The entry's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Restored](#restored) | What was restored, and what was left. |
+| 403 | nothing | An account limited to projects. |
+| 404 | nothing | No such entry. |
+| 503 | nothing | The store or the index did not answer. |
+
 ## Integrity
 
 Each stored file checked against the size and SHA-256 the index took when it was stored. Only for a role with `users`.
@@ -1488,6 +1543,15 @@ A move in the background, or one that is over. Jobs are kept in the index, the l
 | `Type` | string | `C-MOVE`. |
 | `Warning` | integer or null |  |
 
+### Kept
+
+A file a restore left in the trash.
+
+| Field | Type | |
+|---|---|---|
+| `object_key` | string | Where it was before the deletion. |
+| `reason` | string | Why it was left. |
+
 ### Me
 
 Who a token is.
@@ -1615,6 +1679,15 @@ A remote AE as configured in `PACS_DIMSE_REMOTES`.
 The remote AEs: their ids, or with `expand` each id's AE.
 
 list of string or object of [RemoteAe](#remoteae).
+
+### Restored
+
+What a restore did.
+
+| Field | Type | |
+|---|---|---|
+| `kept` | list of [Kept](#kept) | Files left in the trash, each with why: an instance stored again since the deletion keeps the newer copy. |
+| `restored` | integer | Files indexed again. |
 
 ### Role
 
@@ -1803,6 +1876,20 @@ A tool: a program that connects without a person.
 | `projects` | list of string or null | The projects the tool is limited to; `null` when it sees every study. |
 | `role` | string | The id of its role. |
 | `secret` | string or null, optional | Its secret: in the answer that makes the tool, and never again. |
+
+### TrashEntry
+
+A deletion in the trash.
+
+| Field | Type | |
+|---|---|---|
+| `ID` | string | Its id, for restoring or emptying it. |
+| `PublicID` | string | Its public ID. |
+| `deleted_ms` | integer | When it was deleted, in milliseconds since the Unix epoch. |
+| `emptied_ms` | integer | When the server empties it, in milliseconds since the Unix epoch. |
+| `files` | integer | Files waiting. |
+| `level` | string | What the deletion named: `Patient`, `Study`, `Series` or `Instance`. |
+| `studies` | list of object | The studies it took from, a part or all: `StudyInstanceUID`, `PatientID`, `PatientName`, and the `project` the study was in. |
 
 ### Uids
 

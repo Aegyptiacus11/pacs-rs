@@ -48,6 +48,7 @@ Where the files and the index are kept. See [Running](running.md) for Docker, an
 | `PACS_OVERWRITE_INSTANCES` | `false` | replace an instance sent again, instead of keeping the first copy |
 | `PACS_COMPRESSION` | `jpeg-ls` | how uncompressed pixel data is stored: `jpeg-ls` (lossless, checked) or `off` |
 | `PACS_MAX_UPLOAD_BYTES` | 1 GiB | largest STOW-RS or upload body |
+| `PACS_TRASH_DAYS` | `30` | days a deleted resource stays in the trash, restorable, before its files go; `0`: deleted at once (see [Deleting and restoring](trash.md)) |
 | `PACS_CHECK_FILES_DAYS` | `30` | check a stored file against its SHA-256 again once its last check is this many days old, in the background; `0`: never (see [Checking stored files](integrity.md)) |
 | `PACS_MAX_READ_BYTES` | 512 MiB | memory that reading files may take at once beyond the files themselves, by estimate (see [costly files](dicomweb.md#elements-in-un-wrong-lengths-and-costly-files)) |
 
