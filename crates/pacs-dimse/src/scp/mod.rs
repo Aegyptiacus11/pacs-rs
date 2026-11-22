@@ -271,10 +271,10 @@ impl Scp {
         let called = association.called_ae_title().trim().to_owned();
         let destination = self.destination(&called).clone();
         tracing::info!(%peer, calling, called, "association established");
-        let _open = pacs_core::metrics::OpenAssociation::new();
+        let open = pacs_core::metrics::OpenAssociation::new(&peer.to_string(), &calling, &called);
         // what the archive takes in while the association lasts: its messages are served
         // on this task, one after the other
-        let messages = self.messages(association, peer, &calling, &called, &destination);
+        let messages = self.messages(association, peer, &calling, &called, &destination, &open);
         let ((), stored) = stored_during(messages).await;
         if let Some(observer) = &self.observer
             && !stored.is_empty()
@@ -438,12 +438,19 @@ impl Scp {
         calling: &str,
         called: &str,
         destination: &Destination,
+        open: &pacs_core::metrics::OpenAssociation,
     ) where
         A: dicom_ul::association::AsyncAssociation<S> + Association + Send,
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
         let mut served = Counts::default();
         loop {
+            // what it did so far, for the administration page
+            open.served(
+                served.stored as u64,
+                served.found as u64,
+                served.retrieved as u64,
+            );
             match message::receive(&mut association, self.config.max_data_set_bytes).await {
                 Ok(Incoming::Message(message)) => {
                     let Some(context) = association
