@@ -1,9 +1,10 @@
 //! pacs-rs as an association requestor: the association every operation opens, here, and
 //! the operations, one module each: [`echo`] (C-ECHO), [`find`] (C-FIND), [`retrieve`]
-//! (C-MOVE), [`store`] (C-STORE).
+//! (C-MOVE), [`get`] (C-GET), [`store`] (C-STORE).
 
 pub mod echo;
 pub mod find;
+pub mod get;
 pub mod retrieve;
 pub mod store;
 
@@ -81,6 +82,14 @@ impl Link {
         }
     }
 
+    /// The address of the peer at the other end of the connection.
+    pub fn peer_address(&mut self) -> Option<std::net::SocketAddr> {
+        match self {
+            Link::Plain(association) => association.inner_stream().peer_addr().ok(),
+            Link::Tls(association) => association.inner_stream().get_ref().0.peer_addr().ok(),
+        }
+    }
+
     /// Release the association. A peer that is gone already is not an error to report:
     /// what the operation found out, it found out before.
     pub async fn release(self) {
@@ -145,6 +154,20 @@ pub(crate) async fn associate(
     timeout: Duration,
     response_timeout: Duration,
 ) -> Result<(Link, Vec<store::Accepted>), ConnectError> {
+    associate_with_roles(remote, calling, contexts, &[], timeout, response_timeout).await
+}
+
+/// [`associate`], proposing for each SOP class of `scp_roles` that pacs-rs takes the SCP
+/// role and not the SCU one (SCP/SCU Role Selection, PS3.7 D.3.3.4): how a C-GET's
+/// requester receives the instances it asked for (PS3.4 C.5.3).
+pub(crate) async fn associate_with_roles(
+    remote: &RemoteAe,
+    calling: &AeTitle,
+    contexts: &[(String, Vec<String>)],
+    scp_roles: &[String],
+    timeout: Duration,
+    response_timeout: Duration,
+) -> Result<(Link, Vec<store::Accepted>), ConnectError> {
     let mut options = ClientAssociationOptions::new()
         .calling_ae_title(calling.as_str().to_owned())
         .called_ae_title(remote.ae_title.as_str().to_owned())
@@ -154,6 +177,9 @@ pub(crate) async fn associate(
     for (abstract_syntax, transfer_syntaxes) in contexts {
         options =
             options.with_presentation_context(abstract_syntax.clone(), transfer_syntaxes.clone());
+    }
+    for sop_class in scp_roles {
+        options = options.with_role_selection(sop_class.clone(), false, true);
     }
     let refused = |source| ConnectError::Association {
         ae: remote.ae_title.to_string(),
