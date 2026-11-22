@@ -14,6 +14,7 @@ use std::time::Duration;
 
 pub mod ae;
 pub mod command;
+pub mod conformance;
 pub mod message;
 pub mod project;
 pub mod query;
