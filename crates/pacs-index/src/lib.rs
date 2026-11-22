@@ -46,6 +46,7 @@ mod clients;
 mod delete;
 mod forward;
 mod jobs;
+pub mod labels;
 pub mod matching;
 mod originals;
 mod protocols;
