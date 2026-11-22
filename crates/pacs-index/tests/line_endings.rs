@@ -67,11 +67,10 @@ async fn a_migration_that_really_changed_is_still_refused() {
     let path = dir.path().join("index.sqlite");
     drop(Index::open(&path).await.unwrap());
     set_checksums(&path, |sql| sha384(&format!("{sql}-- changed\n"))).await;
-    let refused = Index::open(&path).await;
-    let error = refused
-        .err()
-        .expect("a changed migration is refused")
-        .to_string();
+    let error = match Index::open(&path).await {
+        Ok(_) => panic!("a changed migration is refused"),
+        Err(e) => e.to_string(),
+    };
     assert!(
         error.contains("previously applied but has been modified"),
         "{error}"
