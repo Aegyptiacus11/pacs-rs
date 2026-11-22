@@ -78,10 +78,14 @@ this milestone.
 
 ## 5. The research workflow
 
-| Item | Done when |
-|---|---|
-| Write-back | segmentations as DICOM Segmentation and measurements as Structured Reports go to the hospital's destination (clinical mode, step 7) |
-| Labels, metadata and modifications | the rest of the [REST API](rest-api.md) that research tools use |
+Built: a project's de-identified copies keep [the way back](de-identification.md) to their
+originals in the index; a result made on a copy (a segmentation, a report), sent to the
+project's AE title or stored over HTTP by an account that sees the study, is stored in that
+study as it comes, and with `"write_back"` it goes to the hospital's archive once its study is
+quiet, re-identified: the original UIDs, patient and study, as a job taken up again after a
+restart. The [REST API](rest-api.md) has labels and metadata on every level, labels in
+`/tools/find`. Not planned: a re-identification key, the remaining cleaning options of PS3.15,
+a quarantine review, MIDI-B, and modifications. Nothing remains of this milestone.
 
 ## 6. The clinical archive
 
