@@ -2103,3 +2103,202 @@ fn the_spool_is_checked_at_start() {
     let off = dimse_config(&settings_in(dir.path(), &["--dimse-spool-from", "0"])).unwrap();
     assert!(off.spool.is_none());
 }
+
+/// Write-back: a result made on a project's de-identified copy goes, once its study is
+/// quiet, to the remote AE the project names, re-identified: under the original study, the
+/// original patient, its references pointing at the original images; the copy itself is
+/// not sent. A project that names no remote AE keeps its results.
+#[tokio::test]
+async fn a_project_writes_its_results_back_reidentified() {
+    use dicom_core::value::{DataSetSequence, PrimitiveValue, Value as DicomValue};
+    use dicom_core::{DataElement, Length, VR};
+    use dicom_dictionary_std::tags;
+    use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
+
+    const SECRET: &str = "0123456789abcdef0123456789abcdef";
+    let there_dir = tempfile::tempdir().unwrap();
+    let (there, port) = receiving_archive(there_dir.path()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let projects = dir.path().join("projects.json");
+    std::fs::write(
+        &projects,
+        r#"[{"ae_title": "LIVER_2026", "profile": {"name": "liver-2026"}, "write_back": "hospital"},
+            {"ae_title": "LUNG_2026", "profile": {"name": "lung-2026"}}]"#,
+    )
+    .unwrap();
+    let remotes = format!("hospital=ARCHIVE2@127.0.0.1:{port}");
+    let settings = settings_in(
+        dir.path(),
+        &[
+            "--dimse-remotes",
+            &remotes,
+            "--dimse-move-destinations",
+            "hospital",
+            "--projects",
+            projects.to_str().unwrap(),
+            "--forward-after",
+            "0",
+        ],
+    );
+    let archive = open_archive(&settings).await.unwrap();
+    let opened = pacs_server::projects::open_projects(&settings, &archive, |name| {
+        name.starts_with("PACS_PROJECT_SECRET_")
+            .then(|| SECRET.to_owned())
+    })
+    .unwrap();
+    let keys = pacs_deid::Keys::new(SECRET.as_bytes().to_vec()).unwrap();
+    // a copy in each project
+    let liver = RealSeries::new(991, 2);
+    let lung = RealSeries::new(992, 1);
+    for (project, series) in [(&opened[0], &liver), (&opened[1], &lung)] {
+        for bytes in series.all_bytes() {
+            project.receive(bytes.into()).await.unwrap();
+        }
+    }
+    // a result on each copy: a new series of the copy's study, pointing at its first image
+    let result_on = |copy: &RealSeries, made: &RealSeries| {
+        let mut o = made.slice_object(0);
+        let mut item = InMemDicomObject::new_empty();
+        item.put(DataElement::new(
+            tags::REFERENCED_SOP_INSTANCE_UID,
+            VR::UI,
+            PrimitiveValue::from(keys.uid(&copy.instance_uid(0)).as_str()),
+        ));
+        o.put(DataElement::new(
+            tags::REFERENCED_IMAGE_SEQUENCE,
+            VR::SQ,
+            DicomValue::Sequence(DataSetSequence::new(vec![item], Length::UNDEFINED)),
+        ));
+        let pseudonym = keys.pseudonym(&format!("{}\\", copy.patient_id()), "");
+        for (tag, vr, value) in [
+            (
+                tags::STUDY_INSTANCE_UID,
+                VR::UI,
+                keys.uid(&copy.study_uid()),
+            ),
+            (tags::PATIENT_ID, VR::LO, pseudonym.clone()),
+            (tags::PATIENT_NAME, VR::PN, pseudonym),
+        ] {
+            o.put(DataElement::new(
+                tag,
+                vr,
+                PrimitiveValue::from(value.as_str()),
+            ));
+        }
+        let mut file = Vec::new();
+        o.with_meta(
+            FileMetaTableBuilder::new()
+                .transfer_syntax("1.2.840.10008.1.2.1")
+                .media_storage_sop_class_uid("1.2.840.10008.5.1.4.1.1.2")
+                .media_storage_sop_instance_uid(made.instance_uid(0)),
+        )
+        .unwrap()
+        .write_all(&mut file)
+        .unwrap();
+        file
+    };
+    let liver_result = RealSeries::new(993, 1);
+    let lung_result = RealSeries::new(994, 1);
+    for file in [
+        result_on(&liver, &liver_result),
+        result_on(&lung, &lung_result),
+    ] {
+        archive.ingest(file.into()).await.unwrap();
+    }
+
+    // one job, for the project that writes back; the other's result stays
+    assert_eq!(
+        pacs_server::write_back_now(&settings, &archive)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        pacs_server::write_back_now(&settings, &archive)
+            .await
+            .unwrap(),
+        0
+    );
+    let app = app(archive.clone(), &settings).unwrap();
+    let (_, ids) = get(&app, "/jobs").await;
+    let id = ids[0].as_str().unwrap().to_owned();
+    let job = job_over(&app, &format!("/jobs/{id}")).await;
+    assert_eq!(job["Type"], "WRITE-BACK");
+    assert_eq!(job["State"], "Success", "{job}");
+
+    // at the hospital: the result alone, under the original study and patient
+    let index = there.index();
+    let study = index.study(&liver.study_uid()).await.unwrap().unwrap();
+    assert_eq!(study.instance_count, 1);
+    assert_eq!(
+        study.attributes["00100020"]["Value"][0],
+        liver.patient_id().as_str()
+    );
+    let back = index
+        .rest_instance_by_uid(&liver_result.instance_uid(0))
+        .await
+        .unwrap()
+        .unwrap();
+    let file = there.file_at(&back.object_key).await.unwrap();
+    let object = pacs_core::Instance::from_bytes(&file).unwrap().object;
+    let referenced = object
+        .element(tags::REFERENCED_IMAGE_SEQUENCE)
+        .unwrap()
+        .items()
+        .unwrap()[0]
+        .element(tags::REFERENCED_SOP_INSTANCE_UID)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .trim_end_matches('\0')
+        .to_owned();
+    assert_eq!(referenced, liver.instance_uid(0));
+    assert_eq!(
+        object
+            .element(tags::PATIENT_IDENTITY_REMOVED)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .trim(),
+        "NO"
+    );
+    for uid in [
+        keys.uid(&liver.study_uid()),
+        lung.study_uid(),
+        keys.uid(&lung.study_uid()),
+    ] {
+        assert!(index.study(&uid).await.unwrap().is_none(), "{uid}");
+    }
+}
+
+/// A project that writes back to an AE studies may not be sent to stops the start.
+#[test]
+fn a_write_back_that_cannot_work_stops_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let projects = dir.path().join("projects.json");
+    for (remote, said) in [
+        ("reader", "not in PACS_DIMSE_MOVE_DESTINATIONS"),
+        ("nobody", "not a remote AE"),
+    ] {
+        std::fs::write(
+            &projects,
+            format!(
+                r#"[{{"ae_title": "LIVER_2026", "profile": {{"name": "liver-2026"}}, "write_back": "{remote}"}}]"#
+            ),
+        )
+        .unwrap();
+        let settings = settings_in(
+            dir.path(),
+            &[
+                "--dimse-remotes",
+                "second=ARCHIVE2@127.0.0.1:9,reader=READER@127.0.0.1:9",
+                "--dimse-move-destinations",
+                "second",
+                "--projects",
+                projects.to_str().unwrap(),
+            ],
+        );
+        let error = pacs_server::write_backs(&settings).unwrap_err().to_string();
+        assert!(error.contains(said), "{remote}: {error}");
+    }
+}
