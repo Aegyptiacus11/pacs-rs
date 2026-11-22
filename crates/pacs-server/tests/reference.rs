@@ -193,6 +193,17 @@ impl Server {
         reply(response).await
     }
 
+    async fn put_body(&self, path: &str, body: Vec<u8>) -> Reply {
+        let response = self
+            .client
+            .put(format!("{}{path}", self.base))
+            .body(body)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{} PUT {path}: {e}", self.name));
+        reply(response).await
+    }
+
     async fn put(&self, path: &str) -> Reply {
         let response = self
             .client
@@ -755,6 +766,31 @@ async fn same_rest_answers_as_the_reference_server() {
         if report.status(&path, &r, &p) && r.body != p.body {
             report.push(format!("{path}: files differ"));
         }
+    }
+    // metadata: a user's, set and read back; the server's own that both know alike
+    if let Some(id) = instance_ids.first() {
+        let user = format!("/instances/{id}/metadata/1024");
+        let (r, p) = (
+            reference.put_body(&user, b"reviewed".to_vec()).await,
+            pacs.put_body(&user, b"reviewed".to_vec()).await,
+        );
+        report.status(&format!("PUT {user}"), &r, &p);
+        for name in ["1024", "SopClassUid", "IndexInSeries", "absent"] {
+            let path = format!("/instances/{id}/metadata/{name}");
+            let (r, p) = (
+                reference.get(&path, "*/*").await,
+                pacs.get(&path, "*/*").await,
+            );
+            if report.status(&path, &r, &p) && r.body != p.body {
+                report.push(format!(
+                    "{path}: reference {:?} | pacs-rs {:?}",
+                    String::from_utf8_lossy(&r.body),
+                    String::from_utf8_lossy(&p.body)
+                ));
+            }
+        }
+        let (r, p) = (reference.delete(&user).await, pacs.delete(&user).await);
+        report.status(&format!("DELETE {user}"), &r, &p);
     }
     let path = format!("/studies/{study_id}/archive");
     let (r, p) = (

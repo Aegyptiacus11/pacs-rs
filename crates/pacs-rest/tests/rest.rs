@@ -972,3 +972,135 @@ async fn labels_are_put_read_searched_and_go_with_their_resource() {
         json!([])
     );
 }
+
+/// Metadata: the server's own, read only; a user's, set, read, listed and removed at every
+/// level; refused when the name or value is not one; gone with their resource.
+#[tokio::test]
+async fn metadata_are_the_server_s_own_and_a_user_s() {
+    let app = app().await;
+    let [first, _, _] = two_studies(&app).await;
+    let (p, st, se) = (first.patient_id(), first.study_uid(), first.series_uid());
+    let patient = public_ids::patient(&p);
+    let study = public_ids::study(&p, &st);
+    let series = public_ids::series(&p, &st, &se);
+    let instance = public_ids::instance(&p, &st, &se, &first.instance_uid(0));
+
+    let names = json(
+        &app,
+        "GET",
+        &format!("/instances/{instance}/metadata"),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(
+        names,
+        json!([
+            "IndexInSeries",
+            "ReceptionDate",
+            "SopClassUid",
+            "TransferSyntax"
+        ])
+    );
+    let (status, content_type, body) = call(
+        &app,
+        "GET",
+        &format!("/instances/{instance}/metadata/SopClassUid"),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/plain"));
+    assert_eq!(body, "1.2.840.10008.5.1.4.1.1.2");
+
+    for (level, id) in [
+        ("patients", &patient),
+        ("studies", &study),
+        ("series", &series),
+        ("instances", &instance),
+    ] {
+        let path = format!("/{level}/{id}/metadata");
+        let (status, _, body) = call(
+            &app,
+            "PUT",
+            &format!("{path}/reviewer"),
+            "Dr. Ana, 2026".into(),
+        )
+        .await;
+        assert_eq!((status, body.is_empty()), (StatusCode::OK, true), "{level}");
+        call(&app, "PUT", &format!("{path}/reviewer"), "Dr. Bo".into()).await;
+        let (_, _, value) = call(&app, "GET", &format!("{path}/reviewer"), Bytes::new()).await;
+        assert_eq!(value, "Dr. Bo");
+        let expanded = json(&app, "GET", &format!("{path}?expand"), Bytes::new()).await;
+        assert_eq!(expanded["reviewer"], "Dr. Bo", "{level}");
+        assert!(
+            expanded.get("LastUpdate").is_some() || level == "instances",
+            "{level}"
+        );
+        let (status, _, _) = call(&app, "DELETE", &format!("{path}/reviewer"), Bytes::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, _) = call(&app, "GET", &format!("{path}/reviewer"), Bytes::new()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    let at = |name: &str| format!("/studies/{study}/metadata/{name}");
+    for (method, path, body, status) in [
+        (
+            "PUT",
+            at("LastUpdate"),
+            Bytes::from("x"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "DELETE",
+            at("LastUpdate"),
+            Bytes::new(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "PUT",
+            at("two%20words"),
+            Bytes::from("x"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "PUT",
+            at("note"),
+            Bytes::from(vec![0xff, 0xfe]),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "PUT",
+            at("note"),
+            Bytes::from(vec![b'a'; 64 * 1024 + 1]),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "PUT",
+            "/studies/nothing/metadata/note".to_owned(),
+            Bytes::from("x"),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "GET",
+            "/series/nothing/metadata".to_owned(),
+            Bytes::new(),
+            StatusCode::NOT_FOUND,
+        ),
+        ("GET", at("absent"), Bytes::new(), StatusCode::NOT_FOUND),
+    ] {
+        let (got, _, answer) = call(&app, method, &path, body).await;
+        assert_eq!(
+            got,
+            status,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&answer)
+        );
+    }
+
+    // a deletion takes the metadata of what it removed
+    call(&app, "PUT", &at("note"), "kept until the study goes".into()).await;
+    let (status, _, _) = call(&app, "DELETE", &format!("/studies/{study}"), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    let index_has = json(&app, "GET", "/studies", Bytes::new()).await;
+    assert!(!index_has.as_array().unwrap().contains(&json!(study)));
+}
