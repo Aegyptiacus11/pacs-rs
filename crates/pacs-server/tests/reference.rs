@@ -115,16 +115,27 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// The reference's BulkDataURI and pacs-rs's inline bytes, when the two answers are one
-/// binary value given in those two ways. pacs-rs has no BulkDataURI yet (docs/roadmap.md,
-/// "DICOMweb to the end"), and both forms are DICOM JSON for the same value (PS3.18 F.2.2).
-fn bulk_pair(reference: &Value, pacs: &Value) -> Option<(String, String)> {
+/// How pacs-rs gives a binary value the reference gives by a BulkDataURI: inline, or by a
+/// BulkDataURI of its own. Either is DICOM JSON for the value (PS3.18 F.2.2), and a server
+/// names its bulk data where it likes, so the bytes are compared, not the forms.
+#[derive(Debug, Clone)]
+enum PacsBulk {
+    Inline(String),
+    Uri(String),
+}
+
+/// The reference's BulkDataURI and pacs-rs's value, when the two answers are one binary value
+/// given that way.
+fn bulk_pair(reference: &Value, pacs: &Value) -> Option<(String, PacsBulk)> {
     let (r, p) = (reference.as_object()?, pacs.as_object()?);
     (r.len() == 2 && p.len() == 2 && r.get("vr")? == p.get("vr")?).then_some(())?;
-    Some((
-        r.get("BulkDataURI")?.as_str()?.to_owned(),
-        p.get("InlineBinary")?.as_str()?.to_owned(),
-    ))
+    let uri = r.get("BulkDataURI")?.as_str()?.to_owned();
+    let pacs = match (p.get("InlineBinary"), p.get("BulkDataURI")) {
+        (Some(Value::String(inline)), None) => PacsBulk::Inline(inline.clone()),
+        (None, Some(Value::String(uri))) => PacsBulk::Uri(uri.clone()),
+        _ => return None,
+    };
+    Some((uri, pacs))
 }
 
 fn same_members(a: &Value, b: &Value) -> bool {
@@ -265,9 +276,9 @@ fn parts(reply: &Reply) -> Vec<multipart::Part> {
 #[derive(Default)]
 struct Report {
     lines: Vec<String>,
-    /// (what, the reference's BulkDataURI, pacs-rs's InlineBinary), until [`Self::bulk_data`]
+    /// (what, the reference's BulkDataURI, pacs-rs's value), until [`Self::bulk_data`]
     /// compares their bytes.
-    bulk: Vec<(String, String, String)>,
+    bulk: Vec<(String, String, PacsBulk)>,
 }
 
 impl Report {
@@ -349,32 +360,56 @@ impl Report {
         }
     }
 
-    /// Fetches each BulkDataURI set aside by [`Self::objects`] from the reference and
-    /// compares the bytes with the ones pacs-rs gave inline.
-    async fn bulk_data(&mut self, reference: &Server) {
-        for (what, uri, inline) in std::mem::take(&mut self.bulk) {
-            let Some(path) = uri.strip_prefix("BASE") else {
-                self.push(format!("{what}: BulkDataURI outside the reference: {uri}"));
-                continue;
-            };
-            let Ok(inline) = base64::engine::general_purpose::STANDARD.decode(&inline) else {
-                self.push(format!("{what}: pacs-rs InlineBinary is not base64"));
-                continue;
-            };
-            let reply = reference
+    /// Fetches each BulkDataURI set aside by [`Self::objects`] and compares the bytes: the
+    /// reference's with pacs-rs's, inline or fetched from pacs-rs in turn.
+    async fn bulk_data(&mut self, reference: &Server, pacs: &Server) {
+        async fn fetch(server: &Server, uri: &str) -> Result<Vec<u8>, String> {
+            let path = uri
+                .strip_prefix("BASE")
+                .ok_or_else(|| format!("BulkDataURI outside the server: {uri}"))?;
+            let reply = server
                 .get(path, "multipart/related; type=application/octet-stream")
                 .await;
             if reply.status != 200 {
-                self.push(format!("{what}: bulk data status {}", reply.status));
-                continue;
+                return Err(format!("bulk data status {} for {uri}", reply.status));
             }
             let parts = parts(&reply);
-            if parts.len() != 1 || parts[0].content != inline {
+            match &parts[..] {
+                [one] => Ok(one.content.to_vec()),
+                _ => Err(format!("{} parts of bulk data for {uri}", parts.len())),
+            }
+        }
+        for (what, uri, given) in std::mem::take(&mut self.bulk) {
+            let theirs = match fetch(reference, &uri).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    self.push(format!("{what}: reference {e}"));
+                    continue;
+                }
+            };
+            let ours = match given {
+                PacsBulk::Inline(inline) => {
+                    match base64::engine::general_purpose::STANDARD.decode(&inline) {
+                        Ok(bytes) => bytes,
+                        Err(_) => {
+                            self.push(format!("{what}: pacs-rs InlineBinary is not base64"));
+                            continue;
+                        }
+                    }
+                }
+                PacsBulk::Uri(uri) => match fetch(pacs, &uri).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.push(format!("{what}: pacs-rs {e}"));
+                        continue;
+                    }
+                },
+            };
+            if theirs != ours {
                 self.push(format!(
-                    "{what}: {} part(s) of bulk data, {} bytes | {} bytes inline, contents differ",
-                    parts.len(),
-                    parts.first().map_or(0, |p| p.content.len()),
-                    inline.len()
+                    "{what}: bulk data of {} bytes | {} bytes, contents differ",
+                    theirs.len(),
+                    ours.len()
                 ));
             }
         }
@@ -933,7 +968,7 @@ async fn same_answers_as_the_reference_server() {
         }
     }
 
-    report.bulk_data(&reference).await;
+    report.bulk_data(&reference, &pacs).await;
     assert!(
         report.bulk.is_empty(),
         "bulk data set aside and not compared"

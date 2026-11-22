@@ -13,6 +13,7 @@ use utoipa::openapi::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+mod bulkdata;
 mod cache;
 mod error;
 pub mod media;
@@ -96,6 +97,7 @@ fn described() -> OpenApiRouter<scope::Whole> {
         .routes(routes!(wado::frames))
         .routes(routes!(rendered::instance))
         .routes(routes!(rendered::frame))
+        .routes(routes!(bulkdata::bulkdata))
 }
 
 /// The description alone, for writing the reference.

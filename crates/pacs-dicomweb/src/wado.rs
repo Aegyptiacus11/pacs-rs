@@ -249,8 +249,13 @@ pub(crate) async fn instance(
     retrieve(state.archive, &headers, entries, fixed)
 }
 
-/// The stored JSON of each instance, joined into one array as it is: no parsing.
-fn metadata_response(headers: &HeaderMap, metadata: Vec<String>) -> Result<Response, ApiError> {
+/// The stored JSON of each instance, joined into one array: as it is, but for its large
+/// binary values, named by BulkDataURIs under `base` ([`crate::bulkdata`]).
+fn metadata_response(
+    headers: &HeaderMap,
+    base: &str,
+    metadata: Vec<String>,
+) -> Result<Response, ApiError> {
     if !accepts_json(&accept(headers)) {
         return Err(ApiError::not_acceptable(
             "metadata comes as application/dicom+json",
@@ -261,7 +266,12 @@ fn metadata_response(headers: &HeaderMap, metadata: Vec<String>) -> Result<Respo
     }
     let mut body = String::with_capacity(metadata.iter().map(|m| m.len() + 1).sum::<usize>() + 2);
     body.push('[');
-    body.push_str(&metadata.join(","));
+    for (i, one) in metadata.iter().enumerate() {
+        if i > 0 {
+            body.push(',');
+        }
+        body.push_str(&crate::bulkdata::with_bulk_uris(one, base));
+    }
     body.push(']');
     let validator = Validator::for_body(&body);
     if validator.matches(headers) {
@@ -300,7 +310,7 @@ pub(crate) async fn study_metadata(
                 .await?,
         );
     }
-    metadata_response(&headers, metadata)
+    metadata_response(&headers, &state.base_url(&headers), metadata)
 }
 
 /// A series' metadata (WADO-RS).
@@ -327,7 +337,7 @@ pub(crate) async fn series_metadata(
         .index()
         .metadata_text(&study, &series, None)
         .await?;
-    metadata_response(&headers, metadata)
+    metadata_response(&headers, &state.base_url(&headers), metadata)
 }
 
 /// An instance's metadata (WADO-RS).
@@ -354,7 +364,7 @@ pub(crate) async fn instance_metadata(
         .index()
         .metadata_text(&study, &series, Some(&instance))
         .await?;
-    metadata_response(&headers, metadata)
+    metadata_response(&headers, &state.base_url(&headers), metadata)
 }
 
 /// `1`, `1,3,5`: frame numbers, from 1.

@@ -1509,3 +1509,58 @@ async fn a_32_bit_dose_is_stored_deflated_and_given_native() {
     let (w, h, samples, _) = decoded_png(&png.body);
     assert_eq!((w, h, samples), (10, 10, 1));
 }
+
+/// Bulk data (PS3.18 8.6.1.3): a binary value over 1 KiB is a BulkDataURI in metadata, and
+/// that URI gives its bytes; smaller ones stay inline.
+#[tokio::test]
+async fn large_binary_values_are_bulk_data() {
+    let app = app().await;
+    let (big, _) = two_series_study(&app).await;
+    let at = format!(
+        "/studies/{}/series/{}/instances/{}",
+        big.study_uid(),
+        big.series_uid(),
+        big.instance_uid(0)
+    );
+    let metadata = get(&app, &format!("{at}/metadata"), "application/dicom+json").await;
+    let element = &metadata.json()[0]["00431029"];
+    assert!(element.get("InlineBinary").is_none(), "{element}");
+    let uri = element["BulkDataURI"].as_str().unwrap();
+    assert!(uri.ends_with(&format!("{at}/bulkdata/00431029")), "{uri}");
+    // the GE private element of the real CT, its 2068 bytes as stored
+    let original = pacs_core::Instance::from_bytes(&big.slice_bytes(0)).unwrap();
+    let expected = original
+        .object
+        .element(dicom_core::Tag(0x0043, 0x1029))
+        .unwrap()
+        .to_bytes()
+        .unwrap()
+        .to_vec();
+    assert_eq!(expected.len(), 2068);
+    let path = uri
+        .split_once("/studies/")
+        .map(|(_, p)| format!("/studies/{p}"))
+        .unwrap();
+    let parts = get(
+        &app,
+        &path,
+        "multipart/related; type=\"application/octet-stream\"",
+    )
+    .await;
+    assert_eq!(parts.status, StatusCode::OK);
+    assert_eq!(parts.parts()[0].content.to_vec(), expected);
+    let alone = get(&app, &path, "application/octet-stream").await;
+    assert_eq!(alone.body.to_vec(), expected);
+    // small ones inline
+    assert!(metadata.json()[0]["0043102A"].get("InlineBinary").is_some());
+    for (path, status) in [
+        (format!("{at}/bulkdata/7FE00010"), StatusCode::NOT_FOUND),
+        (format!("{at}/bulkdata/00431030"), StatusCode::NOT_FOUND),
+        (format!("{at}/bulkdata/0043102"), StatusCode::BAD_REQUEST),
+        (format!("{at}/bulkdata/00400275/0"), StatusCode::BAD_REQUEST),
+    ] {
+        assert_eq!(get(&app, &path, "*/*").await.status, status, "{path}");
+    }
+    let json = get(&app, &path, "application/dicom+json").await;
+    assert_eq!(json.status, StatusCode::NOT_ACCEPTABLE);
+}

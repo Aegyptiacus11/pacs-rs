@@ -74,7 +74,7 @@ more than 16 bits in deflated frames. What remains:
 |---|---|
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |
 | Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
-| DICOMweb to the end | STOW-RS with JSON or XML and bulk data, BulkDataURI in metadata (`includefield` and rendered instances and frames are built) |
+| DICOMweb to the end | STOW-RS with JSON or XML and bulk data (`includefield`, rendered instances and frames, BulkDataURI in metadata are built) |
 | Conformance Statement | the PS3.2 document, generated from what the code negotiates |
 
 ## 5. The research workflow

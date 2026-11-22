@@ -727,6 +727,28 @@ Permission, when the login is on: `read`.
 | 404 | [Problem](#problem) | Nothing stored is named by this address. |
 | 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
 
+### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/bulkdata/{path}`
+
+Retrieves bulk data of an instance (WADO-RS).
+
+The value of one element that its metadata names by a BulkDataURI, as `application/octet-stream`.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `instance` | path | string | SOP Instance UID. |
+| `path` | path | string | The element's tag, or tags and item numbers from 0 down to it, separated by `/`. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `multipart/related` | The value, one part. |
+| 400 | [Problem](#problem) | Not a path of tags and item numbers. |
+| 404 | [Problem](#problem) | No such instance, or no element of bytes there; the pixel data is retrieved by its frames. |
+| 406 | [Problem](#problem) | `Accept` takes neither `application/octet-stream` nor a multipart of it. |
+
 ### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/frames/{frames}`
 
 Retrieves frames of an instance (WADO-RS).
