@@ -28,7 +28,7 @@ pub enum TranscodeError {
 impl Instance {
     /// The pixel layout every frame shares, if this instance is one the codecs handle:
     /// monochrome or palette colour of one sample per pixel, or RGB or YBR_FULL of three,
-    /// 8 or 16 bits allocated. The planar configuration is that of the native frames; a
+    /// 8 or 16 bits allocated, or 32 for monochrome. The planar configuration is that of the native frames; a
     /// compressed frame decodes by pixel.
     pub fn shape(&self) -> Result<Shape, TranscodeError> {
         let unsupported = |what: String| TranscodeError::Unsupported(what);
@@ -61,10 +61,16 @@ impl Instance {
             get(tags::BITS_STORED, "Bits Stored")?,
         )
         .with_samples(samples as u16, planar);
-        if !matches!(shape.bits_allocated, 8 | 16) {
+        // 32 bits: monochrome only, as RT Dose and other values beyond 16 bits are
+        let fits = match shape.bits_allocated {
+            8 | 16 => true,
+            32 => shape.samples == 1,
+            _ => false,
+        };
+        if !fits {
             return Err(unsupported(format!(
-                "{} bits allocated",
-                shape.bits_allocated
+                "{} bits allocated, {} samples per pixel",
+                shape.bits_allocated, shape.samples
             )));
         }
         Ok(shape)

@@ -239,18 +239,24 @@ fn stored_values(instance: &Instance, shape: Shape, native: &[u8]) -> Vec<f64> {
     let value = |raw: u32| {
         let raw = raw & mask;
         if signed && bits > 0 && raw & (1 << (bits - 1)) != 0 {
-            f64::from(raw as i64 as i32 - (1i64 << bits) as i32)
+            (i64::from(raw) - (1i64 << bits)) as f64
         } else {
             f64::from(raw)
         }
     };
     match shape.bits_allocated {
         8 => native.iter().map(|&b| value(u32::from(b))).collect(),
-        _ => native
+        16 => native
             .as_chunks::<2>()
             .0
             .iter()
             .map(|c| value(u32::from(u16::from_le_bytes(*c))))
+            .collect(),
+        _ => native
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| value(u32::from_le_bytes(*c)))
             .collect(),
     }
 }
