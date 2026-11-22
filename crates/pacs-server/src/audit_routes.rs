@@ -113,6 +113,8 @@ pub(crate) fn subject(method: &Method, path: &str, mount: &str) -> Option<Subjec
         ["tools", "find"] if post => Some(Subject::Search),
         ["tools", "create-archive"] if get || post => Some(Subject::Exported(Target::Listed)),
         ["instances"] if post => Some(Subject::Stores),
+        // a restore indexes its files again, as an upload would
+        ["trash", _, "restore"] if post => Some(Subject::Stores),
         [list] if get && level(list).is_some() => Some(Subject::Search),
         [kind, id, rest @ ..] => {
             let level = level(kind)?;

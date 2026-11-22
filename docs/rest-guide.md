@@ -425,8 +425,10 @@ $ curl http://127.0.0.1:8080/patients
 []
 ```
 
-**There is no undo.** The index entries go first and the files after, so the server never
-lists a file it no longer has.
+**A deletion can be undone for 30 days.** The index entries go at once, so nothing lists or
+serves the study any more, and its files wait in the [trash](trash.md): `GET /trash` lists
+what was deleted, `POST /trash/{id}/restore` puts it back. After `PACS_TRASH_DAYS` days
+(30), or with `DELETE /trash/{id}`, the files go for good.
 
 ## With the login on
 

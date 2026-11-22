@@ -13,7 +13,7 @@ use utoipa::openapi::{Info, License, OpenApi};
 use crate::auth::{Right, is_open, right_for};
 
 /// The sections of the reference, in order, each with what it is about.
-const TAGS: [(&str, &str); 13] = [
+const TAGS: [(&str, &str); 14] = [
     (
         "Patients",
         "A patient is the studies that share a Patient ID.",
@@ -39,6 +39,10 @@ const TAGS: [(&str, &str); 13] = [
     (
         "Jobs",
         "Moves from a remote archive that run in the background.",
+    ),
+    (
+        "Trash",
+        "Deletions that can still be undone, for `PACS_TRASH_DAYS` days (30). For a role with `delete`, on an account not limited to projects.",
     ),
     (
         "Integrity",
@@ -82,6 +86,7 @@ pub fn description() -> OpenApi {
     api.merge(crate::modalities::api());
     api.merge(crate::auth::api());
     api.merge(crate::checks::api());
+    api.merge(crate::trash::api());
     let mut info = Info::new("pacs-rs", env!("CARGO_PKG_VERSION"));
     info.description = Some(
         "The REST API of pacs-rs: patients, studies, series and instances by identifier. \

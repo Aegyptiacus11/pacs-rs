@@ -16,8 +16,9 @@ Where to read about it:
 What holds across the requests:
 
 A patient is the studies that share its Patient ID. A deletion removes the index entries first,
-then the files, so the index never names a missing file. A file that cannot be removed is
-logged and left in the store, unindexed. Uploads wait while a deletion runs, so a file sent
+then moves the files to the [trash](trash.md) (or removes them, with `PACS_TRASH_DAYS=0`), so
+the index never names a missing file. A file that cannot be moved or removed is logged and
+left in the store, unindexed. Uploads wait while a deletion runs, so a file sent
 again during a deletion is not lost. This holds within one server process: two pacs-rs
 processes on one index do not coordinate yet.
 

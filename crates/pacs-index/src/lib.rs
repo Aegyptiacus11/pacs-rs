@@ -51,6 +51,7 @@ mod rest;
 mod roles;
 pub mod search;
 mod seen;
+mod trash;
 mod users;
 mod worklist;
 pub use audited::AuditedStudy;
@@ -64,6 +65,7 @@ pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECO
 pub use roles::StoredRole;
 pub use search::{Key, StudyCursor, StudySearch, first_value};
 pub use seen::SeenBy;
+pub use trash::{TrashEntry, TrashFile};
 pub use users::{ProviderLink, ProviderUser, StoredUser, UserChange};
 pub use worklist::{
     PatientQuery, PatientSort, WorklistFacets, WorklistPatient, WorklistQuery, WorklistSort,

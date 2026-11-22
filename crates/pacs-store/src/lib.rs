@@ -110,6 +110,43 @@ impl Store {
         Ok(path.to_string())
     }
 
+    /// Where a file waits in trash entry `trash_id`: under `trash/<id>/` beside the
+    /// instances, which are under their Study Instance UID and so never named `trash`.
+    pub fn trash_key(&self, trash_id: i64, object_key: &str) -> String {
+        let prefix = self.prefix.as_ref();
+        let own = object_key
+            .strip_prefix(prefix)
+            .map(|rest| rest.trim_start_matches('/'))
+            .unwrap_or(object_key);
+        self.prefix
+            .clone()
+            .join("trash")
+            .join(trash_id.to_string())
+            .to_string()
+            + "/"
+            + own
+    }
+
+    /// Whether a key is in the trash.
+    pub fn is_trash(&self, key: &str) -> bool {
+        let trash = self.prefix.clone().join("trash").to_string();
+        key.strip_prefix(&trash)
+            .is_some_and(|rest| rest.starts_with('/'))
+    }
+
+    /// Move an object: within one store, a rename (on S3 a copy, then a deletion).
+    pub async fn rename(&self, from: &str, to: &str) -> Result<(), Error> {
+        match self
+            .backend
+            .rename(&Path::from(from), &Path::from(to))
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(object_store::Error::NotFound { .. }) => Err(Error::NotFound(from.to_owned())),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Every object under this store's prefix: its key, size and when it was last written.
     pub async fn list(&self) -> Result<Vec<StoredObject>, Error> {
         use futures::TryStreamExt;

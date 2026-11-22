@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 mod consistency;
 pub mod frames;
 pub mod observed;
+mod trash;
 
 use bytes::Bytes;
 use dicom_dictionary_std::tags;
@@ -107,6 +108,8 @@ pub struct Archive {
     frames_alone_from: u64,
     /// Where the frames of files are, once found.
     layouts: Arc<Mutex<frames::Layouts>>,
+    /// Days a deletion keeps its files in the trash; 0: deleted at once ([`trash`]).
+    trash_days: u64,
 }
 
 /// Room in the archive's read limit, for as long as it is held.
@@ -128,6 +131,7 @@ impl Archive {
             reading: Arc::new(Semaphore::new(read_permits(DEFAULT_READ_LIMIT))),
             frames_alone_from: frames::DEFAULT_FRAMES_ALONE_FROM,
             layouts: Arc::default(),
+            trash_days: 0,
         }
     }
 
@@ -358,6 +362,9 @@ impl Archive {
         public_id: &str,
     ) -> Result<Option<Deleted>, pacs_index::Error> {
         let _deleting = self.writes.write().await;
+        if self.trash_days > 0 {
+            return self.delete_to_trash(level, public_id).await;
+        }
         let Some(deleted) = self.index.delete(level, public_id).await? else {
             return Ok(None);
         };
@@ -393,6 +400,7 @@ fn read_permits(bytes: u64) -> usize {
 }
 
 pub use consistency::{Inconsistencies, LostRepair, OrphanRepair};
+pub use trash::Restored;
 
 /// The SHA-256 of `bytes`, lower-case hex: how the index keeps a stored file's.
 pub fn sha256_hex(bytes: &[u8]) -> String {

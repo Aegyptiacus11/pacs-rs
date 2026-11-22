@@ -173,6 +173,9 @@ pub fn right_for(method: &Method, path: &str) -> Right {
         path.strip_prefix(prefix)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     };
+    if under("/trash") {
+        return Right::Delete;
+    }
     if under("/users") || under("/clients") || under("/projects") || under("/tools/check-files") {
         return Right::Admin;
     }
