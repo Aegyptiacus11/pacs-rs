@@ -32,7 +32,9 @@ pub enum IngestError {
     )]
     TooCostly { estimate: u64, limit: u64 },
     /// Sent through an archive value limited to an account ([`Archive::limited_to`]).
-    #[error("an account limited to projects cannot store: what it sends would be in no project")]
+    #[error(
+        "an account limited to projects stores only results for its projects' studies: this would be in no project"
+    )]
     Limited,
     /// The UIDs contradict what the archive already holds.
     #[error("{0}")]
@@ -207,8 +209,9 @@ impl Archive {
     }
 
     /// The same archive as `account` sees it ([`Index::limited_to`]): reads and deletions
-    /// stay within the account's projects. Nothing is stored through such a value: what it
-    /// took in would be in no project, so out of its own sight.
+    /// stay within the account's projects. What is stored through such a value is only a
+    /// result for one of its project's studies: anything else would be in no project, so
+    /// out of its own sight.
     pub fn limited_to(&self, account: &str) -> Self {
         Archive {
             index: self.index.limited_to(account),
@@ -264,13 +267,11 @@ impl Archive {
         bytes: Bytes,
         expected_study: Option<&str>,
     ) -> Result<Ingested, IngestError> {
-        if self.index.account().is_some() {
-            return Err(IngestError::Limited);
-        }
         // Before the lock: a deletion waiting for it must not hold up those who have room.
         let _reading = self.admit(&bytes).await?;
         let _writing = self.writes.read().await;
         let instance = Instance::from_bytes(&bytes)?;
+        let project = self.project_of(&instance.key.study_instance_uid).await?;
         // whose it is, for who accounts for what was stored (see `observed`)
         let patient = (
             instance.string(tags::PATIENT_ID),
@@ -313,7 +314,7 @@ impl Archive {
         let size = bytes.len();
         let hash = sha256_hex(&bytes);
         let object_key = self.store.put_new(&instance.key, bytes).await?;
-        self.index_stored(instance, object_key, size, hash, noted)
+        self.index_stored(instance, project, object_key, size, hash, noted)
             .await
     }
 
@@ -322,6 +323,7 @@ impl Archive {
     async fn index_stored(
         &self,
         instance: Instance,
+        project: Option<String>,
         object_key: String,
         size: usize,
         hash: String,
@@ -329,7 +331,7 @@ impl Archive {
     ) -> Result<Ingested, IngestError> {
         let new = NewInstance::new(&instance, object_key.clone(), size).map(|new| {
             new.with_sha256(hash)
-                .in_project(self.project.as_deref())
+                .in_project(project.as_deref())
                 .keeping_existing(!self.overwrite)
                 .forwarded(self.forwarding)
         });
@@ -407,9 +409,6 @@ impl Archive {
     /// stored as received: compressing it would need its pixels in memory. A file no larger
     /// than the header bound is ingested as any other, compressed as the archive says.
     pub async fn ingest_spooled(&self, path: &std::path::Path) -> Result<Ingested, IngestError> {
-        if self.index.account().is_some() {
-            return Err(IngestError::Limited);
-        }
         let io = |e: std::io::Error| IngestError::Store(pacs_store::Error::Io(e));
         let size = tokio::fs::metadata(path).await.map_err(io)?.len();
         if size <= self.spooled_header_max as u64 {
@@ -417,6 +416,7 @@ impl Archive {
             return self.ingest(Bytes::from(bytes)).await;
         }
         let instance = self.spooled_header(path).await?;
+        let project = self.project_of(&instance.key.study_instance_uid).await?;
         let _writing = self.writes.read().await;
         let patient = (
             instance.string(tags::PATIENT_ID),
@@ -458,8 +458,25 @@ impl Archive {
             .map(|b| format!("{b:02x}"))
             .collect();
         let size = usize::try_from(size).unwrap_or(usize::MAX);
-        self.index_stored(instance, object_key, size, hash, noted)
+        self.index_stored(instance, project, object_key, size, hash, noted)
             .await
+    }
+
+    /// The project an instance of `study` is stored in. A study that is a project's
+    /// de-identified copy takes results made on it (a segmentation, a report), stored in
+    /// that project as they come, from anyone who sees the study; everything else goes
+    /// where this archive stores ([`Archive::for_project`]), and nothing through an archive
+    /// limited to an account ([`Archive::limited_to`]).
+    async fn project_of(&self, study: &str) -> Result<Option<String>, IngestError> {
+        if let Some(Some(project)) = self.index.study_project(study).await?
+            && self.index.original_study(&project, study).await?.is_some()
+        {
+            return Ok(Some(project));
+        }
+        if self.index.account().is_some() {
+            return Err(IngestError::Limited);
+        }
+        Ok(self.project.clone())
     }
 
     /// `instance` as it is to be stored: compressed when it is native and compression is

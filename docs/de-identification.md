@@ -42,6 +42,11 @@ projects sees their studies and nothing else.
   one it replaced, and the original patient and study (their main tags) of each de-identified
   study, so that a result made on the copy can go back to the original study. No route serves
   them; a backup of the index holds them, so keep it as safe as the data.
+- **Results coming back**: an instance for a study that is a project's de-identified copy (a
+  segmentation, a report, made on what the project served) is a result. Sent to the
+  project's AE title, or stored over HTTP (STOW-RS, upload) by an account that sees the
+  study, it is stored in that study as it comes, not de-identified again. A result for
+  another project's study sent to a project's AE title is refused (status C003).
 - **Quarantine**: what may carry identification pacs-rs cannot remove is not de-identified: Secondary
   Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
   SCREEN SAVE (each profile may change the list). It is kept as received in `PACS_QUARANTINE`, never indexed

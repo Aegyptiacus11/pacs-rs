@@ -519,7 +519,8 @@ async fn a_limited_account_writes_and_deletes_within_its_project() {
     // a role that allows everything, so that only the limit refuses
     let (_, token) = user(app, &s.admin, "second", "admin", json!(["liver-2026"])).await;
 
-    // it stores nothing over HTTP: what it sent would be in no project
+    // it stores nothing over HTTP but results for its project's copies: what it sent would
+    // be in no project
     let file = RealSeries::new(94, 1).slice_bytes(0);
     let upload = send(
         app,
@@ -549,9 +550,10 @@ async fn a_limited_account_writes_and_deletes_within_its_project() {
         )
         .body(Body::from(stow))
         .unwrap();
+    // STOW-RS: nothing stored, the instance's failure says why (all failed: 409)
     assert_eq!(
         app.clone().oneshot(request).await.unwrap().status(),
-        StatusCode::FORBIDDEN
+        StatusCode::CONFLICT
     );
     assert_eq!(
         get(app, "/studies", &s.admin)
@@ -990,5 +992,96 @@ async fn the_trash_is_not_for_an_account_limited_to_projects() {
             .await
             .status,
         StatusCode::OK
+    );
+}
+
+/// STOW-RS of a request of DICOM files.
+async fn stow(app: &Router, token: &str, files: &[Vec<u8>]) -> StatusCode {
+    let boundary = "b";
+    let mut body = Vec::new();
+    for file in files {
+        body.extend(
+            format!("--{boundary}\r\nContent-Type: application/dicom\r\n\r\n").into_bytes(),
+        );
+        body.extend(file);
+        body.extend(b"\r\n");
+    }
+    body.extend(format!("--{boundary}--\r\n").into_bytes());
+    let request = Request::post("/dicom-web/studies")
+        .header("authorization", format!("Bearer {token}"))
+        .header(
+            "content-type",
+            format!(r#"multipart/related; type="application/dicom"; boundary={boundary}"#),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap().status()
+}
+
+/// A result made on a project's de-identified study (a segmentation, a report: here a
+/// second series) is stored in that study, by an account limited to the project too; one
+/// for a study it does not see, or for a study that is no project's copy, is not.
+#[tokio::test]
+async fn a_result_for_a_project_s_copy_is_stored_in_its_study() {
+    let s = server().await;
+    let app = &s.app;
+    let (_, token) = user(app, &s.admin, "ana", "editor", json!(["liver-2026"])).await;
+    let liver_result = RealSeries::new(95, 1).in_study(91, 2).for_patient(90);
+    let lung_result = RealSeries::new(96, 1).in_study(92, 2).for_patient(90);
+
+    // the liver study is not a copy yet (nothing recorded the way back): refused
+    assert_eq!(
+        stow(app, &token, &[liver_result.slice_bytes(0)]).await,
+        StatusCode::CONFLICT
+    );
+    let index = s.archive.index();
+    for (project, series) in [("liver-2026", &s.liver), ("lung-2026", &s.lung)] {
+        index
+            .record_originals(
+                project,
+                &[],
+                &series.study_uid(),
+                &pacs_index::OriginalStudy {
+                    patient: serde_json::Map::new(),
+                    study: serde_json::Map::new(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        stow(app, &token, &[liver_result.slice_bytes(0)]).await,
+        StatusCode::OK
+    );
+    let stored = index
+        .rest_instance_by_uid(&liver_result.instance_uid(0))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.study_instance_uid, s.liver.study_uid());
+    assert_eq!(
+        index.study_project(&s.liver.study_uid()).await.unwrap(),
+        Some(Some("liver-2026".into()))
+    );
+    // the lung study is a copy too, but not one this account sees
+    assert_eq!(
+        stow(app, &token, &[lung_result.slice_bytes(0)]).await,
+        StatusCode::CONFLICT
+    );
+    assert!(
+        index
+            .rest_instance_by_uid(&lung_result.instance_uid(0))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // an account that sees everything stores a result in the project too, not in no project
+    assert_eq!(
+        stow(app, &s.admin, &[lung_result.slice_bytes(0)]).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        index.study_project(&s.lung.study_uid()).await.unwrap(),
+        Some(Some("lung-2026".into()))
     );
 }

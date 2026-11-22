@@ -200,6 +200,13 @@ pub(crate) async fn store(
                 Some("the quarantine store refused the file".into()),
             )
         }
+        Err(Refusal::Project(e @ ProjectError::Originals(_))) => {
+            tracing::error!(error = %e, sop_instance, "C-STORE: the index did not read or record the way back");
+            (
+                Status::OUT_OF_RESOURCES_INDEX,
+                Some("the index refused the instance".into()),
+            )
+        }
         Err(Refusal::Project(e)) => (
             Status::CANNOT_UNDERSTAND_DEIDENTIFICATION,
             Some(e.to_string()),
