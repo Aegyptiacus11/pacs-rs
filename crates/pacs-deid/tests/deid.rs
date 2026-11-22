@@ -553,3 +553,95 @@ fn the_replaced_uids_are_paired_with_their_originals() {
     );
     assert!(pacs_deid::replaced_uids(&original, &kept, &k).is_empty());
 }
+
+/// A result made on the copy goes back under the originals: the UIDs the copy replaced,
+/// the patient and study; its own UIDs stay, and it no longer says it is de-identified.
+#[test]
+fn a_result_is_reidentified_with_the_way_back() {
+    let original = instance("1.2.3.4.100.1.1", "20240301");
+    let k = keys();
+    let profile = profile(r#"{"name": "t", "options": ["retain-longitudinal-modified-dates"]}"#);
+    let copy = run(&original, &profile);
+    // the result: a new instance in the copy's study, pointing at the copy's image
+    let mut result = copy.clone();
+    put(&mut result, tags::SOP_INSTANCE_UID, VR::UI, "2.25.42");
+    let mut item = InMemDicomObject::new_empty();
+    put(&mut item, tags::REFERENCED_SOP_CLASS_UID, VR::UI, CT);
+    put(
+        &mut item,
+        tags::REFERENCED_SOP_INSTANCE_UID,
+        VR::UI,
+        &value(&copy, tags::SOP_INSTANCE_UID).unwrap(),
+    );
+    result.put(DataElement::new(
+        tags::REFERENCED_IMAGE_SEQUENCE,
+        VR::SQ,
+        Value::Sequence(DataSetSequence::new(vec![item], Length::UNDEFINED)),
+    ));
+
+    let originals: std::collections::HashMap<String, String> =
+        pacs_deid::replaced_uids(&original, &copy, &k)
+            .into_iter()
+            .collect();
+    let asked = pacs_deid::uids_in(&result);
+    assert!(asked.contains(&"2.25.42".to_owned()));
+    let tags_of = |json: serde_json::Value| json.as_object().unwrap().clone();
+    let back = pacs_deid::reidentify(
+        &result,
+        &originals,
+        &tags_of(
+            serde_json::json!({"PatientID": "P123", "PatientName": "BENALI^AMINE",
+                                    "PatientBirthDate": "19700615"}),
+        ),
+        &tags_of(
+            serde_json::json!({"StudyDate": "20240301", "AccessionNumber": "ACC9",
+                                    "ReferringPhysicianName": ""}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        value(&back, tags::STUDY_INSTANCE_UID).unwrap(),
+        "1.2.3.4.100"
+    );
+    assert_eq!(
+        value(&back, tags::SERIES_INSTANCE_UID).unwrap(),
+        "1.2.3.4.100.1"
+    );
+    assert_eq!(value(&back, tags::SOP_INSTANCE_UID).unwrap(), "2.25.42");
+    let referenced = back
+        .element(tags::REFERENCED_IMAGE_SEQUENCE)
+        .unwrap()
+        .items()
+        .unwrap()[0]
+        .clone();
+    assert_eq!(
+        value(&referenced, tags::REFERENCED_SOP_INSTANCE_UID).unwrap(),
+        "1.2.3.4.100.1.1"
+    );
+    assert_eq!(value(&back, tags::PATIENT_ID).unwrap(), "P123");
+    assert_eq!(value(&back, tags::PATIENT_NAME).unwrap(), "BENALI^AMINE");
+    assert_eq!(value(&back, tags::STUDY_DATE).unwrap(), "20240301");
+    assert_eq!(value(&back, tags::ACCESSION_NUMBER).unwrap(), "ACC9");
+    assert_eq!(value(&back, tags::REFERRING_PHYSICIAN_NAME).unwrap(), "");
+    assert_eq!(value(&back, tags::PATIENT_IDENTITY_REMOVED).unwrap(), "NO");
+    for gone in [
+        tags::DEIDENTIFICATION_METHOD,
+        tags::DEIDENTIFICATION_METHOD_CODE_SEQUENCE,
+        tags::LONGITUDINAL_TEMPORAL_INFORMATION_MODIFIED,
+    ] {
+        assert!(back.element(gone).is_err(), "{gone}");
+    }
+}
+
+#[test]
+fn an_original_that_is_no_keyword_is_an_error() {
+    let unknown = serde_json::json!({"NotAKeyword": "x"});
+    let error = pacs_deid::reidentify(
+        &instance("1.2.3.4.100.1.1", "20240301"),
+        &Default::default(),
+        unknown.as_object().unwrap(),
+        &Default::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("NotAKeyword"), "{error}");
+}
