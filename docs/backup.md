@@ -1,8 +1,10 @@
 # Backing up and upgrading
 
 An archive is two things: the files, and the index that says which file is which study.
-A backup needs both, taken so that they agree. The steps on this page were run against a
-server and its restored copy while the page was written.
+A backup needs both, taken so that they agree. The steps on this page are run as written by
+CI on every change (`scripts/backup-restore.sh`): a running server, on SQLite with files on
+disk and on Postgres with files in S3, is backed up, restored into a fresh place, and a second
+server checked on the copy.
 
 ## What to back up
 
@@ -73,8 +75,14 @@ cp -a /data/files /backup/files
 ## With S3
 
 The bucket is the files. Back it up as your storage provides: versioning, replication to
-another bucket, or a copy with a tool such as `rclone`. The order still holds: the index
-first.
+another bucket, or a copy with `rclone` (an `s3` remote for your endpoint and keys):
+
+```bash
+pg_dump -U pacs -d pacs | gzip > /backup/pacs-$(date +%Y%m%d).sql.gz
+rclone sync s3:pacs s3:pacs-backup
+```
+
+The order still holds: the index first.
 
 ## Restoring
 
@@ -88,6 +96,20 @@ cp -a /backup/files /restore/files
 # Postgres: into a new database
 createdb -U pacs pacs_restored
 gunzip -c /backup/pacs-20261117.sql.gz | psql -U pacs -q -d pacs_restored
+```
+
+Then make the copy's store and index agree, and check every file. Whatever happened between
+the index backup and the file copy is settled here: a file that arrived meanwhile is in the
+copy but not in the index, and is indexed; a study deleted meanwhile is in the index but its
+files are not where it says, and its entries go
+([the store and the index compared](integrity.md#the-store-and-the-index-compared)).
+`--grace 0`, since nothing writes to the copy:
+
+```bash
+export PACS_INDEX=/restore/index.sqlite PACS_STORAGE=file:/restore/files
+pacs-server --consistency --grace 0            # what differs
+pacs-server --consistency --grace 0 --repair   # made to agree
+pacs-server --check-files                      # every file against its SHA-256
 ```
 
 Then start a server on the restored copy, on another port, and check it before trusting

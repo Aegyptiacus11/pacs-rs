@@ -38,11 +38,8 @@ request, and [upgrades](backup.md#upgrading) tested on the index every release s
 wrote, on SQLite and Postgres. [Moves in the background](dimse.md) are kept in the index, and
 a restart takes them up again or ends them saying why. [Deletion can be undone](trash.md) for
 30 days. [Several servers](running.md#several-servers) share one Postgres index and one
-store. What remains:
-
-| Item | Done when |
-|---|---|
-| Backup and restore | a documented procedure for SQLite and Postgres with disk and S3, restored in a test |
+store. [Backup and restore](backup.md), as the page says, is run and restored by CI on every
+change, on SQLite with disk and on Postgres with S3. Nothing remains of this milestone.
 
 ## 3. Operable
 
