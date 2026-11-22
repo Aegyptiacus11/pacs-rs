@@ -68,12 +68,13 @@ to a C-GET. Studies are [sent](dimse.md) to other AEs from the REST API, and
 [forwarded by rule](dimse.md#forwarding-by-rule) as they arrive. The SCP dispatches by a
 registry of services, and each AE title can offer its own services and transfer syntaxes
 on one port. Every image is stored losslessly compressed: monochrome and colour in JPEG-LS,
-more than 16 bits in deflated frames. What remains:
-
-| Item | Done when |
-|---|---|
-| Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
-| Conformance Statement | the PS3.2 document, generated from what the code negotiates |
+more than 16 bits in deflated frames, and a large C-STORE is written to disk as it arrives.
+DICOMweb has `includefield`, [rendered](dicomweb.md#rendered) instances and frames,
+[bulk data](dicomweb.md#bulk-data) by BulkDataURI, and STOW-RS of [DICOM JSON or
+XML](dicomweb.md#storing-metadata-and-bulk-data) with its bulk data. Six
+[command-line tools](tools.md) come with it for sites without DCMTK, and the [Conformance
+Statement](conformance.md) is written by the code from what it negotiates. Nothing remains of
+this milestone.
 
 ## 5. The research workflow
 
