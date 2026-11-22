@@ -5,7 +5,8 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileStack, Moon, Settings, Sun, Users, WifiOff } from "lucide-react";
+import { Activity, FileStack, Moon, Settings, Sun, Users, WifiOff } from "lucide-react";
+import { authOn, may } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GlobalSearch } from "@/components/search-bar";
@@ -98,6 +99,7 @@ export function AppRail({ route }: { route: Route }) {
       </div>
       <RailItem label="Studies" Icon={FileStack} to={href.studies()} active={route.page === "studies"} />
       <RailItem label="Patients" Icon={Users} to={href.patients()} active={route.page === "patients"} />
+      {(!authOn || may("admin")) && <RailItem label="Server" Icon={Activity} to={href.server()} active={route.page === "server"} />}
       <div className="md:mt-auto">
         <RailItem label="Settings" Icon={Settings} to={href.settings()} active={route.page === "settings"} />
       </div>
