@@ -230,8 +230,8 @@ impl http_body::Body for Held {
 /// Around every request: a place among those being served, a body that may not stall,
 /// and for a request without one, an answer in time.
 async fn limit(State(limiter): State<Arc<Limiter>>, request: Request, next: Next) -> Response {
-    // a busy server still says it is up
-    if request.uri().path() == "/healthz" {
+    // a busy server still says it is up, and whether it can serve
+    if matches!(request.uri().path(), "/healthz" | "/readyz") {
         return next.run(request).await;
     }
     let client = request

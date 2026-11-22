@@ -152,6 +152,7 @@ pub fn is_open(method: &Method, path: &str) -> bool {
         || matches!(
             path,
             "/healthz"
+                | "/readyz"
                 | "/"
                 | "/ui"
                 | "/auth/login"
