@@ -16,7 +16,7 @@ out=crates/pacs-index/tests/upgrades
 mkdir -p "$out"
 releases=("$@")
 if [ ${#releases[@]} -eq 0 ]; then
-  releases=(0.5.2 0.6.0 0.7.0 0.8.0 0.8.1 0.9.0 0.10.0 0.11.0 0.12.0)
+  releases=(0.5.2 0.6.0 0.7.0 0.8.0 0.8.1 0.9.0 0.10.0 0.11.0 0.12.0 0.13.0 0.14.0)
 fi
 postgres_image=postgres:18.6-alpine
 work=$(mktemp -d)
