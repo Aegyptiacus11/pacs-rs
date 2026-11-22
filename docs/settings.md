@@ -156,7 +156,7 @@ De-identification on the way in: see [De-identification](de-identification.md).
 
 | Variable | Default | |
 |---|---|---|
-| `PACS_PROJECTS` | none | a JSON file of projects, each an AE title and a de-identification profile (see [De-identification](de-identification.md)) |
+| `PACS_PROJECTS` | none | a JSON file of projects, each an AE title, a de-identification profile and where its results are written back (see [De-identification](de-identification.md)) |
 | `PACS_PROJECT_SECRET_<AE title>` | | a project's secret; environment only, or `..._FILE` naming a file |
 | `PACS_QUARANTINE` | none | `file:<directory>` or `s3://<bucket>[/<prefix>]` for quarantined instances; without it they are refused |
 

@@ -1641,7 +1641,7 @@ A move in the background, or one that is over. Jobs are kept in the index, the l
 | `Restarts` | integer | How many starts of the server took it up again, it having been running when the server stopped. |
 | `State` | string | `Running`, `Success`, `Warning`, `Cancelled` or `Failure`. |
 | `StudyInstanceUIDs` | list of string |  |
-| `Type` | string | `C-MOVE`, `C-GET` once a move gave way to one, or `C-STORE` for a send. |
+| `Type` | string | `C-MOVE`, `C-GET` once a move gave way to one, `C-STORE` for a send, or `WRITE-BACK` for a project's results sent back re-identified. |
 | `Warning` | integer or null |  |
 
 ### Kept
@@ -1686,7 +1686,7 @@ How a move ended.
 | `ElapsedMs` | integer |  |
 | `Failed` | integer or null |  |
 | `FailedSOPInstanceUIDs` | list of string | The instances the remote AE said it could not send. |
-| `Method` | string | `C-MOVE`, `C-GET` when the move gave way to one, or `C-STORE` for a send. |
+| `Method` | string | `C-MOVE`, `C-GET` when the move gave way to one, `C-STORE` for a send, or `WRITE-BACK` for a project's results sent back re-identified. |
 | `Status` | string | `Success`, or `Warning` when some instances failed. |
 | `Warning` | integer or null |  |
 

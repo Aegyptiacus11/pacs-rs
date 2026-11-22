@@ -12,7 +12,8 @@ instance is held in memory meanwhile, never written. Everything else is stored a
                           "clean-descriptors"],
               "overrides": [{"tag": "(0019,xxxx)", "action": "K", "reason": "GE acquisition values"}],
               "date_shift_days": [-1095, -1],
-              "extra_identifiers": ["Mustapha"]}}]
+              "extra_identifiers": ["Mustapha"]},
+  "write_back": "hospital"}]
 ```
 
 **A study belongs to the project it came in through.** The index records the project's name
@@ -47,6 +48,15 @@ projects sees their studies and nothing else.
   project's AE title, or stored over HTTP (STOW-RS, upload) by an account that sees the
   study, it is stored in that study as it comes, not de-identified again. A result for
   another project's study sent to a project's AE title is refused (status C003).
+- **Write-back**: with `"write_back"` naming a remote AE studies may be sent to (one of
+  `PACS_DIMSE_MOVE_DESTINATIONS`), a study's results go there once it has been quiet for
+  `PACS_FORWARD_AFTER` seconds, as a job (`/jobs`, `Type` `WRITE-BACK`, taken up again after
+  a restart). Each is re-identified on its way by the way back: every UID the copy replaced
+  is the original again (its study, its references to the images), the patient and study
+  attributes are the originals, Patient Identity Removed is NO and the De-identification
+  Method goes; the UIDs the result made itself stay. The copy itself is not sent. Without
+  `"write_back"`, results stay in the project. A study that takes in more results is
+  written back again, whole: the remote AE keeps what it already has.
 - **Quarantine**: what may carry identification pacs-rs cannot remove is not de-identified: Secondary
   Capture, encapsulated documents, SR, presentation states, ultrasound, Burned In Annotation YES, Image Type
   SCREEN SAVE (each profile may change the list). It is kept as received in `PACS_QUARANTINE`, never indexed
