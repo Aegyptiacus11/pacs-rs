@@ -2035,6 +2035,8 @@ async fn a_rule_that_cannot_work_stops_the_start() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("not a remote AE"), "{error}");
+}
+
 /// Capabilities are for pacs-rs's own AE titles, each once.
 #[test]
 fn capabilities_name_an_ae_title_of_pacs_rs_once() {
