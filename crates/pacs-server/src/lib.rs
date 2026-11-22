@@ -427,16 +427,30 @@ pub fn process_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// Take up the moves a stopped server left running (see `modalities::jobs`): call once at
-/// the start, before serving. How many start again.
-pub async fn resume_jobs(settings: &Settings, index: &pacs_index::Index) -> anyhow::Result<usize> {
-    let config = dimse_config(settings)?;
-    Ok(modalities::jobs::resume(
-        index,
-        std::sync::Arc::new(config),
-        settings.dimse_listen.is_some(),
+/// Take up now the moves a stopped server left running, whose heartbeat is older than
+/// `stale_after` (see `modalities::jobs`). How many start again.
+pub async fn resume_jobs(
+    settings: &Settings,
+    index: &pacs_index::Index,
+    stale_after: std::time::Duration,
+) -> anyhow::Result<usize> {
+    let config = std::sync::Arc::new(dimse_config(settings)?);
+    Ok(
+        modalities::jobs::take_up_stale(
+            index,
+            config,
+            settings.dimse_listen.is_some(),
+            stale_after,
+        )
+        .await?,
     )
-    .await?)
+}
+
+/// Look for moves left running for the life of the server (see `modalities::jobs`).
+pub fn spawn_job_sweeps(settings: &Settings, index: &pacs_index::Index) -> anyhow::Result<()> {
+    let config = std::sync::Arc::new(dimse_config(settings)?);
+    modalities::jobs::spawn_sweeps(index.clone(), config, settings.dimse_listen.is_some());
+    Ok(())
 }
 
 /// The store `location` names (`file:` or `s3://`), with the S3 settings and keys.
