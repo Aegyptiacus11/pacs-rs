@@ -1534,6 +1534,7 @@ A move in the background, or one that is over. Jobs are kept in the index, the l
 | `Failed` | integer or null |  |
 | `FailedSOPInstanceUIDs` | list of string |  |
 | `ID` | string |  |
+| `PatientID` | string or null | The Patient ID given with the move; `null` when none was. |
 | `Progress` | integer or null | Percent of the instances done; `null` while the remote AE has given no count. |
 | `Remaining` | integer or null | The counts of the latest response; `null` for one the remote AE has not given. |
 | `Remote` | string | The id of the remote AE asked. |
@@ -1571,6 +1572,7 @@ Which studies to bring in, and how.
 | Field | Type | |
 |---|---|---|
 | `Asynchronous` | boolean or null, optional | Answer at once with a job, instead of when the move is over. |
+| `PatientID` | string or null, optional | The Patient ID the studies belong to. A remote AE that retrieves in Patient Root only names a study under its patient, and is refused without it; one that takes Study Root does not need it. |
 | `Project` | string or null, optional | The name of a project: the studies are sent to its AE title, and de-identified on the way in. Without it they come to pacs-rs's own AE title, as they are. |
 | `StudyInstanceUID` | [Uids](#uids) |  |
 
