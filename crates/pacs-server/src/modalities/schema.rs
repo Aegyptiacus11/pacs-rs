@@ -99,8 +99,8 @@ pub struct Started {
     pub path: String,
 }
 
-/// A move in the background, or one that is over. Jobs are kept in memory, the latest
-/// hundred finished ones with them: a restart forgets them.
+/// A move in the background, or one that is over. Jobs are kept in the index, the latest
+/// hundred finished ones with them: a restart takes up the moves that were running.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields, rename_all = "PascalCase")]
 pub struct Job {
@@ -132,4 +132,7 @@ pub struct Job {
     #[schema(required)]
     pub error: Option<String>,
     pub elapsed_ms: u64,
+    /// How many starts of the server took it up again, it having been running when the
+    /// server stopped.
+    pub restarts: i64,
 }

@@ -421,6 +421,18 @@ pub fn process_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+/// Take up the moves a stopped server left running (see `modalities::jobs`): call once at
+/// the start, before serving. How many start again.
+pub async fn resume_jobs(settings: &Settings, index: &pacs_index::Index) -> anyhow::Result<usize> {
+    let config = dimse_config(settings)?;
+    Ok(modalities::jobs::resume(
+        index,
+        std::sync::Arc::new(config),
+        settings.dimse_listen.is_some(),
+    )
+    .await?)
+}
+
 /// The store `location` names (`file:` or `s3://`), with the S3 settings and keys.
 pub fn open_store(location: &str, settings: &Settings) -> anyhow::Result<Store> {
     Ok(match StorageLocation::parse(location)? {
@@ -737,6 +749,7 @@ pub fn app_with_audit(
             dimse.clone(),
             settings.dimse_listen.is_some(),
             project_titles.clone(),
+            archive.index().clone(),
         ));
     let index = archive.index().clone();
     let audit_index = index.clone();

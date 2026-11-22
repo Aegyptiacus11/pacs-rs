@@ -15,7 +15,7 @@ use http_body_util::BodyExt;
 use pacs_core::real::RealSeries;
 use pacs_dimse::command::{Command, PRIORITY_MEDIUM, field, tag};
 use pacs_dimse::message::{self, Incoming};
-use pacs_server::{Settings, app, dimse_config, open_archive, serve_dimse};
+use pacs_server::{Settings, app, dimse_config, open_archive, resume_jobs, serve_dimse};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -1510,4 +1510,95 @@ async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
         assert!(sends < receives, "{line}");
         assert!(line[sends..receives].contains("csd-code=\"110153\""));
     }
+}
+
+/// A server stopped with a move running, as the next start finds it: the job is in the
+/// index, still running. Its settings, and the index of a server opened on them.
+async fn left_running(
+    dir: &Path,
+    remotes: &str,
+    listen: bool,
+) -> (Settings, pacs_index::Index, i64) {
+    let mut args = vec!["--dimse-remotes", remotes];
+    if listen {
+        args.extend(["--dimse-listen", "127.0.0.1:0"]);
+    }
+    let settings = settings_in(dir, &args);
+    let archive = open_archive(&settings).await.unwrap();
+    let index = archive.index().clone();
+    let id = index
+        .create_job("C-MOVE", "qr", "PACSRS", &["2.25.1".into()])
+        .await
+        .unwrap();
+    (settings, index, id)
+}
+
+/// A restart takes up a move that was running: it starts again, counts again, and ends as
+/// any other, one restart noted.
+#[tokio::test]
+async fn a_restart_takes_up_a_move_that_was_running() {
+    let (port, _scp) = slow_move_scp(3, 50).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
+    assert_eq!(resume_jobs(&settings, &index).await.unwrap(), 1);
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let job = job_over(&app, &format!("/jobs/{id}")).await;
+    assert_eq!(job["State"], "Success", "{job}");
+    assert_eq!(job["Completed"], 3);
+    assert_eq!(job["Restarts"], 1);
+    // listed as before the restart
+    assert_eq!(get(&app, "/jobs").await.1, json!([id.to_string()]));
+    // nothing left to take up
+    assert_eq!(resume_jobs(&settings, &index).await.unwrap(), 0);
+}
+
+/// A move that cannot be taken up ends as a failure that says why: taken up too often, its
+/// remote AE gone from the settings, or nothing able to arrive.
+#[tokio::test]
+async fn a_move_that_cannot_be_taken_up_fails_saying_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let reason = async |dir: &Path, remotes: &str, listen: bool, restarts: i64| {
+        let (settings, index, id) = left_running(dir, remotes, listen).await;
+        for _ in 0..restarts {
+            index.restart_job(id).await.unwrap();
+        }
+        assert_eq!(resume_jobs(&settings, &index).await.unwrap(), 0);
+        let job = index.job(id).await.unwrap().unwrap();
+        assert_eq!(job.state, "Failure");
+        assert!(job.finished_ms.is_some());
+        job.error.unwrap()
+    };
+    let known = "qr=QRSCP@127.0.0.1:1";
+    let too_often = reason(&dir.path().join("a"), known, true, 3).await;
+    assert!(too_often.contains("4 times"), "{too_often}");
+    let gone = reason(&dir.path().join("b"), "other=OTHER@127.0.0.1:1", true, 0).await;
+    assert!(
+        gone.contains("remote AE qr is no longer configured"),
+        "{gone}"
+    );
+    let deaf = reason(&dir.path().join("c"), known, false, 0).await;
+    assert!(deaf.contains("PACS_DIMSE_LISTEN"), "{deaf}");
+}
+
+/// A cancel goes through the index: one asked of a move taken up after a restart stops it.
+#[tokio::test]
+async fn a_move_taken_up_again_can_be_cancelled() {
+    let (port, scp) = slow_move_scp(50, 200).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
+    resume_jobs(&settings, &index).await.unwrap();
+    let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
+    let (status, _) = send(
+        &app,
+        Request::post(format!("/jobs/{id}/cancel"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let job = job_over(&app, &format!("/jobs/{id}")).await;
+    assert_eq!(job["State"], "Cancelled", "{job}");
+    assert!(scp.await.unwrap(), "the SCP got a C-CANCEL");
 }

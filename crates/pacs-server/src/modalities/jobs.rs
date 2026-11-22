@@ -1,212 +1,240 @@
 //! Moves run in the background: `GET /jobs`, `GET /jobs/{id}` with the C-MOVE's counts as its
 //! Pending responses bring them (PS3.4 C.4.2.1.6-9), and `POST /jobs/{id}/cancel`, which
-//! sends C-CANCEL-MOVE-RQ. Jobs live in memory: a restart forgets them, and only the latest
-//! finished ones are kept.
+//! sends C-CANCEL-MOVE-RQ.
+//!
+//! Jobs are kept in the index, not in memory: a restart finds the moves it was running and
+//! takes them up again ([`resume`]), from the start: what had arrived stays, and comes again
+//! as already stored. A move taken up three times, or whose remote AE is no longer
+//! configured, or that can no longer arrive here, ends as a failure that says why. A cancel
+//! goes through the index too: the move reads it within a quarter of a second, and stops
+//! with the remote AE's next response.
 
 use super::schema::Error;
-use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use pacs_dimse::{MoveError, MoveOutcome, Progress, StatusClass};
+use pacs_dimse::{AeTitle, Config, MoveError, MoveOutcome, Progress, StatusClass};
+use pacs_index::{Index, StoredJob};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
 
 use super::Remotes;
 
-/// Finished jobs kept for `GET /jobs/{id}`; older ones are forgotten.
-const KEPT_FINISHED: usize = 100;
+/// Takes up a job left running at most this many times; the next start ends it.
+pub const MAX_RESTARTS: i64 = 3;
+/// How often a running move writes its counts and reads whether to stop: one small write
+/// to the index per running move.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JobState {
-    Running,
-    Success,
-    /// Some sub-operations failed or warned.
-    Warning,
-    Cancelled,
-    Failure,
+fn progress_json(p: &Progress) -> Value {
+    json!({
+        "Remaining": p.remaining,
+        "Completed": p.completed,
+        "Failed": p.failed,
+        "Warning": p.warning,
+    })
 }
 
-impl JobState {
-    fn name(self) -> &'static str {
-        match self {
-            JobState::Running => "Running",
-            JobState::Success => "Success",
-            JobState::Warning => "Warning",
-            JobState::Cancelled => "Cancelled",
-            JobState::Failure => "Failure",
+fn count(progress: &Value, name: &str) -> Option<u16> {
+    progress
+        .get(name)
+        .and_then(Value::as_u64)
+        .and_then(|c| u16::try_from(c).ok())
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+fn to_json(job: &StoredJob) -> Value {
+    let p = &job.progress;
+    let (remaining, completed, failed, warning) = (
+        count(p, "Remaining"),
+        count(p, "Completed"),
+        count(p, "Failed"),
+        count(p, "Warning"),
+    );
+    // done out of all: the counts so far plus what remains, while Remaining is known
+    let done = [completed, failed, warning]
+        .iter()
+        .map(|c| u32::from(c.unwrap_or(0)))
+        .sum::<u32>();
+    let running = job.state == "Running";
+    let percent = remaining
+        .map(|r| done + u32::from(r))
+        .filter(|total| *total > 0)
+        .map(|total| (100 * done / total) as u64)
+        .or((!running).then_some(100));
+    let end = job.finished_ms.unwrap_or_else(now_ms);
+    json!({
+        "ID": job.id.to_string(),
+        "Type": job.kind,
+        "Remote": job.remote,
+        "StudyInstanceUIDs": job.studies,
+        "State": job.state,
+        "Progress": percent,
+        "Remaining": remaining,
+        "Completed": completed,
+        "Failed": failed,
+        "Warning": warning,
+        "FailedSOPInstanceUIDs": job.failed_instances,
+        "Error": job.error,
+        "ElapsedMs": u64::try_from(end - job.started_ms).unwrap_or(0),
+        "Restarts": job.restarts,
+    })
+}
+
+/// The end of a move, as the job keeps it.
+async fn finish(index: &Index, id: i64, result: Result<MoveOutcome, MoveError>) {
+    let (state, progress, failed, error) = match result {
+        Ok(outcome) => {
+            let state = match outcome.status.class() {
+                StatusClass::Success => "Success",
+                StatusClass::Cancel => "Cancelled",
+                _ => "Warning",
+            };
+            (state, outcome.progress, outcome.failed_instances, None)
         }
-    }
-}
-
-struct Job {
-    remote: String,
-    studies: Vec<String>,
-    state: JobState,
-    progress: Progress,
-    failed_instances: Vec<String>,
-    error: Option<String>,
-    started: Instant,
-    elapsed: Option<Duration>,
-    cancel: Arc<AtomicBool>,
-}
-
-impl Job {
-    fn to_json(&self, id: u64) -> Value {
-        let p = self.progress;
-        // done out of all: the counts so far plus what remains, while Remaining is known
-        let done = [p.completed, p.failed, p.warning]
-            .iter()
-            .map(|c| u32::from(c.unwrap_or(0)))
-            .sum::<u32>();
-        let percent = p
-            .remaining
-            .map(|r| done + u32::from(r))
-            .filter(|total| *total > 0)
-            .map(|total| (100 * done / total) as u64)
-            .or((self.state != JobState::Running).then_some(100));
-        json!({
-            "ID": id.to_string(),
-            "Type": "C-MOVE",
-            "Remote": self.remote,
-            "StudyInstanceUIDs": self.studies,
-            "State": self.state.name(),
-            "Progress": percent,
-            "Remaining": p.remaining,
-            "Completed": p.completed,
-            "Failed": p.failed,
-            "Warning": p.warning,
-            "FailedSOPInstanceUIDs": self.failed_instances,
-            "Error": self.error,
-            "ElapsedMs": self.elapsed.unwrap_or_else(|| self.started.elapsed()).as_millis() as u64,
-        })
-    }
-}
-
-/// The jobs of this process, by id.
-#[derive(Default)]
-pub(crate) struct Jobs {
-    table: Mutex<(u64, BTreeMap<u64, Job>)>,
-}
-
-impl Jobs {
-    fn lock(&self) -> std::sync::MutexGuard<'_, (u64, BTreeMap<u64, Job>)> {
-        self.table.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn start(&self, remote: &str, studies: &[String]) -> (u64, Arc<AtomicBool>) {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut table = self.lock();
-        table.0 += 1;
-        let id = table.0;
-        table.1.insert(
+        Err(e) => {
+            let (progress, failed) = match &e {
+                MoveError::Failed {
+                    progress,
+                    failed_instances,
+                    ..
+                } => (*progress, failed_instances.clone()),
+                _ => (Progress::default(), Vec::new()),
+            };
+            ("Failure", progress, failed, Some(e.to_string()))
+        }
+    };
+    if let Err(e) = index
+        .finish_job(
             id,
-            Job {
-                remote: remote.to_owned(),
-                studies: studies.to_vec(),
-                state: JobState::Running,
-                progress: Progress::default(),
-                failed_instances: Vec::new(),
-                error: None,
-                started: Instant::now(),
-                elapsed: None,
-                cancel: cancel.clone(),
-            },
-        );
-        (id, cancel)
+            state,
+            &progress_json(&progress),
+            &failed,
+            error.as_deref(),
+        )
+        .await
+    {
+        // the move is over either way; a restart would take it up again
+        tracing::error!(job = id, error = %e, "the end of a job was not written to the index");
     }
+}
 
-    fn update(&self, id: u64, f: impl FnOnce(&mut Job)) {
-        if let Some(job) = self.lock().1.get_mut(&id) {
-            f(job);
+/// Run job `id`'s move to its end. Beside it, four times a second, its counts go to the index and
+/// a cancel asked there comes back: the move's own callback cannot wait on the index.
+async fn run(
+    index: Index,
+    config: Arc<Config>,
+    id: i64,
+    remote_id: String,
+    studies: Vec<String>,
+    destination: AeTitle,
+) {
+    let Some(remote) = config.remote(&remote_id) else {
+        let error = format!("the remote AE {remote_id} is not configured");
+        if let Err(e) = index
+            .finish_job(id, "Failure", &json!({}), &[], Some(&error))
+            .await
+        {
+            tracing::error!(job = id, error = %e, "the end of a job was not written to the index");
         }
-    }
-
-    fn finish(&self, id: u64, result: Result<MoveOutcome, MoveError>) {
-        let mut table = self.lock();
-        if let Some(job) = table.1.get_mut(&id) {
-            job.elapsed = Some(job.started.elapsed());
-            match result {
-                Ok(outcome) => {
-                    job.progress = outcome.progress;
-                    job.failed_instances = outcome.failed_instances;
-                    job.state = match outcome.status.class() {
-                        StatusClass::Success => JobState::Success,
-                        StatusClass::Cancel => JobState::Cancelled,
-                        _ => JobState::Warning,
-                    };
-                }
-                Err(e) => {
-                    if let MoveError::Failed {
-                        progress,
-                        failed_instances,
-                        ..
-                    } = &e
-                    {
-                        job.progress = *progress;
-                        job.failed_instances = failed_instances.clone();
+        return;
+    };
+    let latest = Arc::new(Mutex::new(None::<Progress>));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let ticker = {
+        let (index, latest, cancel, done) =
+            (index.clone(), latest.clone(), cancel.clone(), done.clone());
+        tokio::spawn(async move {
+            while !done.load(Ordering::Relaxed) {
+                tokio::time::sleep(PROGRESS_EVERY).await;
+                let progress = latest.lock().map(|mut p| p.take()).unwrap_or(None);
+                let written = match progress {
+                    Some(p) => index.job_progress(id, &progress_json(&p)).await,
+                    None => index
+                        .job(id)
+                        .await
+                        .map(|j| j.is_some_and(|j| j.cancel_asked)),
+                };
+                match written {
+                    Ok(asked) if asked => cancel.store(true, Ordering::Relaxed),
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!(job = id, error = %e, "a job's counts were not written")
                     }
-                    job.error = Some(e.to_string());
-                    job.state = JobState::Failure;
                 }
             }
-        }
-        let finished: Vec<u64> = table
-            .1
-            .iter()
-            .filter(|(_, j)| j.state != JobState::Running)
-            .map(|(id, _)| *id)
-            .collect();
-        for old in finished
-            .iter()
-            .take(finished.len().saturating_sub(KEPT_FINISHED))
-        {
-            table.1.remove(old);
-        }
+        })
+    };
+    let result = pacs_dimse::move_studies(
+        remote,
+        &config.ae_title,
+        &studies,
+        &destination,
+        config.timeout,
+        config.move_timeout,
+        |progress| {
+            if let Ok(mut latest) = latest.lock() {
+                *latest = Some(progress);
+            }
+            if cancel.load(Ordering::Relaxed) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+    )
+    .await;
+    done.store(true, Ordering::Relaxed);
+    ticker.abort();
+    if let Err(e) = &result {
+        tracing::info!(remote = %remote_id, job = id, error = %e, "C-MOVE failed");
     }
+    finish(&index, id, result).await;
 }
 
 /// Run a C-MOVE as job; answers at once with its id and path.
-pub(super) fn spawn_move(
+pub(super) async fn spawn_move(
     remotes: Arc<Remotes>,
     remote_id: String,
     studies: Vec<String>,
-    destination: pacs_dimse::AeTitle,
+    destination: AeTitle,
 ) -> Response {
-    let (id, cancel) = remotes.jobs.start(&remote_id, &studies);
-    tokio::spawn(async move {
-        let config = &remotes.config;
-        let Some(remote) = config.remote(&remote_id) else {
-            return;
-        };
-        let result = pacs_dimse::move_studies(
-            remote,
-            &config.ae_title,
-            &studies,
-            &destination,
-            config.timeout,
-            config.move_timeout,
-            |progress| {
-                remotes.jobs.update(id, |job| job.progress = progress);
-                if cancel.load(Ordering::Relaxed) {
-                    ControlFlow::Break(())
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-        )
-        .await;
-        if let Err(e) = &result {
-            tracing::info!(remote = %remote_id, job = id, error = %e, "C-MOVE failed");
+    let id = match remotes
+        .index
+        .create_job("C-MOVE", &remote_id, destination.as_str(), &studies)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, "a job could not be written to the index");
+            return RestError::Status {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "the job could not be kept".into(),
+                details: None,
+            }
+            .into_response();
         }
-        remotes.jobs.finish(id, result);
-    });
+    };
+    tokio::spawn(run(
+        remotes.index.clone(),
+        Arc::new(remotes.config.clone()),
+        id,
+        remote_id,
+        studies,
+        destination,
+    ));
     (
         StatusCode::ACCEPTED,
         Json(json!({"ID": id.to_string(), "Path": format!("/jobs/{id}")})),
@@ -214,18 +242,109 @@ pub(super) fn spawn_move(
         .into_response()
 }
 
+/// Take up the jobs a stopped server left running: each starts again, or ends as a failure
+/// that says why it cannot. `receiving`: whether this server listens for DIMSE, without
+/// which nothing moved here can arrive. Call once, at the start.
+pub async fn resume(
+    index: &Index,
+    config: Arc<Config>,
+    receiving: bool,
+) -> Result<usize, pacs_index::Error> {
+    let jobs = index.running_jobs().await?;
+    let mut resumed = 0;
+    for job in jobs {
+        let refuse = if job.restarts >= MAX_RESTARTS {
+            Some(format!(
+                "stopped by a restart of the server {} times; not taken up again",
+                job.restarts + 1
+            ))
+        } else if config.remote(&job.remote).is_none() {
+            Some(format!(
+                "the server restarted, and the remote AE {} is no longer configured",
+                job.remote
+            ))
+        } else if !receiving {
+            Some(
+                "the server restarted without DIMSE (PACS_DIMSE_LISTEN): nothing moved can arrive"
+                    .into(),
+            )
+        } else {
+            None
+        };
+        let destination = AeTitle::new(&job.destination);
+        match (refuse, destination) {
+            (Some(error), _) => {
+                tracing::warn!(job = job.id, %error, "a job left running ends");
+                index
+                    .finish_job(
+                        job.id,
+                        "Failure",
+                        &job.progress,
+                        &job.failed_instances,
+                        Some(&error),
+                    )
+                    .await?;
+            }
+            (None, Err(e)) => {
+                let error = format!(
+                    "its destination {:?} is not an AE title: {e}",
+                    job.destination
+                );
+                index
+                    .finish_job(
+                        job.id,
+                        "Failure",
+                        &job.progress,
+                        &job.failed_instances,
+                        Some(&error),
+                    )
+                    .await?;
+            }
+            (None, Ok(destination)) => {
+                index.restart_job(job.id).await?;
+                tracing::info!(job = job.id, remote = %job.remote, restarts = job.restarts + 1, "a job left running is taken up again");
+                tokio::spawn(run(
+                    index.clone(),
+                    config.clone(),
+                    job.id,
+                    job.remote.clone(),
+                    job.studies.clone(),
+                    destination,
+                ));
+                resumed += 1;
+            }
+        }
+    }
+    Ok(resumed)
+}
+
+fn index_failed(e: pacs_index::Error) -> Response {
+    tracing::error!(error = %e, "reading the jobs");
+    RestError::Status {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: "the jobs could not be read".into(),
+        details: None,
+    }
+    .into_response()
+}
+
 /// Lists the jobs.
 ///
-/// The moves running in the background and the latest that are over, oldest first.
+/// The moves running in the background and the latest 100 that are over, oldest first. They are kept in the index: a restart takes up the ones it was running.
 #[utoipa::path(
     get,
     path = "/jobs",
     tag = "Jobs",
     responses((status = 200, description = "The jobs' ids.", body = Vec<String>))
 )]
-pub(super) async fn list(State(remotes): State<Arc<Remotes>>) -> Json<Value> {
-    let ids: Vec<String> = remotes.jobs.lock().1.keys().map(u64::to_string).collect();
-    Json(json!(ids))
+pub(super) async fn list(State(remotes): State<Arc<Remotes>>) -> Response {
+    match remotes.index.jobs().await {
+        Ok(jobs) => {
+            let ids: Vec<String> = jobs.iter().map(|j| j.id.to_string()).collect();
+            Json(json!(ids)).into_response()
+        }
+        Err(e) => index_failed(e),
+    }
 }
 
 /// A job: its state, progress and counts.
@@ -240,12 +359,13 @@ pub(super) async fn list(State(remotes): State<Arc<Remotes>>) -> Json<Value> {
     )
 )]
 pub(super) async fn get(State(remotes): State<Arc<Remotes>>, Path(id): Path<String>) -> Response {
-    let Ok(id) = id.parse::<u64>() else {
+    let Ok(id) = id.parse::<i64>() else {
         return RestError::NotFound.into_response();
     };
-    match remotes.jobs.lock().1.get(&id) {
-        Some(job) => Json(job.to_json(id)).into_response(),
-        None => RestError::NotFound.into_response(),
+    match remotes.index.job(id).await {
+        Ok(Some(job)) => Json(to_json(&job)).into_response(),
+        Ok(None) => RestError::NotFound.into_response(),
+        Err(e) => index_failed(e),
     }
 }
 
@@ -268,20 +388,18 @@ pub(super) async fn cancel(
     State(remotes): State<Arc<Remotes>>,
     Path(id): Path<String>,
 ) -> Response {
-    let Ok(id) = id.parse::<u64>() else {
+    let Ok(id) = id.parse::<i64>() else {
         return RestError::NotFound.into_response();
     };
-    match remotes.jobs.lock().1.get(&id) {
-        None => RestError::NotFound.into_response(),
-        Some(job) if job.state != JobState::Running => RestError::Status {
+    match remotes.index.ask_cancel(id).await {
+        Ok(None) => RestError::NotFound.into_response(),
+        Ok(Some(job)) if job.state != "Running" => RestError::Status {
             status: StatusCode::CONFLICT,
-            message: format!("job {id} is over ({})", job.state.name()),
+            message: format!("job {id} is over ({})", job.state),
             details: None,
         }
         .into_response(),
-        Some(job) => {
-            job.cancel.store(true, Ordering::Relaxed);
-            (StatusCode::ACCEPTED, Json(job.to_json(id))).into_response()
-        }
+        Ok(Some(job)) => (StatusCode::ACCEPTED, Json(to_json(&job))).into_response(),
+        Err(e) => index_failed(e),
     }
 }

@@ -888,7 +888,7 @@ Moves from a remote archive that run in the background.
 
 Lists the jobs.
 
-The moves running in the background and the latest that are over, oldest first.
+The moves running in the background and the latest 100 that are over, oldest first. They are kept in the index: a restart takes up the ones it was running.
 
 Permission, when the login is on: `remote`.
 
@@ -1469,7 +1469,7 @@ An instance: one stored DICOM file.
 
 ### Job
 
-A move in the background, or one that is over. Jobs are kept in memory, the latest hundred finished ones with them: a restart forgets them.
+A move in the background, or one that is over. Jobs are kept in the index, the latest hundred finished ones with them: a restart takes up the moves that were running.
 
 | Field | Type | |
 |---|---|---|
@@ -1482,6 +1482,7 @@ A move in the background, or one that is over. Jobs are kept in memory, the late
 | `Progress` | integer or null | Percent of the instances done; `null` while the remote AE has given no count. |
 | `Remaining` | integer or null | The counts of the latest response; `null` for one the remote AE has not given. |
 | `Remote` | string | The id of the remote AE asked. |
+| `Restarts` | integer | How many starts of the server took it up again, it having been running when the server stopped. |
 | `State` | string | `Running`, `Success`, `Warning`, `Cancelled` or `Failure`. |
 | `StudyInstanceUIDs` | list of string |  |
 | `Type` | string | `C-MOVE`. |
