@@ -3,8 +3,8 @@
 //! Matching is that of PS3.4 C.2.2.2 (`pacs_index::matching`): single value, wild card,
 //! list of UIDs and range, on the required keys of PS3.18 Table 10.6.1-5 that the index
 //! keeps. A key it does not know answers 400 rather than quietly matching something else. Every answer
-//! carries the computed attributes (counts, Modalities in Study, Retrieve URL), so
-//! `includefield` for them is satisfied without asking.
+//! carries the computed attributes (counts, Modalities in Study, Retrieve URL); others are
+//! added with `includefield`, from the metadata the index keeps of each instance.
 
 use axum::extract::{Path, Query};
 use axum::http::HeaderMap;
@@ -100,6 +100,107 @@ const NOT_DONE: &[(&str, &str)] = &[
     ),
 ];
 
+/// The attributes a search asks for beyond those every answer has (`includefield`, PS3.18
+/// 8.3.4.3): none, some by tag, or all those of the level.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+enum Include {
+    #[default]
+    Nothing,
+    Tags(Vec<String>),
+    All,
+}
+
+/// The level a search answers at, for what `includefield=all` gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    Study,
+    Series,
+    Instance,
+}
+
+/// What `includefield=all` gives of a study beyond the Patient Module (group 0010): the
+/// General Study and Patient Study Modules (PS3.3 C.7.2.1, C.7.2.2).
+const STUDY_MODULES: &[&str] = &[
+    "0020000D", "00080020", "00080030", "00080090", "00200010", "00080050", "00080051", "00081030",
+    "00081032", "00081048", "00081060", "00081110", "00321033", "00081080", "00101010", "00101020",
+    "00101030", "00102180", "001021B0",
+];
+
+/// And of a series, beside those of its study: the General Series, General Equipment and
+/// Frame of Reference Modules (C.7.3.1, C.7.5.1, C.7.4.1).
+const SERIES_MODULES: &[&str] = &[
+    "00080060", "0020000E", "00200011", "00200060", "00080021", "00080031", "00081050", "00181030",
+    "0008103E", "00081070", "00180015", "00185100", "00400275", "00400244", "00400245", "00400253",
+    "00400254", "00080070", "00080080", "00081010", "00081090", "00181000", "00181020", "00200052",
+];
+
+impl Include {
+    /// One `includefield` value: `all`, or attributes by keyword or tag, comma-separated.
+    fn add(&mut self, value: &str) -> Result<(), ApiError> {
+        use dicom_core::dictionary::DataDictionary;
+        for field in value.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+            if field == "all" {
+                *self = Include::All;
+                continue;
+            }
+            let tag = if field.len() == 8 && field.bytes().all(|b| b.is_ascii_hexdigit()) {
+                field.to_ascii_uppercase()
+            } else {
+                let entry = dicom_dictionary_std::StandardDataDictionary
+                    .by_name(field)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!(
+                            "includefield: {field} is not an attribute's keyword or tag"
+                        ))
+                    })?;
+                let tag = entry.tag.inner();
+                format!("{:04X}{:04X}", tag.group(), tag.element())
+            };
+            match self {
+                Include::All => {}
+                Include::Tags(tags) => {
+                    if !tags.contains(&tag) {
+                        tags.push(tag)
+                    }
+                }
+                Include::Nothing => *self = Include::Tags(vec![tag]),
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether anything is asked beyond what the index answers with.
+    fn asked(&self) -> bool {
+        *self != Include::Nothing
+    }
+
+    /// Put into `answer` the attributes asked for that `metadata` has and it does not:
+    /// nothing it already has is changed.
+    fn fill(&self, answer: &mut Value, metadata: &Value, level: Level) {
+        let (Some(answer), Some(metadata)) = (answer.as_object_mut(), metadata.as_object()) else {
+            return;
+        };
+        let wanted = |tag: &str| match self {
+            Include::Nothing => false,
+            Include::Tags(tags) => tags.iter().any(|t| t == tag),
+            Include::All => match level {
+                Level::Instance => true,
+                Level::Study => tag.starts_with("0010") || STUDY_MODULES.contains(&tag),
+                Level::Series => {
+                    tag.starts_with("0010")
+                        || STUDY_MODULES.contains(&tag)
+                        || SERIES_MODULES.contains(&tag)
+                }
+            },
+        };
+        for (tag, element) in metadata {
+            if wanted(tag) && !answer.contains_key(tag) {
+                answer.insert(tag.clone(), element.clone());
+            }
+        }
+    }
+}
+
 /// A parsed search query: its matching keys, its page, and what it asked for that is not
 /// done.
 #[derive(Debug, Default)]
@@ -108,6 +209,7 @@ struct Search {
     limit: Option<usize>,
     offset: usize,
     not_done: Vec<&'static str>,
+    include: Include,
 }
 
 impl Search {
@@ -155,8 +257,8 @@ impl Search {
                         ApiError::bad_request(format!("offset is not a number: {value:?}"))
                     })?
                 }
-                // the computed attributes are always returned; others are not yet
-                "includefield" => {}
+                // the computed attributes are always returned; others from the metadata
+                "includefield" => search.include.add(value)?,
                 // a key of a sequence's item (C.2.2.2.6): every key of one sequence is
                 // asked of the same item
                 _ if name.contains('.') => {
@@ -252,6 +354,54 @@ impl Search {
         }
     }
 
+    /// `answers` with the attributes `includefield` asks for, from the metadata the index
+    /// keeps: an instance's own, or that of one instance of each study or series.
+    async fn included(
+        &self,
+        index: &pacs_index::Index,
+        mut answers: Vec<Value>,
+        level: Level,
+    ) -> Result<Vec<Value>, ApiError> {
+        if !self.include.asked() {
+            return Ok(answers);
+        }
+        let first = |answer: &Value, tag: &str| {
+            pacs_index::matching::values(answer, tag)
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+        };
+        match level {
+            Level::Study | Level::Series => {
+                for answer in &mut answers {
+                    let study = first(answer, "0020000D");
+                    let series = (level == Level::Series).then(|| first(answer, "0020000E"));
+                    if let Some(metadata) = index
+                        .representative_metadata(&study, series.as_deref())
+                        .await?
+                    {
+                        self.include.fill(answer, &metadata, level);
+                    }
+                }
+            }
+            Level::Instance => {
+                // the instances of a series' search are of that one series
+                let Some(one) = answers.first() else {
+                    return Ok(answers);
+                };
+                let (study, series) = (first(one, "0020000D"), first(one, "0020000E"));
+                let metadata = index.metadata(&study, &series, None).await?;
+                for answer in &mut answers {
+                    let sop = first(answer, "00080018");
+                    if let Some(own) = metadata.iter().find(|m| first(m, "00080018") == sop) {
+                        self.include.fill(answer, own, level);
+                    }
+                }
+            }
+        }
+        Ok(answers)
+    }
+
     /// The answer, with a warning for each kind of matching asked for and not done.
     fn response(&self, base: &str, body: Value) -> Response {
         let mut response = json_response(body);
@@ -340,10 +490,10 @@ async fn study_attributes(state: &AppState, study: &str) -> Result<Value, ApiErr
     get,
     path = "/studies",
     tag = "DICOMweb",
-    params(("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
+    params(("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("includefield" = Option<String>, Query, description = "Attributes to add to each answer, by keyword or tag, comma-separated or repeated, or `all` for those of the level's modules: see [Searching](dicomweb.md#searching)."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
     responses(
         (status = 200, description = "The studies, newest first.", body = Vec<Attributes>, content_type = "application/dicom+json"),
-        (status = 400, description = "A key this level does not have, one given twice, or a value that is not a match for its key.", body = Problem),
+        (status = 400, description = "A key this level does not have, one given twice, a value that is not a match for its key, or an `includefield` that names no attribute.", body = Problem),
         (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
     )
 )]
@@ -386,6 +536,9 @@ pub(crate) async fn studies(
             attributes
         })
         .collect();
+    let body = search
+        .included(state.archive.index(), body, Level::Study)
+        .await?;
     Ok(search.response(&base, Value::Array(body)))
 }
 
@@ -394,10 +547,10 @@ pub(crate) async fn studies(
     get,
     path = "/studies/{study}/series",
     tag = "DICOMweb",
-    params(("study" = String, Path, description = "Study Instance UID."), ("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
+    params(("study" = String, Path, description = "Study Instance UID."), ("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("includefield" = Option<String>, Query, description = "Attributes to add to each answer, by keyword or tag, comma-separated or repeated, or `all` for those of the level's modules: see [Searching](dicomweb.md#searching)."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
     responses(
         (status = 200, description = "The series, by Series Number; none for a study that is not there.", body = Vec<Attributes>, content_type = "application/dicom+json"),
-        (status = 400, description = "A key this level does not have, one given twice, or a value that is not a match for its key.", body = Problem),
+        (status = 400, description = "A key this level does not have, one given twice, a value that is not a match for its key, or an `includefield` that names no attribute.", body = Problem),
         (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
     )
 )]
@@ -434,6 +587,9 @@ pub(crate) async fn series(
             attributes
         })
         .collect();
+    let body = search
+        .included(state.archive.index(), body, Level::Series)
+        .await?;
     Ok(search.response(&base, Value::Array(body)))
 }
 
@@ -442,10 +598,10 @@ pub(crate) async fn series(
     get,
     path = "/studies/{study}/series/{series}/instances",
     tag = "DICOMweb",
-    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID."), ("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
+    params(("study" = String, Path, description = "Study Instance UID."), ("series" = String, Path, description = "Series Instance UID."), ("{attribute}" = Option<String>, Query, description = "A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches."), ("includefield" = Option<String>, Query, description = "Attributes to add to each answer, by keyword or tag, comma-separated or repeated, or `all` for those of the level's modules: see [Searching](dicomweb.md#searching)."), ("limit" = Option<u64>, Query, description = "At most this many."), ("offset" = Option<u64>, Query, description = "Skip this many first.")),
     responses(
         (status = 200, description = "The instances, by Instance Number; none for a series that is not there.", body = Vec<Attributes>, content_type = "application/dicom+json"),
-        (status = 400, description = "A key this level does not have, one given twice, or a value that is not a match for its key.", body = Problem),
+        (status = 400, description = "A key this level does not have, one given twice, a value that is not a match for its key, or an `includefield` that names no attribute.", body = Problem),
         (status = 406, description = "`Accept` asks for something else than this answers in.", body = Problem)
     )
 )]
@@ -511,5 +667,8 @@ pub(crate) async fn instances(
             attributes
         })
         .collect();
+    let body = search
+        .included(state.archive.index(), body, Level::Instance)
+        .await?;
     Ok(search.response(&base, Value::Array(body)))
 }

@@ -1215,3 +1215,80 @@ async fn a_series_is_found_by_the_keys_of_one_request() {
         assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{path}");
     }
 }
+
+/// `includefield` (PS3.18 8.3.4.3): the attributes asked for, by keyword or tag, from the
+/// metadata of what is found; `all` those of the level's modules; an unknown name is 400.
+#[tokio::test]
+async fn includefield_brings_the_attributes_asked_for() {
+    let app = app().await;
+    let (big, _) = two_series_study(&app).await;
+    let json = "application/dicom+json";
+    let study = big.study_uid();
+    let answer = async |path: String| -> Vec<Value> {
+        let reply = get(&app, &path, json).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::OK,
+            "{path}: {}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        reply.json().as_array().unwrap().clone()
+    };
+    let has = |found: &Value, tag: &str| found.get(tag).is_some();
+
+    // not kept at the study level, so only when asked for
+    let plain = answer("/studies".to_owned()).await;
+    assert!(!has(&plain[0], "00080070"));
+    for asked in [
+        "Manufacturer",
+        "00080070",
+        "00080070,StudyDescription",
+        "00080070&includefield=KVP",
+    ] {
+        let found = answer(format!("/studies?includefield={asked}")).await;
+        assert_eq!(
+            value(&found[0], "00080070"),
+            "GE MEDICAL SYSTEMS",
+            "{asked}"
+        );
+    }
+    // an instance's own attribute, at the instance level
+    let instances = answer(format!(
+        "/studies/{study}/series/{}/instances?includefield=SliceThickness",
+        big.series_uid()
+    ))
+    .await;
+    assert_eq!(instances.len(), 3);
+    assert!(instances.iter().all(|i| has(i, "00180050")));
+
+    // all: the modules of the level
+    let series = answer(format!("/studies/{study}/series?includefield=all")).await;
+    assert!(
+        series.iter().all(|s| has(s, "00080070")),
+        "General Equipment"
+    );
+    assert!(
+        series.iter().all(|s| !has(s, "00180050")),
+        "no instance attribute"
+    );
+    let instances = answer(format!(
+        "/studies/{study}/series/{}/instances?includefield=all",
+        big.series_uid()
+    ))
+    .await;
+    assert!(
+        instances
+            .iter()
+            .all(|i| has(i, "00180050") && has(i, "00080070"))
+    );
+    // what the answer has is not changed
+    assert_eq!(
+        answer("/studies?includefield=StudyInstanceUID".to_owned()).await[0]["0020000D"],
+        plain[0]["0020000D"]
+    );
+
+    for bad in ["NoSuchKeyword", "0008007"] {
+        let reply = get(&app, &format!("/studies?includefield={bad}"), json).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}

@@ -558,13 +558,14 @@ Permission, when the login is on: `read`.
 | Send | Where | Type | |
 |---|---|---|---|
 | `{attribute}` | query, optional | string | A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches. |
+| `includefield` | query, optional | string | Attributes to add to each answer, by keyword or tag, comma-separated or repeated, or `all` for those of the level's modules: see [Searching](dicomweb.md#searching). |
 | `limit` | query, optional | integer | At most this many. |
 | `offset` | query, optional | integer | Skip this many first. |
 
 | Status | Answer | |
 |---|---|---|
 | 200 | `application/dicom+json` | The studies, newest first. |
-| 400 | [Problem](#problem) | A key this level does not have, one given twice, or a value that is not a match for its key. |
+| 400 | [Problem](#problem) | A key this level does not have, one given twice, a value that is not a match for its key, or an `includefield` that names no attribute. |
 | 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
 
 ### `POST /dicom-web/studies`
@@ -656,13 +657,14 @@ Permission, when the login is on: `read`.
 |---|---|---|---|
 | `study` | path | string | Study Instance UID. |
 | `{attribute}` | query, optional | string | A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches. |
+| `includefield` | query, optional | string | Attributes to add to each answer, by keyword or tag, comma-separated or repeated, or `all` for those of the level's modules: see [Searching](dicomweb.md#searching). |
 | `limit` | query, optional | integer | At most this many. |
 | `offset` | query, optional | integer | Skip this many first. |
 
 | Status | Answer | |
 |---|---|---|
 | 200 | `application/dicom+json` | The series, by Series Number; none for a study that is not there. |
-| 400 | [Problem](#problem) | A key this level does not have, one given twice, or a value that is not a match for its key. |
+| 400 | [Problem](#problem) | A key this level does not have, one given twice, a value that is not a match for its key, or an `includefield` that names no attribute. |
 | 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
 
 ### `GET /dicom-web/studies/{study}/series/{series}`
@@ -695,13 +697,14 @@ Permission, when the login is on: `read`.
 | `study` | path | string | Study Instance UID. |
 | `series` | path | string | Series Instance UID. |
 | `{attribute}` | query, optional | string | A matching key, by keyword or tag, any number of them: see [Searching](dicomweb.md#searching) for the keys of each level and how a value matches. |
+| `includefield` | query, optional | string | Attributes to add to each answer, by keyword or tag, comma-separated or repeated, or `all` for those of the level's modules: see [Searching](dicomweb.md#searching). |
 | `limit` | query, optional | integer | At most this many. |
 | `offset` | query, optional | integer | Skip this many first. |
 
 | Status | Answer | |
 |---|---|---|
 | 200 | `application/dicom+json` | The instances, by Instance Number; none for a series that is not there. |
-| 400 | [Problem](#problem) | A key this level does not have, one given twice, or a value that is not a match for its key. |
+| 400 | [Problem](#problem) | A key this level does not have, one given twice, a value that is not a match for its key, or an `includefield` that names no attribute. |
 | 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
 
 ### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}`
