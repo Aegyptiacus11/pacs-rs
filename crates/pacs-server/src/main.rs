@@ -28,6 +28,19 @@ async fn main() -> anyhow::Result<()> {
         });
     }
     let archive = open_archive(&settings).await?;
+    if settings.consistency {
+        pacs_server::consistency::check_quarantine(&settings)?;
+        let audit = pacs_server::audit::open_audit(&settings)?;
+        let agree = pacs_server::consistency::run(
+            &archive,
+            &audit,
+            settings.repair,
+            pacs_server::consistency::GRACE,
+            &mut std::io::stdout(),
+        )
+        .await?;
+        std::process::exit(if agree { 0 } else { 1 });
+    }
     if settings.check_files {
         let mut summary = pacs_server::checks::Summary::default();
         let result = pacs_server::checks::check_all(&archive, &mut summary).await;

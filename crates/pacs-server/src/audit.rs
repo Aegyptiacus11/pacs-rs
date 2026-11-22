@@ -217,6 +217,51 @@ impl Audit {
         }
     }
 
+    /// Index entries the consistency repair removed, their files being gone: a deletion by
+    /// the server itself, as `DELETE` by a person would be recorded. `studies` are those the
+    /// entries were in, read before; `index` says which of them are gone entirely.
+    pub async fn removed_by_repair(
+        &self,
+        index: &pacs_index::Index,
+        studies: &[AuditedStudy],
+    ) -> Result<(), pacs_index::Error> {
+        let Some(trail) = &self.0 else { return Ok(()) };
+        let now = SystemTime::now();
+        let who = Participant::new(&trail.process, true);
+        let (mut gone, mut cut) = (Vec::new(), Vec::new());
+        for study in studies {
+            if index
+                .audited_study(&study.study_instance_uid)
+                .await?
+                .is_some()
+            {
+                cut.push(described(study, false));
+            } else {
+                gone.push(described(study, true));
+            }
+        }
+        for group in by_patient(gone) {
+            self.record(events::study_deleted(
+                &trail.source,
+                now,
+                Outcome::Success,
+                vec![who.clone()],
+                &group,
+            ));
+        }
+        for group in by_patient(cut) {
+            self.record(events::instances_accessed(
+                &trail.source,
+                now,
+                Action::Delete,
+                Outcome::Success,
+                vec![who.clone()],
+                &group,
+            ));
+        }
+        Ok(())
+    }
+
     /// Put the trail around `app`: outside the guard, so that refusals are seen too.
     /// `index` says whose study a request touched, and `mount` is the DICOMweb root.
     /// `dimse` names the remote AEs and this server's own AE title.

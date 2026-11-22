@@ -40,6 +40,14 @@ pub struct S3Config {
     pub secret_access_key: String,
 }
 
+/// An object in the store, as a listing gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredObject {
+    pub key: String,
+    pub size: u64,
+    pub modified: std::time::SystemTime,
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     backend: Arc<dyn ObjectStore>,
@@ -100,6 +108,21 @@ impl Store {
             .join(key.series_instance_uid.as_str())
             .join(format!("{}.dcm", key.sop_instance_uid));
         Ok(path.to_string())
+    }
+
+    /// Every object under this store's prefix: its key, size and when it was last written.
+    pub async fn list(&self) -> Result<Vec<StoredObject>, Error> {
+        use futures::TryStreamExt;
+        let prefix = (!self.prefix.as_ref().is_empty()).then_some(&self.prefix);
+        let objects: Vec<_> = self.backend.list(prefix).try_collect().await?;
+        Ok(objects
+            .into_iter()
+            .map(|meta| StoredObject {
+                key: meta.location.to_string(),
+                size: meta.size,
+                modified: meta.last_modified.into(),
+            })
+            .collect())
     }
 
     /// Store an instance's file, replacing any earlier copy. Returns its key.

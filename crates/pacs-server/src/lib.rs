@@ -28,6 +28,7 @@ mod audit_routes;
 pub mod auth;
 pub mod auth_schema;
 pub mod checks;
+pub mod consistency;
 mod dimse_tls;
 pub mod limits;
 mod modalities;
@@ -109,6 +110,17 @@ pub struct Settings {
     /// exit 1 if anything did and 0 if not, and do nothing else: see `pacs_server::checks`.
     #[arg(long)]
     pub check_files: bool,
+
+    /// Compare the store with the index (files no entry names, entries whose file is gone),
+    /// say what differs, exit 1 if anything does, and do nothing else: see
+    /// `pacs_server::consistency`.
+    #[arg(long)]
+    pub consistency: bool,
+
+    /// With --consistency: index again the files that read as DICOM, and remove the entries
+    /// whose file is gone, in the audit trail. Never deletes a file.
+    #[arg(long, requires = "consistency")]
+    pub repair: bool,
 
     /// Check a stored file against the index again once its last check is this many days old,
     /// in the background, one file at a time. 0: no scheduled checks.
