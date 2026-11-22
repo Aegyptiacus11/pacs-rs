@@ -8,7 +8,7 @@
 //! the Storage SCP in [`store`], the Query SCP in [`find`], the Retrieve SCP in
 //! [`retrieve`].
 
-mod find;
+pub(crate) mod find;
 mod operation;
 mod retrieve;
 mod services;

@@ -22,6 +22,15 @@ mdbook serve --open
 python3 scripts/build-site.py && python3 -m http.server -d target/site
 ```
 
+Two pages are written by the code and held to it by a test: the [REST API
+reference](api-reference.md) and the [Conformance Statement](conformance.md), which names the
+version. A version change writes both again:
+
+```bash
+cargo run -p pacs-server --example api_reference
+cargo run -p pacs-dimse --example conformance
+```
+
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash

@@ -216,6 +216,27 @@ const IMAGE: &[Attribute] = &[
     attribute(tags::BITS_ALLOCATED, "00280100", VR::US, Kind::Number),
 ];
 
+/// A key as the Conformance Statement lists it: its tag and VR, and for a sequence the keys
+/// of its item.
+pub(crate) type ListedKey = (Tag, VR, Vec<Tag>);
+
+/// The keys pacs-rs matches and returns, by model and level: for the Conformance Statement.
+pub(crate) fn keys() -> Vec<(&'static str, &'static str, Vec<ListedKey>)> {
+    let list = |attributes: &[Attribute]| {
+        attributes
+            .iter()
+            .map(|a| (a.tag, a.vr, a.items.iter().map(|i| i.tag).collect()))
+            .collect()
+    };
+    vec![
+        ("Patient Root", "PATIENT", list(PATIENT)),
+        ("Patient Root", "STUDY", list(STUDY_OF_A_PATIENT)),
+        ("Study Root", "STUDY", list(STUDY)),
+        ("both", "SERIES", list(SERIES)),
+        ("both", "IMAGE", list(IMAGE)),
+    ]
+}
+
 /// A Query/Retrieve Information Model (PS3.4 C.6): what the hierarchy starts with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Model {

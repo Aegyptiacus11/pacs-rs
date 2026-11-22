@@ -102,7 +102,7 @@ pub const OBJECTS: &[&str] = &[
 /// the one it comes in, as the C-STORE SCP keeps them. The other classes are proposed in
 /// the two uncompressed ones only, which keeps the A-ASSOCIATE-RQ of 128 contexts under
 /// the 32 KB a peer reads it in.
-const IMAGES_AS: &[&str] = &[
+pub const IMAGES_AS: &[&str] = &[
     EXPLICIT_VR_LE,
     IMPLICIT_VR_LE,
     "1.2.840.10008.1.2.4.80", // JPEG-LS Lossless
