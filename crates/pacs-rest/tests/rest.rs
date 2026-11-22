@@ -172,7 +172,7 @@ async fn what_a_client_reads_back() {
     assert_eq!(archive.len(), 5);
     let mut file = archive.by_index(0).unwrap();
     assert_eq!(
-        file.name(),
+        file.name().unwrap(),
         "NEMA-92 - CompressedSamples^CT1/ACC92 - e+1/1 - CT/CT000001.dcm"
     );
     let mut bytes = Vec::new();
@@ -674,7 +674,7 @@ async fn deleting_answers_with_the_remaining_ancestor() {
 fn zip_names(zip: &Bytes) -> Vec<String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(zip.to_vec())).unwrap();
     (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_owned())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
         .collect()
 }
 
