@@ -74,7 +74,7 @@ to a C-GET. Studies are [sent](dimse.md) to other AEs from the REST API, and
 | Streamed receive | a C-STORE of a large instance is read as it arrives, with memory that does not grow with its size |
 | Command-line tools | `storescu`, `storescp`, `findscu`, `movescu` and `getscu` built from the same crate, for sites without DCMTK |
 | DICOMweb to the end | `includefield`, rendered media, STOW-RS with JSON or XML and bulk data, BulkDataURI in metadata |
-| Lossless storage of every image | colour and more than 16 bits are compressed too, checked as today |
+| Lossless storage of every image | more than 16 bits compressed too, checked as today (colour is: RGB, YBR_FULL and palette colour in JPEG-LS) |
 | Conformance Statement | the PS3.2 document, generated from what the code negotiates |
 
 ## 5. The research workflow
