@@ -131,7 +131,7 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
       <div className="shrink-0 border-b bg-card px-4 pt-4 md:px-8 md:pt-5">
         <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
         {/* on a narrow screen the tabs scroll sideways, each on one line */}
-        <nav aria-label="Settings" className="-mx-4 mt-3 flex gap-1 overflow-x-auto px-4 md:mx-0 md:px-0">
+        <nav aria-label="Settings" className="-mx-4 mt-3 flex gap-1 overflow-x-auto overflow-y-hidden px-4 md:mx-0 md:px-0">
           {sections.map(({ id, label, Icon }) => (
             <a
               key={id}

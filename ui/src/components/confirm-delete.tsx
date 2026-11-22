@@ -1,4 +1,4 @@
-// One confirmation for every deletion: what goes, and that it can't be undone.
+// One confirmation for every deletion: what goes, and whether it can be restored.
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
