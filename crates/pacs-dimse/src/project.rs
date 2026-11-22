@@ -47,7 +47,7 @@ pub enum ProjectError {
     Write(String),
     #[error(transparent)]
     Ingest(#[from] IngestError),
-    #[error("what the copy replaced cannot be recorded: {0}")]
+    #[error("the way back to the originals cannot be read or recorded: {0}")]
     Originals(String),
     #[error("the quarantine store did not take the instance: {0}")]
     Quarantine(#[from] pacs_store::Error),
@@ -56,6 +56,10 @@ pub enum ProjectError {
 impl Project {
     /// De-identify a received Part 10 file and ingest the result; or quarantine it.
     pub async fn receive(&self, file: Bytes) -> Result<Received, ProjectError> {
+        if self.is_result(&file).await? {
+            self.archive.ingest(file).await?;
+            return Ok(Received::Stored);
+        }
         let profile = self.profile.clone();
         let keys = self.keys.clone();
         let identified = file.clone();
@@ -95,6 +99,41 @@ impl Project {
                 Ok(Received::Quarantined(reason))
             }
         }
+    }
+}
+
+impl Project {
+    /// Whether `file` is a result made on one of this project's de-identified studies (a
+    /// segmentation, a report): it refers to the replaced UIDs already, and is stored as it
+    /// comes. A result for another project's study is refused.
+    async fn is_result(&self, file: &Bytes) -> Result<bool, ProjectError> {
+        let study = {
+            let _reading = self.archive.admit(file).await?;
+            pacs_core::Instance::from_bytes(file)
+                .map_err(|e| ProjectError::Read(e.to_string()))?
+                .key
+                .study_instance_uid
+        };
+        let index = self.archive.index();
+        let Some(Some(project)) = index
+            .study_project(&study)
+            .await
+            .map_err(|e| ProjectError::Originals(e.to_string()))?
+        else {
+            return Ok(false);
+        };
+        let copy = index
+            .original_study(&project, &study)
+            .await
+            .map_err(|e| ProjectError::Originals(e.to_string()))?
+            .is_some();
+        if copy && project != self.profile.name {
+            return Err(ProjectError::Refused(format!(
+                "a result for a study of project {project}, sent to {}",
+                self.profile.name
+            )));
+        }
+        Ok(copy)
     }
 }
 
