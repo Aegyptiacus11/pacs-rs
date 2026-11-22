@@ -1,0 +1,18 @@
+[
+  {
+    "id": "pacs",
+    "name": "pacs-rs under test",
+    "secret": { "Plain": "pacs-test-client-secret-0123456789abcdefghijklmnopqrstuvwxyzABCD" },
+    "redirect_uris": ["http://localhost:8042/auth/oidc/callback"],
+    "enabled": true,
+    "flows_enabled": ["authorization_code", "refresh_token"],
+    "access_token_alg": "EdDSA",
+    "id_token_alg": "EdDSA",
+    "auth_code_lifetime": 60,
+    "access_token_lifetime": 300,
+    "scopes": ["openid", "profile", "email"],
+    "default_scopes": ["openid", "profile", "email"],
+    "challenges": ["S256"],
+    "force_mfa": false
+  }
+]

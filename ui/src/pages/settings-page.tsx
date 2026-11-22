@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { config, ROOT, WEB } from "@/lib/api";
 import { href, type SettingsSection } from "@/lib/route";
 import { summary, useRoles, type Permission } from "@/lib/roles";
-import { authOn, may, signOut, useSession } from "@/lib/session";
+import { authOn, may, signOut, throughProvider, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { RolesSection } from "@/pages/roles-section";
 import { ToolsSection } from "@/pages/tools-section";
@@ -54,11 +54,17 @@ function AccountSection() {
           <span className="hidden text-muted-foreground sm:inline">{summary(user.permissions as Permission[])}</span>
           <Badge variant="secondary">{role?.name ?? user.role}</Badge>
         </Row>
-        <Row label="Password">
-          <Button variant="outline" size="sm" onClick={() => setPassword(true)}>
-            <KeyRound /> Change password
-          </Button>
-        </Row>
+        {throughProvider ? (
+          <Row label="Password">
+            <span className="text-muted-foreground">Kept by your organisation's sign-in</span>
+          </Row>
+        ) : (
+          <Row label="Password">
+            <Button variant="outline" size="sm" onClick={() => setPassword(true)}>
+              <KeyRound /> Change password
+            </Button>
+          </Row>
+        )}
         <Row label="This browser">
           <Button
             variant="outline"

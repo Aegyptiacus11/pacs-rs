@@ -15,6 +15,8 @@ export type User = { id: string; login: string; role: string; permissions: strin
 type State = { status: "loading" | "out" | "in"; user: User | null };
 
 export const authOn = config.auth === true;
+/** People sign in through the server's OpenID provider, never with a password. */
+export const throughProvider = authOn && config.provider === true;
 
 let state: State = authOn ? { status: "loading", user: null } : { status: "in", user: null };
 let token: string | null = null;
