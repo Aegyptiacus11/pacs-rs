@@ -29,7 +29,11 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   `GET /jobs/{id}` shows `State` (`Running`, `Success`, `Warning`, `Cancelled`, `Failure`),
   `Progress` in percent and the Remaining, Completed, Failed and Warning counts of the latest
   Pending response; `POST /jobs/{id}/cancel` sends C-CANCEL-MOVE-RQ with the next one. Jobs are
-  kept in memory, the latest hundred finished ones with them; a restart forgets them.
+  kept in the index, the latest hundred finished ones with them. A restart takes up the moves
+  that were running, from the start (what had arrived stays, and comes again as already
+  stored); one taken up three times, whose remote AE is no longer configured, or that can no
+  longer arrive here (no `PACS_DIMSE_LISTEN`) ends `Failure` with the reason in `Error`.
+  `Restarts` counts the starts that took it up.
 - **C-FIND SCP**, Patient Root and Study Root, at every level of each: [Being
   searched](#being-searched) below.
 - **C-MOVE SCP** and **C-GET SCP**, on both models and at the same levels, with the

@@ -35,14 +35,14 @@ Built: [checksums](integrity.md), each stored file's SHA-256 in the index, check
 schedule, on request and from the command line, and [the store and the index
 compared](integrity.md#the-store-and-the-index-compared) by one command that repairs on
 request, and [upgrades](backup.md#upgrading) tested on the index every release since 0.5.2
-wrote, on SQLite and Postgres. What remains:
+wrote, on SQLite and Postgres. [Moves in the background](dimse.md) are kept in the index, and
+a restart takes them up again or ends them saying why. What remains:
 
 | Item | Done when |
 |---|---|
 | Backup and restore | a documented procedure for SQLite and Postgres with disk and S3, restored in a test |
 | Deletion that can be undone | a deleted study stays recoverable for a set time before its files go |
 | Several processes on one index | uploads and deletions stay correct with two servers on one Postgres ([REST API](rest-api.md)) |
-| Jobs that outlive a restart | moves in the background are in the index, and resume or fail clearly after a restart ([DIMSE](dimse.md)) |
 
 ## 3. Operable
 
