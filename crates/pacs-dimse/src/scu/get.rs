@@ -166,7 +166,8 @@ pub async fn get_studies<F>(
 where
     F: FnMut(Progress) -> ControlFlow<()>,
 {
-    let (result, stored) = stored_during(get(
+    let mut address = None;
+    let (result, stored) = stored_during(connect_and_get(
         remote,
         calling,
         patient_id,
@@ -175,9 +176,9 @@ where
         timeout,
         response_timeout,
         on_progress,
+        &mut address,
     ))
     .await;
-    let (result, address) = result;
     if let Some(observer) = receiving.observer
         && !stored.is_empty()
     {
@@ -191,40 +192,7 @@ where
     result
 }
 
-/// [`get_studies`], and the remote AE's address once connected.
-#[allow(clippy::too_many_arguments)]
-async fn get<F>(
-    remote: &RemoteAe,
-    calling: &AeTitle,
-    patient_id: Option<&str>,
-    study_uids: &[String],
-    receiving: Receiving<'_>,
-    timeout: Duration,
-    response_timeout: Duration,
-    on_progress: F,
-) -> (Result<MoveOutcome, MoveError>, Option<std::net::SocketAddr>)
-where
-    F: FnMut(Progress) -> ControlFlow<()>,
-{
-    match connect_and_get(
-        remote,
-        calling,
-        patient_id,
-        study_uids,
-        receiving,
-        timeout,
-        response_timeout,
-        on_progress,
-    )
-    .await
-    {
-        Ok((outcome, address)) => (Ok(outcome), address),
-        Err((e, address)) => (Err(e), address),
-    }
-}
-
-type Failure = (MoveError, Option<std::net::SocketAddr>);
-
+/// [`get_studies`], the remote AE's address written to `address` once connected.
 #[allow(clippy::too_many_arguments)]
 async fn connect_and_get<F>(
     remote: &RemoteAe,
@@ -235,22 +203,20 @@ async fn connect_and_get<F>(
     timeout: Duration,
     response_timeout: Duration,
     mut on_progress: F,
-) -> Result<(MoveOutcome, Option<std::net::SocketAddr>), Failure>
+    address: &mut Option<std::net::SocketAddr>,
+) -> Result<MoveOutcome, MoveError>
 where
     F: FnMut(Progress) -> ControlFlow<()>,
 {
-    let early = |e: MoveError| (e, None);
     if study_uids.is_empty() {
-        return Err(early(MoveError::Request(
-            "no Study Instance UID to get".into(),
-        )));
+        return Err(MoveError::Request("no Study Instance UID to get".into()));
     }
     if let Some(bad) = study_uids.iter().find(|u| !pacs_core::is_valid_uid(u)) {
-        return Err(early(MoveError::Request(format!("{bad:?} is not a UID"))));
+        return Err(MoveError::Request(format!("{bad:?} is not a UID")));
     }
     let patient_id = patient_id.map(str::trim).filter(|id| !id.is_empty());
     if let Some(id) = patient_id {
-        check_patient_id(id).map_err(|e| early(MoveError::Request(e)))?;
+        check_patient_id(id).map_err(MoveError::Request)?;
     }
     let images_as: Vec<String> = IMAGES_AS
         .iter()
@@ -279,10 +245,8 @@ where
         timeout,
         response_timeout,
     )
-    .await
-    .map_err(|e| early(e.into()))?;
-    let address = association.peer_address();
-    let failed = |e: MoveError| (e, address);
+    .await?;
+    *address = association.peer_address();
     let chosen = [
         (STUDY_ROOT_GET, Root::Study),
         (PATIENT_ROOT_GET, Root::Patient),
@@ -296,35 +260,33 @@ where
     });
     let Some((context, root, sop_class)) = chosen else {
         association.abort().await;
-        return Err(failed(
-            super::ConnectError::NotAccepted(STUDY_ROOT_GET).into(),
-        ));
+        return Err(super::ConnectError::NotAccepted(STUDY_ROOT_GET).into());
     };
     let named = match (root, patient_id) {
         (Root::Study, _) => None,
         (Root::Patient, Some(id)) => Some(id),
         (Root::Patient, None) => {
             association.abort().await;
-            return Err(failed(MoveError::Request(format!(
+            return Err(MoveError::Request(format!(
                 "{} retrieves in Patient Root only, where a study is named under its patient: \
                  give the Patient ID of the studies",
                 remote.id
-            ))));
+            )));
         }
     };
     let Some(ts) = TransferSyntaxRegistry.get(&context.transfer_syntax) else {
         association.abort().await;
-        return Err(failed(MoveError::Identifier(format!(
+        return Err(MoveError::Identifier(format!(
             "unknown transfer syntax {}",
             context.transfer_syntax
-        ))));
+        )));
     };
     let mut identifier = Vec::new();
     if let Err(e) =
         retrieve_identifier(named, study_uids).write_dataset_with_ts(&mut identifier, ts)
     {
         association.abort().await;
-        return Err(failed(MoveError::Identifier(e.to_string())));
+        return Err(MoveError::Identifier(e.to_string()));
     }
     // the sending AE is the remote one, the receiving one pacs-rs, as on any C-STORE
     let (sender, receiver) = (remote.ae_title.to_string(), calling.to_string());
@@ -421,7 +383,7 @@ where
             association.abort().await;
         }
     }
-    result.map(|outcome| (outcome, address)).map_err(failed)
+    result
 }
 
 /// A C-GET-RQ of the GET SOP class `sop_class`, PS3.7 Table 9.3-7.
