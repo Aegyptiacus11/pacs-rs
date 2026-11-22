@@ -87,6 +87,11 @@ pub fn description() -> OpenApi {
     api.merge(crate::auth::api());
     api.merge(crate::checks::api());
     api.merge(crate::trash::api());
+    // a route that takes the rest of the path (`{*path}`) is one parameter in OpenAPI
+    api.paths.paths = std::mem::take(&mut api.paths.paths)
+        .into_iter()
+        .map(|(path, item)| (path.replace("{*", "{"), item))
+        .collect();
     let mut info = Info::new("pacs-rs", env!("CARGO_PKG_VERSION"));
     info.description = Some(
         "The REST API of pacs-rs: patients, studies, series and instances by identifier. \
