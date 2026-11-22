@@ -12,57 +12,70 @@ name = "pacs-server"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
-axum.workspace = true
-base64.workspace = true
-clap.workspace = true
-getrandom.workspace = true
-http-body.workspace = true
-hyper-util.workspace = true
-jsonwebtoken.workspace = true
-jwt-sessions.workspace = true
-mimalloc.workspace = true
-pacs-archive.workspace = true
-pacs-audit.workspace = true
-pacs-core.workspace = true
-pacs-deid.workspace = true
-pacs-dicomweb.workspace = true
-pacs-dimse.workspace = true
-rustls.workspace = true
-pacs-index.workspace = true
-pacs-rest.workspace = true
-pacs-store.workspace = true
+anyhow = "1.0.104"
+axum = "0.8.9"
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+getrandom = "0.4.3"
+http-body = "1.0.1"
+hyper-util = { version = "0.1.21", features = ["http1", "http2", "server-auto", "server-graceful", "service", "tokio"] }
+# the OpenID provider's tokens, checked with the keys it publishes (rust_crypto: pure Rust,
+# the same build as jwt-sessions')
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["rust_crypto"] }
+# The login: access JWTs and rotating refresh tokens, with its axum routes and its store on
+# the index's own database.
+jwt-sessions = { git = "https://github.com/Aegyptiacus11/jwt-sessions-rs", rev = "24aba3ee63c98dcfe3cb09f15498408ccf908e1e", features = ["axum", "sqlx"] }
+mimalloc = { version = "0.1.52", default-features = false }
+pacs-archive = { path = "../pacs-archive" }
+pacs-audit = { path = "../pacs-audit" }
+pacs-core = { path = "../pacs-core" }
+pacs-deid = { path = "../pacs-deid" }
+pacs-dicomweb = { path = "../pacs-dicomweb" }
+pacs-dimse = { path = "../pacs-dimse" }
+# TLS on DIMSE (PS3.15 B.12): the library dicom-ul speaks TLS with, and ring as its
+# cryptography, named explicitly since the build holds two
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+pacs-index = { path = "../pacs-index" }
+pacs-rest = { path = "../pacs-rest" }
+pacs-store = { path = "../pacs-store" }
 # the OpenID provider: discovery, keys, the code exchange and introspection
-reqwest = { workspace = true, features = ["rustls", "json", "form"] }
-serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-tokio.workspace = true
-tokio-io-timeout.workspace = true
-tokio-rustls.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-tracing.workspace = true
-utoipa.workspace = true
-utoipa-axum.workspace = true
-tracing-subscriber.workspace = true
-url.workspace = true
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-io-timeout = "1.2.1"
+# the audit trail sent to a repository over TLS (RFC 5425)
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["cors", "timeout", "trace"] }
+tracing = "0.1.44"
+# the description of the HTTP API, written beside each handler
+utoipa = "6.0.0"
+utoipa-axum = "0.3.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = "2.5.8"
 
 [dev-dependencies]
-rcgen.workspace = true
-futures.workspace = true
-bytes.workspace = true
-dicom-core.workspace = true
-dicom-dictionary-std.workspace = true
-dicom-encoding.workspace = true
-dicom-object.workspace = true
-dicom-transfer-syntax-registry.workspace = true
-dicom-ul.workspace = true
-http-body-util.workspace = true
-pacs-core = { workspace = true, features = ["real"] }
-reqwest.workspace = true
-serde_json.workspace = true
-sqlx.workspace = true
-tempfile.workspace = true
-tower.workspace = true
-zip.workspace = true
+# certificates made in tests, for the TLS of DIMSE
+rcgen = { version = "0.14.10", default-features = false, features = ["pem", "ring"] }
+futures = "0.3.34"
+bytes = "1.12.1"
+dicom-core = "0.10.0"
+dicom-dictionary-std = "0.10.0"
+dicom-encoding = "0.10.1"
+dicom-object = "0.10.0"
+dicom-transfer-syntax-registry = { version = "0.10.1", default-features = false }
+# async, so the association tasks share tokio with the HTTP server; async-tls for step 6
+# of docs/interop.md.
+dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
+http-body-util = "0.1.5"
+pacs-core = { path = "../pacs-core", features = ["real"] }
+reqwest = { version = "0.13.5", default-features = false }
+serde_json = "1.0.154"
+# tls-rustls-ring-webpki: TLS to Postgres (PACS_INDEX_TLS), with the web's root certificates
+# built in for a server whose certificate needs no PACS_INDEX_CA_FILE
+sqlx = { version = "0.9.0", default-features = false, features = ["any", "macros", "migrate", "postgres", "runtime-tokio", "sqlite", "tls-rustls-ring-webpki"] }
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

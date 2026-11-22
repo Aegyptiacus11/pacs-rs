@@ -8,13 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bytes.workspace = true
-futures.workspace = true
-object_store.workspace = true
-pacs-core.workspace = true
-thiserror.workspace = true
+bytes = "1.12.1"
+futures = "0.3.34"
+object_store = { version = "0.14.2", features = ["aws"] }
+pacs-core = { path = "../pacs-core" }
+thiserror = "2.0.21"
 
 [dev-dependencies]
-pacs-core = { workspace = true, features = ["real"] }
-tempfile.workspace = true
-tokio.workspace = true
+pacs-core = { path = "../pacs-core", features = ["real"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }

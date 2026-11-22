@@ -8,13 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-dicom-core.workspace = true
-dicom-dictionary-std.workspace = true
-dicom-object.workspace = true
-hmac.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-thiserror.workspace = true
+dicom-core = "0.10.0"
+dicom-dictionary-std = "0.10.0"
+dicom-object = "0.10.0"
+hmac = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
 
 [dev-dependencies]

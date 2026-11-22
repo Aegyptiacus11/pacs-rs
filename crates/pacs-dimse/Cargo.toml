@@ -8,25 +8,29 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bytes.workspace = true
-dicom-dictionary-std.workspace = true
-dicom-encoding.workspace = true
-dicom-object.workspace = true
-dicom-core.workspace = true
-dicom-json.workspace = true
-dicom-transfer-syntax-registry.workspace = true
-dicom-ul.workspace = true
-pacs-archive.workspace = true
-pacs-deid.workspace = true
-pacs-index.workspace = true
-pacs-store.workspace = true
-rustls.workspace = true
-thiserror.workspace = true
-pacs-core.workspace = true
-serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
-tracing.workspace = true
+bytes = "1.12.1"
+dicom-dictionary-std = "0.10.0"
+dicom-encoding = "0.10.1"
+dicom-object = "0.10.0"
+dicom-core = "0.10.0"
+dicom-json = "0.10.0"
+dicom-transfer-syntax-registry = { version = "0.10.1", default-features = false }
+# async, so the association tasks share tokio with the HTTP server; async-tls for step 6
+# of docs/interop.md.
+dicom-ul = { version = "0.10.1", features = ["async", "async-tls"] }
+pacs-archive = { path = "../pacs-archive" }
+pacs-deid = { path = "../pacs-deid" }
+pacs-index = { path = "../pacs-index" }
+pacs-store = { path = "../pacs-store" }
+# TLS on DIMSE (PS3.15 B.12): the library dicom-ul speaks TLS with, and ring as its
+# cryptography, named explicitly since the build holds two
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+thiserror = "2.0.21"
+pacs-core = { path = "../pacs-core" }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "rt", "sync"] }
+tracing = "0.1.44"
 
 [dev-dependencies]
-pacs-core = { workspace = true, features = ["real"] }
-tempfile.workspace = true
+pacs-core = { path = "../pacs-core", features = ["real"] }
+tempfile = "3.27.0"
