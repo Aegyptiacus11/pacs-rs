@@ -1094,11 +1094,22 @@ async fn a_frame_of_a_large_file_is_read_without_the_rest() {
     let mut holed = file.clone();
     holed[pixel_data..third.start].fill(0);
     holed[third.end..].fill(0);
-    let path = dir
+    // the instance's file, under a key of its own: <instance UID>.<random>.dcm
+    let folder = dir
         .path()
         .join(series.study_uid())
-        .join(series.series_uid())
-        .join(format!("{}.dcm", series.instance_uid(0)));
+        .join(series.series_uid());
+    let mut files: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let path = files.remove(0);
+    let name = path.file_name().unwrap().to_str().unwrap();
+    assert!(
+        name.starts_with(&format!("{}.", series.instance_uid(0))),
+        "{name}"
+    );
     assert_eq!(std::fs::read(&path).unwrap(), file);
     std::fs::write(&path, &holed).unwrap();
 
