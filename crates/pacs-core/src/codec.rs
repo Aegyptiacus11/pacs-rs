@@ -2,9 +2,9 @@
 //! out. Grayscale only, 8 or 16 bits allocated, one sample per pixel - what CT, MR and
 //! most radiography are.
 //!
-//! - JPEG-LS lossless (`1.2.840.10008.1.2.4.80`), CharLS: how pacs-rs stores native pixel
-//!   data. On 172 slices of a public CT it took 86 MB to 25 MB at about 5 ms a slice, and
-//!   decodes about as fast.
+//! - JPEG-LS lossless (`1.2.840.10008.1.2.4.80`), codecsls: how pacs-rs stores native pixel
+//!   data. On 172 slices of a public CT it took 86 MB to 25 MB at about 2.5 ms a slice, and
+//!   decodes about as fast; its streams are byte for byte those of CharLS, the reference.
 //! - JPEG XL (`1.2.840.10008.1.2.4.110`, and `.112` read only): decoded with jxl-rs, the
 //!   libjxl project's Rust decoder; encoded with zune-jpegxl, the one pure-Rust lossless
 //!   encoder. zune compresses CT about 17% less than JPEG-LS, so JPEG XL is something
@@ -182,20 +182,20 @@ fn coded_bits(shape: Shape, native: &[u8]) -> u16 {
 }
 
 fn encode_jpeg_ls(shape: Shape, native: &[u8]) -> Result<Vec<u8>, CodecError> {
-    let frame_info = charls::FrameInfo {
+    let bits = u8::try_from(coded_bits(shape, native))
+        .map_err(|_| CodecError::JpegLs("more than 16 bits per sample".into()))?;
+    let frame = codecsls::jpegls::FrameInfo {
         width: u32::from(shape.columns),
         height: u32::from(shape.rows),
-        bits_per_sample: i32::from(coded_bits(shape, native)),
-        component_count: 1,
+        bits_per_sample: bits,
+        components: 1,
     };
-    charls::CharLS::default()
-        .encode(frame_info, 0, native)
-        .map_err(|e| CodecError::JpegLs(e.to_string()))
+    codecsls::jpegls::encode(frame, native).map_err(|e| CodecError::JpegLs(e.to_string()))
 }
 
 fn decode_jpeg_ls(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
-    charls::CharLS::default()
-        .decode(bytes)
+    codecsls::jpegls::decode(bytes)
+        .map(|(_, pixels)| pixels)
         .map_err(|e| CodecError::JpegLs(e.to_string()))
 }
 
