@@ -53,6 +53,25 @@ impl Destination {
         }
     }
 
+    /// [`Destination::store`] of a file spooled to disk as it arrived: into the archive a
+    /// part at a time ([`Archive::ingest_spooled`]); a project reads it whole, to
+    /// de-identify it.
+    async fn store_spooled(&self, path: &std::path::Path) -> Result<(), Refusal> {
+        match self {
+            Destination::Archive(archive) => archive
+                .ingest_spooled(path)
+                .await
+                .map(|_| ())
+                .map_err(Refusal::Ingest),
+            Destination::Project(_) => {
+                let file = tokio::fs::read(path)
+                    .await
+                    .map_err(|e| Refusal::Ingest(IngestError::Store(pacs_store::Error::Io(e))))?;
+                self.store(Bytes::from(file)).await
+            }
+        }
+    }
+
     async fn store(&self, file: Bytes) -> Result<(), Refusal> {
         match self {
             Destination::Archive(archive) => archive
@@ -77,8 +96,19 @@ pub(crate) async fn store(
     data: DataSet,
     destination: &Destination,
 ) -> (Status, Option<String>) {
-    let data = match data {
-        DataSet::Received(data) => data,
+    let sop_class = request.abstract_syntax;
+    let sop_instance = command.ui(tag::AFFECTED_SOP_INSTANCE_UID).unwrap_or("");
+    let payload = match data {
+        DataSet::Received(data) => Payload::Bytes(part10(
+            &data,
+            sop_class,
+            sop_instance,
+            request.transfer_syntax,
+            request.calling,
+            request.called,
+        )),
+        // its Part 10 header was written before it (`header`, below)
+        DataSet::Spooled(spooled) => Payload::File(spooled),
         DataSet::None => {
             return (
                 Status::CANNOT_UNDERSTAND,
@@ -92,28 +122,27 @@ pub(crate) async fn store(
             );
         }
     };
-    let sop_class = request.abstract_syntax;
-    let sop_instance = command.ui(tag::AFFECTED_SOP_INSTANCE_UID).unwrap_or("");
-    let file = part10(
-        &data,
-        sop_class,
-        sop_instance,
-        request.transfer_syntax,
-        request.calling,
-        request.called,
-    );
-    let reading = match destination.archive().admit(&file).await {
-        Ok(reading) => reading,
-        Err(e @ IngestError::TooCostly { .. }) => {
-            return (Status::OUT_OF_RESOURCES_TOO_LARGE, Some(e.to_string()));
+    let (found_class, found_instance) = match &payload {
+        Payload::Bytes(file) => {
+            let reading = match destination.archive().admit(file).await {
+                Ok(reading) => reading,
+                Err(e @ IngestError::TooCostly { .. }) => {
+                    return (Status::OUT_OF_RESOURCES_TOO_LARGE, Some(e.to_string()));
+                }
+                Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e.to_string())),
+            };
+            let found = match identifiers(file) {
+                Ok(found) => found,
+                Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e)),
+            };
+            drop(reading); // the store takes its own: held here, both could wait on each other.
+            found
         }
-        Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e.to_string())),
+        Payload::File(spooled) => match destination.archive().spooled_header(&spooled.path).await {
+            Ok(header) => (header.key.sop_class_uid, header.key.sop_instance_uid),
+            Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e.to_string())),
+        },
     };
-    let (found_class, found_instance) = match identifiers(&file) {
-        Ok(found) => found,
-        Err(e) => return (Status::CANNOT_UNDERSTAND, Some(e)),
-    };
-    drop(reading); // the store takes its own: held here, both could wait on each other.
     // PS3.4 B.2.3: the data set must be an instance of the SOP class it is sent as
     if found_class != sop_class {
         return (
@@ -129,7 +158,11 @@ pub(crate) async fn store(
             )),
         );
     }
-    match destination.store(Bytes::from(file)).await {
+    let stored = match payload {
+        Payload::Bytes(file) => destination.store(Bytes::from(file)).await,
+        Payload::File(spooled) => destination.store_spooled(&spooled.path).await,
+    };
+    match stored {
         // PS3.4 B.2.2: Success means the instance is stored. One sent again is: the copy
         // kept is the first (or the new one, with overwriting on), as for a REST upload. An
         // instance a project quarantines is stored too, in its quarantine.
@@ -172,6 +205,36 @@ pub(crate) async fn store(
             Some(e.to_string()),
         ),
     }
+}
+
+/// A received data set as a Part 10 file: in memory, or spooled to disk.
+enum Payload {
+    Bytes(Vec<u8>),
+    File(crate::message::SpooledFile),
+}
+
+/// The Part 10 header a spooled data set is written after: [`part10`] of an empty data set,
+/// for the C-STORE-RQ `command` on a context of `sop_class` in `transfer_syntax`. `None` for
+/// any other request, whose data set is never spooled.
+pub(crate) fn spool_header(
+    command: &Command,
+    sop_class: &str,
+    transfer_syntax: &str,
+    calling: &str,
+    called: &str,
+) -> Option<Vec<u8>> {
+    if command.command_field().ok() != Some(crate::command::field::C_STORE_RQ) {
+        return None;
+    }
+    let sop_instance = command.ui(tag::AFFECTED_SOP_INSTANCE_UID).ok()?;
+    Some(part10(
+        &[],
+        sop_class,
+        sop_instance,
+        transfer_syntax,
+        calling,
+        called,
+    ))
 }
 
 /// SOP Class UID and SOP Instance UID of a Part 10 file, read up to the pixel data.

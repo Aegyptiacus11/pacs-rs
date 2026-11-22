@@ -112,11 +112,17 @@ pub struct Archive {
     trash_days: u64,
     /// Note each study that takes in an instance, for the rules that forward studies.
     forwarding: bool,
+    /// What a spooled file's header may take at most ([`SPOOLED_HEADER_MAX`] unless set).
+    spooled_header_max: usize,
 }
 
 /// Room in the archive's read limit, for as long as it is held.
 #[derive(Debug)]
 pub struct Admitted(#[allow(dead_code)] OwnedSemaphorePermit);
+
+/// What a spooled file's header may take at most, Pixel Data excluded: the first this many
+/// bytes are read to find where its pixels start ([`Archive::ingest_spooled`]).
+pub const SPOOLED_HEADER_MAX: usize = 64 << 20;
 
 impl Archive {
     /// An archive that keeps the first copy of an instance sent twice, like the
@@ -135,6 +141,7 @@ impl Archive {
             layouts: Arc::default(),
             trash_days: 0,
             forwarding: false,
+            spooled_header_max: SPOOLED_HEADER_MAX,
         }
     }
 
@@ -207,6 +214,13 @@ impl Archive {
             index: self.index.limited_to(account),
             ..self.clone()
         }
+    }
+
+    /// Read at most `bytes` of a spooled file to find its header ([`Archive::ingest_spooled`]);
+    /// a file no larger is read whole.
+    pub fn with_spooled_header_max(mut self, bytes: usize) -> Self {
+        self.spooled_header_max = bytes;
+        self
     }
 
     /// Note, with each instance it takes in, that its study is to be forwarded by a rule
@@ -299,6 +313,20 @@ impl Archive {
         let size = bytes.len();
         let hash = sha256_hex(&bytes);
         let object_key = self.store.put_new(&instance.key, bytes).await?;
+        self.index_stored(instance, object_key, size, hash, noted)
+            .await
+    }
+
+    /// Index an instance whose file is stored under `object_key`: `size` bytes, of SHA-256
+    /// `hash`. Its file goes again when the index does not take it, or keeps another copy.
+    async fn index_stored(
+        &self,
+        instance: Instance,
+        object_key: String,
+        size: usize,
+        hash: String,
+        noted: impl Fn(&InstanceKey, Outcome),
+    ) -> Result<Ingested, IngestError> {
         let new = NewInstance::new(&instance, object_key.clone(), size).map(|new| {
             new.with_sha256(hash)
                 .in_project(self.project.as_deref())
@@ -345,6 +373,93 @@ impl Archive {
                 Err(e.into())
             }
         }
+    }
+
+    /// The header of a Part 10 file on disk, what comes before its Pixel Data, read from
+    /// its first [`Archive::with_spooled_header_max`] bytes and checked as any file is: a file no larger is
+    /// read whole.
+    pub async fn spooled_header(&self, path: &std::path::Path) -> Result<Instance, IngestError> {
+        use tokio::io::AsyncReadExt;
+        let max = self.spooled_header_max;
+        let io = |e: std::io::Error| IngestError::Store(pacs_store::Error::Io(e));
+        let size = tokio::fs::metadata(path).await.map_err(io)?.len();
+        let mut start = vec![0u8; usize::try_from(size).unwrap_or(usize::MAX).min(max)];
+        let mut file = tokio::fs::File::open(path).await.map_err(io)?;
+        file.read_exact(&mut start).await.map_err(io)?;
+        if size <= max as u64 {
+            return Ok(Instance::from_bytes(&start)?);
+        }
+        match pacs_core::wire::pixel_data_at(&start) {
+            pacs_core::wire::PixelDataSearch::Found(at) => {
+                Ok(Instance::from_bytes(&start[..at.element])?)
+            }
+            _ => Err(IngestError::Invalid(pacs_core::Error::Malformed(format!(
+                "no pixel data in the first {max} bytes of a file of {size}: \
+                 its header is not one this archive reads apart from its pixels"
+            )))),
+        }
+    }
+
+    /// [`Archive::ingest`] of a Part 10 file on disk, a received instance spooled there as
+    /// it arrived, without reading it whole into memory: its header (what comes before the
+    /// Pixel Data, at most [`SPOOLED_HEADER_MAX`] bytes) is read and checked, the file is sent
+    /// to the store a part at a time and hashed on the way, and the instance is indexed. It is
+    /// stored as received: compressing it would need its pixels in memory. A file no larger
+    /// than the header bound is ingested as any other, compressed as the archive says.
+    pub async fn ingest_spooled(&self, path: &std::path::Path) -> Result<Ingested, IngestError> {
+        if self.index.account().is_some() {
+            return Err(IngestError::Limited);
+        }
+        let io = |e: std::io::Error| IngestError::Store(pacs_store::Error::Io(e));
+        let size = tokio::fs::metadata(path).await.map_err(io)?.len();
+        if size <= self.spooled_header_max as u64 {
+            let bytes = tokio::fs::read(path).await.map_err(io)?;
+            return self.ingest(Bytes::from(bytes)).await;
+        }
+        let instance = self.spooled_header(path).await?;
+        let _writing = self.writes.read().await;
+        let patient = (
+            instance.string(tags::PATIENT_ID),
+            instance.string(tags::PATIENT_NAME),
+        );
+        let noted = |key: &InstanceKey, outcome: Outcome| {
+            observed::note(|| observed::Stored {
+                study_instance_uid: key.study_instance_uid.clone(),
+                sop_class_uid: key.sop_class_uid.clone(),
+                patient_id: patient.0.clone(),
+                patient_name: patient.1.clone(),
+                outcome,
+            })
+        };
+        if !self.overwrite
+            && let Some(existing) = self
+                .index
+                .rest_instance_by_uid(&instance.key.sop_instance_uid)
+                .await?
+            && existing.series_instance_uid == instance.key.series_instance_uid
+            && existing.study_instance_uid == instance.key.study_instance_uid
+        {
+            count(Outcome::AlreadyStored);
+            noted(&instance.key, Outcome::AlreadyStored);
+            return Ok(Ingested {
+                key: instance.key,
+                outcome: Outcome::AlreadyStored,
+            });
+        }
+        let mut hash = sha2::Sha256::default();
+        let object_key = self
+            .store
+            .put_new_file(&instance.key, path, |part| {
+                sha2::Digest::update(&mut hash, part)
+            })
+            .await?;
+        let hash: String = sha2::Digest::finalize(hash)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let size = usize::try_from(size).unwrap_or(usize::MAX);
+        self.index_stored(instance, object_key, size, hash, noted)
+            .await
     }
 
     /// `instance` as it is to be stored: compressed when it is native and compression is

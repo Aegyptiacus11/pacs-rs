@@ -298,6 +298,7 @@ impl Client {
                     return answer;
                 }
                 DataSet::Dropped { size } => panic!("an Identifier of {size} bytes"),
+                DataSet::Spooled(_) => panic!("an Identifier spooled"),
             }
         }
     }
@@ -485,6 +486,7 @@ impl Client {
             }
             let failed = match message.data {
                 DataSet::None => Vec::new(),
+                DataSet::Spooled(_) => panic!("a response spooled"),
                 DataSet::Received(bytes) => {
                     let identifier =
                         dicom_object::InMemDicomObject::read_dataset_with_ts(&*bytes, ts).unwrap();
