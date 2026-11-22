@@ -32,11 +32,12 @@ everything. Nothing remains of this milestone.
 ## 2. Safe to keep data
 
 Built: [checksums](integrity.md), each stored file's SHA-256 in the index, checked on a
-schedule, on request and from the command line. What remains:
+schedule, on request and from the command line, and [the store and the index
+compared](integrity.md#the-store-and-the-index-compared) by one command that repairs on
+request. What remains:
 
 | Item | Done when |
 |---|---|
-| Consistency check | one command lists files without an index entry and index entries without a file, and repairs on request |
 | Backup and restore | a documented procedure for SQLite and Postgres with disk and S3, restored in a test |
 | Deletion that can be undone | a deleted study stays recoverable for a set time before its files go |
 | Several processes on one index | uploads and deletions stay correct with two servers on one Postgres ([REST API](rest-api.md)) |

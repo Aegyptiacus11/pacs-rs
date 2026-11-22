@@ -23,3 +23,31 @@ deletes nor hides it. Put it back from a [backup](backup.md), or send the instan
 which stores it with a new hash. A store that cannot be read (S3 down, a disk not mounted)
 is an error of the check, not a bad file: nothing is marked, and the scheduled checks try
 again ten minutes later.
+
+## The store and the index compared
+
+Checksums find a file that changed. A file the index does not know, left by a crash between
+storing a file and indexing it, or an index entry whose file is gone, is found by comparing
+the two:
+
+```bash
+pacs-server --consistency            # list what differs; exit 1 if anything does
+pacs-server --consistency --repair   # and repair it
+```
+
+It runs with the server's settings, and can run beside a running server: files written in
+the last ten minutes are left out, since an instance being stored has its file a moment
+before its index entry. `--repair`:
+
+- indexes again a file no entry names, when it reads as DICOM, as if it had just been
+  received. A file that does not, or that is a copy of an instance indexed under another
+  key, is listed and left where it is: repair never deletes a file;
+- removes an entry whose file is gone, once the store confirms it, with its series and
+  study when nothing else is left in them, so that searches stop offering images that
+  cannot be served. The [audit trail](audit.md) records it as a deletion by the server
+  (Study Deleted, or Instances Accessed with the action Delete when the study keeps other
+  instances). To keep the entry, put the file back from a [backup](backup.md) first.
+
+The comparison holds every index entry's key in memory, about 200 bytes an instance. It
+refuses to run when `PACS_QUARANTINE` is inside `PACS_STORAGE`: quarantined files are kept
+identified and never indexed, and would look like files the index lost.
