@@ -90,7 +90,8 @@ pub struct Send {
 pub struct Moved {
     /// `Success`, or `Warning` when some instances failed.
     pub status: String,
-    /// `C-MOVE`, `C-GET` when the move gave way to one, or `C-STORE` for a send.
+    /// `C-MOVE`, `C-GET` when the move gave way to one, `C-STORE` for a send, or
+    /// `WRITE-BACK` for a project's results sent back re-identified.
     pub method: String,
     /// Instances sent, as the remote AE counted them; `null` when it gave no count.
     #[schema(required)]
@@ -123,7 +124,8 @@ pub struct Started {
 pub struct Job {
     #[serde(rename = "ID")]
     pub id: String,
-    /// `C-MOVE`, `C-GET` once a move gave way to one, or `C-STORE` for a send.
+    /// `C-MOVE`, `C-GET` once a move gave way to one, `C-STORE` for a send, or
+    /// `WRITE-BACK` for a project's results sent back re-identified.
     pub r#type: String,
     /// The id of the remote AE asked.
     pub remote: String,

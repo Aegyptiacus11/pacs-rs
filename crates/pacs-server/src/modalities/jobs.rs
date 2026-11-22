@@ -144,10 +144,14 @@ enum Work {
     },
     /// Send them to the remote AE: C-STOREs.
     Send,
+    /// Send their results, re-identified, to the remote AE: C-STOREs of write-back.
+    WriteBack,
 }
 
 /// The kind a job of sending is kept under.
 const SEND: &str = "C-STORE";
+/// The kind a job of write-back is kept under.
+pub(crate) const WRITE_BACK: &str = "WRITE-BACK";
 
 /// Run job `id` to its end. Beside it, four times a second, its counts go to the index and
 /// a cancel asked there comes back: the operation's own callback cannot wait on the index.
@@ -224,6 +228,12 @@ async fn run(
         Work::Send => (
             retriever.send(remote, &index, &studies, on_progress).await,
             SEND,
+        ),
+        Work::WriteBack => (
+            retriever
+                .write_back(remote, &index, &studies, on_progress)
+                .await,
+            WRITE_BACK,
         ),
     };
     done.store(true, Ordering::Relaxed);
@@ -303,6 +313,33 @@ pub(crate) async fn start_send(
         .create_job(SEND, &remote_id, &destination, None, &studies)
         .await?;
     tokio::spawn(run(index, retriever, id, remote_id, studies, Work::Send));
+    Ok(id)
+}
+
+/// Start a job that writes back the results of `studies`, projects' de-identified studies,
+/// to `remote_id`; its id.
+pub(crate) async fn start_write_back(
+    index: Index,
+    retriever: Arc<Retriever>,
+    remote_id: String,
+    studies: Vec<String>,
+) -> Result<i64, pacs_index::Error> {
+    let destination = retriever
+        .config
+        .remote(&remote_id)
+        .map(|remote| remote.ae_title.to_string())
+        .unwrap_or_default();
+    let id = index
+        .create_job(WRITE_BACK, &remote_id, &destination, None, &studies)
+        .await?;
+    tokio::spawn(run(
+        index,
+        retriever,
+        id,
+        remote_id,
+        studies,
+        Work::WriteBack,
+    ));
     Ok(id)
 }
 
@@ -404,6 +441,8 @@ pub async fn take_up_stale(
                 tracing::info!(job = job.id, remote = %job.remote, restarts, "a job left running is taken up again");
                 let work = if job.kind == SEND {
                     Work::Send
+                } else if job.kind == WRITE_BACK {
+                    Work::WriteBack
                 } else {
                     Work::Retrieve {
                         patient_id: job.patient_id.clone(),

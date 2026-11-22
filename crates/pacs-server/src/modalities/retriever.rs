@@ -171,6 +171,69 @@ impl Retriever {
             &self.archive,
             &instances,
             self.config.timeout,
+            |file, _| Box::pin(async move { Ok(file) }),
+            on_progress,
+        )
+        .await
+    }
+
+    /// Write back the results of `studies`, each a project's de-identified study, to
+    /// `remote`: each re-identified on its way by the way back the project recorded
+    /// ([`pacs_dimse::project::reidentified`]). A study that is no project's copy, or has no result, is an error.
+    pub async fn write_back<F>(
+        &self,
+        remote: &RemoteAe,
+        index: &pacs_index::Index,
+        studies: &[String],
+        on_progress: F,
+    ) -> Result<MoveOutcome, MoveError>
+    where
+        F: FnMut(Progress) -> ControlFlow<()>,
+    {
+        let request = |e: String| MoveError::Request(e);
+        let mut instances = Vec::new();
+        let mut projects = std::collections::HashMap::new();
+        let index_owned = index.clone();
+        for study in studies {
+            let Some(Some(project)) = index
+                .study_project(study)
+                .await
+                .map_err(|e| request(format!("the index: {e}")))?
+            else {
+                return Err(request(format!("{study} is in no project")));
+            };
+            let original = index
+                .original_study(&project, study)
+                .await
+                .map_err(|e| request(format!("the index: {e}")))?
+                .ok_or_else(|| {
+                    request(format!("{study} is not a de-identified copy of {project}"))
+                })?;
+            instances.extend(
+                index
+                    .results_of(&project, study)
+                    .await
+                    .map_err(|e| request(format!("the index: {e}")))?,
+            );
+            projects.insert(study.clone(), (project, original));
+        }
+        let projects = Arc::new(projects);
+        pacs_dimse::send_instances(
+            remote,
+            &self.config.ae_title,
+            &self.archive,
+            &instances,
+            self.config.timeout,
+            |file, entry| {
+                let (index, projects) = (index_owned.clone(), projects.clone());
+                let study = entry.study_instance_uid.clone();
+                Box::pin(async move {
+                    let (project, original) = projects
+                        .get(&study)
+                        .ok_or_else(|| "its study is not one being written back".to_owned())?;
+                    pacs_dimse::project::reidentified(&index, project, original, file).await
+                })
+            },
             on_progress,
         )
         .await
