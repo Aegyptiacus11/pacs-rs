@@ -16,6 +16,11 @@
 //! of those sharing the index takes it out, and sends it as a job of sending (`/jobs`),
 //! taken up again after a restart like any other. A study that takes in instances later is
 //! forwarded again, whole: the remote AE keeps what it already has.
+//!
+//! Write-back is the same for results (an instance made on a project's de-identified copy,
+//! see `pacs_archive`): a study that took in results is noted with them, and once quiet its
+//! results go to the remote AE its project names (`"write_back"`), each re-identified by the
+//! way back the project recorded, as a job of write-back (`/jobs`, `WRITE-BACK`).
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -224,6 +229,58 @@ pub fn spawn_forwarding(
         loop {
             if let Err(error) = forward_due(&index, retriever.clone(), &rules, quiet).await {
                 tracing::error!(%error, "forwarding the quiet studies failed; trying again");
+            }
+            tokio::time::sleep(every).await;
+        }
+    });
+}
+
+/// Start a job of write-back for each study of a project whose latest result was stored at
+/// least `quiet` ago, to the remote AE its project writes back to (`write_backs`, project
+/// to remote AE id); how many started. A study of a project that does not write back is
+/// taken out and left: its results stay in the project.
+pub async fn write_back_due(
+    index: &Index,
+    retriever: Arc<Retriever>,
+    write_backs: &std::collections::HashMap<String, String>,
+    quiet: Duration,
+) -> Result<usize, pacs_index::Error> {
+    let before = jobs::now_ms() - i64::try_from(quiet.as_millis()).unwrap_or(i64::MAX);
+    let mut started = 0;
+    for study_uid in index.claim_write_backs(before).await? {
+        let Some(project) = index.study_project(&study_uid).await?.flatten() else {
+            continue;
+        };
+        let Some(remote) = write_backs.get(&project) else {
+            tracing::info!(study = %study_uid, %project, "results kept: the project writes nothing back");
+            continue;
+        };
+        let id = jobs::start_write_back(
+            index.clone(),
+            retriever.clone(),
+            remote.clone(),
+            vec![study_uid.clone()],
+        )
+        .await?;
+        tracing::info!(study = %study_uid, %project, destination = %remote, job = id, "results written back");
+        started += 1;
+    }
+    Ok(started)
+}
+
+/// Write results back for the life of the server, looking every few seconds.
+pub fn spawn_write_back(
+    index: Index,
+    retriever: Arc<Retriever>,
+    write_backs: std::collections::HashMap<String, String>,
+    quiet: Duration,
+) {
+    let every = quiet.clamp(Duration::from_secs(1), Duration::from_secs(5));
+    tokio::spawn(async move {
+        loop {
+            if let Err(error) = write_back_due(&index, retriever.clone(), &write_backs, quiet).await
+            {
+                tracing::error!(%error, "writing results back failed; trying again");
             }
             tokio::time::sleep(every).await;
         }

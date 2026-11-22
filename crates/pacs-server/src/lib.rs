@@ -761,6 +761,72 @@ pub fn forward_rules(settings: &Settings) -> anyhow::Result<Vec<forward::Forward
     Ok(settings.forward.clone())
 }
 
+/// Where each project writes its results back: project name to a remote AE studies may be
+/// sent to; projects without `write_back` are left out.
+pub fn write_backs(
+    settings: &Settings,
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let projects = projects::project_configs(settings)?;
+    let mut write_backs = std::collections::HashMap::new();
+    if projects.iter().all(|p| p.write_back.is_none()) {
+        return Ok(write_backs);
+    }
+    let config = dimse_config(settings)?;
+    for project in projects {
+        let Some(remote) = project.write_back else {
+            continue;
+        };
+        let name = &project.profile.name;
+        if config.remote(&remote).is_none() {
+            bail!(
+                "project {name} writes back to {remote}, which is not a remote AE of PACS_DIMSE_REMOTES"
+            );
+        }
+        if !config.move_destinations.contains(&remote) {
+            bail!(
+                "project {name} writes back to {remote}, which is not in PACS_DIMSE_MOVE_DESTINATIONS"
+            );
+        }
+        write_backs.insert(name.clone(), remote);
+    }
+    Ok(write_backs)
+}
+
+/// Write back the results of the studies quiet for `PACS_FORWARD_AFTER` now: how many jobs
+/// started (see [`forward`]).
+pub async fn write_back_now(settings: &Settings, archive: &Archive) -> anyhow::Result<usize> {
+    let write_backs = write_backs(settings)?;
+    Ok(forward::write_back_due(
+        archive.index(),
+        retriever(settings, archive, None)?,
+        &write_backs,
+        std::time::Duration::from_secs(settings.forward_after),
+    )
+    .await?)
+}
+
+/// Write results back for the life of the server; nothing when no project writes back.
+pub fn spawn_write_back(
+    settings: &Settings,
+    archive: &Archive,
+    audit: &audit::Audit,
+) -> anyhow::Result<()> {
+    let write_backs = write_backs(settings)?;
+    if write_backs.is_empty() {
+        return Ok(());
+    }
+    let observer: Option<std::sync::Arc<dyn pacs_dimse::Observer>> = audit
+        .is_on()
+        .then(|| std::sync::Arc::new(audit.clone()) as _);
+    forward::spawn_write_back(
+        archive.index().clone(),
+        retriever(settings, archive, observer)?,
+        write_backs,
+        std::time::Duration::from_secs(settings.forward_after),
+    );
+    Ok(())
+}
+
 /// Forward the studies quiet for `PACS_FORWARD_AFTER` now, by the rules: how many jobs of
 /// sending started (see [`forward`]).
 pub async fn forward_now(settings: &Settings, archive: &Archive) -> anyhow::Result<usize> {

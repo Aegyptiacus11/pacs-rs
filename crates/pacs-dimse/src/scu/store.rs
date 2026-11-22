@@ -323,22 +323,29 @@ impl Sender {
     }
 }
 
+/// A file made ready to send by [`send_instances`]'s `prepare`, or why it cannot be.
+pub type Prepared =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Bytes, String>> + Send>>;
+
 /// Send `instances` of `archive` to `remote`, as `calling`, on one association: pacs-rs
-/// sending without being asked, from its REST API or by a rule. Each instance sent, refused
+/// sending without being asked, from its REST API or by a rule. Each file goes through
+/// `prepare` on its way (a result re-identified for write-back); one it refuses is not sent. Each instance sent, refused
 /// or not sent goes to `on_progress` with the counts so far, whose `Break` stops before the
 /// next one; the counts and final status are a retrieval's (PS3.4 C.4.2.1.5-9: Success,
 /// Warning when some failed or warned, Cancel when stopped), and a send of which none
 /// arrived is a Failure, A702, with the instances that failed named.
-pub async fn send_instances<F>(
+pub async fn send_instances<F, P>(
     remote: &RemoteAe,
     calling: &AeTitle,
     archive: &pacs_archive::Archive,
     instances: &[pacs_index::InstanceEntry],
     timeout: Duration,
+    prepare: P,
     mut on_progress: F,
 ) -> Result<super::retrieve::MoveOutcome, super::retrieve::MoveError>
 where
     F: FnMut(super::retrieve::Progress) -> std::ops::ControlFlow<()>,
+    P: Fn(Bytes, &pacs_index::InstanceEntry) -> Prepared,
 {
     use super::retrieve::{MoveError, MoveOutcome, Progress};
 
@@ -363,18 +370,21 @@ where
     for entry in instances {
         let outcome = if holds {
             match archive.file(entry).await {
-                Ok(file) => sender
-                    .send(
-                        file,
-                        &entry.sop_class_uid,
-                        &entry.sop_instance_uid,
-                        &entry.transfer_syntax_uid,
-                    )
-                    .await
-                    .map_err(|e| {
-                        holds = e.association_holds();
-                        e.to_string()
-                    }),
+                Ok(file) => match prepare(file, entry).await {
+                    Ok(file) => sender
+                        .send(
+                            file,
+                            &entry.sop_class_uid,
+                            &entry.sop_instance_uid,
+                            &entry.transfer_syntax_uid,
+                        )
+                        .await
+                        .map_err(|e| {
+                            holds = e.association_holds();
+                            e.to_string()
+                        }),
+                    Err(e) => Err(format!("it cannot be made ready to send: {e}")),
+                },
                 Err(e) => Err(format!("its file cannot be read: {e}")),
             }
         } else {

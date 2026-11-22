@@ -6,6 +6,9 @@
 //!   "profile": {"name": "liver-2026", "options": ["retain-longitudinal-modified-dates"]}}]
 //! ```
 //!
+//! `"write_back": "<remote AE id>"` sends the results made on the project's copies (a
+//! segmentation, a report) back to that remote AE, re-identified ([`crate::forward`]).
+//!
 //! Each project's secret, from which its pseudonyms, UIDs and date shifts derive, comes from
 //! the environment only: `PACS_PROJECT_SECRET_<AE title>` (letters and digits kept, anything
 //! else `_`), or the file named by that variable with `_FILE` appended.
@@ -25,13 +28,18 @@ use crate::{Settings, open_store, process_env, secret};
 struct Entry {
     ae_title: String,
     profile: Profile,
+    #[serde(default)]
+    write_back: Option<String>,
 }
 
-/// A project as configured: its AE title and its profile, checked.
+/// A project as configured: its AE title, its profile, checked, and the remote AE its
+/// results are written back to, if any.
 #[derive(Debug, Clone)]
 pub struct ProjectConfig {
     pub ae_title: AeTitle,
     pub profile: Profile,
+    /// The id of a remote AE of `PACS_DIMSE_REMOTES` that studies may be sent to.
+    pub write_back: Option<String>,
 }
 
 /// The variable a project's secret is read from.
@@ -91,6 +99,7 @@ pub fn project_configs(settings: &Settings) -> anyhow::Result<Vec<ProjectConfig>
         projects.push(ProjectConfig {
             ae_title,
             profile: entry.profile,
+            write_back: entry.write_back,
         });
     }
     Ok(projects)

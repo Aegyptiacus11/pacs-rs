@@ -22,4 +22,4 @@ pub use action::Action;
 pub use engine::{Outcome, deidentify, explain};
 pub use keys::Keys;
 pub use profile::{Opt, Override, Profile, ProfileError, Quarantine, TagPattern};
-pub use replaced::replaced_uids;
+pub use replaced::{ReidentifyError, reidentify, replaced_uids, uids_in};

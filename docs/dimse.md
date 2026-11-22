@@ -146,6 +146,9 @@ destination it meets gets a job of sending (`/jobs`, `Type` `C-STORE`),
 taken up again after a restart like any other. A study that takes in instances later is
 forwarded again, whole; the remote AE keeps what it already has.
 
+A project's results go back to the hospital the same way, re-identified, to the remote AE
+its `"write_back"` names ([De-identification](de-identification.md)).
+
 ## Being retrieved from
 
 A viewer or a workstation has pacs-rs send it a study in one of two ways, on the Patient

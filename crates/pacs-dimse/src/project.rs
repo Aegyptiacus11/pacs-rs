@@ -57,7 +57,7 @@ impl Project {
     /// De-identify a received Part 10 file and ingest the result; or quarantine it.
     pub async fn receive(&self, file: Bytes) -> Result<Received, ProjectError> {
         if self.is_result(&file).await? {
-            self.archive.ingest(file).await?;
+            self.archive.clone().as_received().ingest(file).await?;
             return Ok(Received::Stored);
         }
         let profile = self.profile.clone();
@@ -208,4 +208,47 @@ fn deidentify_file(file: &[u8], profile: &Profile, keys: &Keys) -> Result<Done, 
         .write_all(&mut out)
         .map_err(|e| ProjectError::Write(e.to_string()))?;
     Ok(Done::Deidentified(out, originals))
+}
+
+/// A result's file under the originals: the UIDs `project` replaced, and the patient and
+/// study of `original`, in the transfer syntax it is stored in (see
+/// [`pacs_deid::reidentify`]).
+pub async fn reidentified(
+    index: &pacs_index::Index,
+    project: &str,
+    original: &pacs_index::OriginalStudy,
+    file: Bytes,
+) -> Result<Bytes, String> {
+    let instance = pacs_core::Instance::from_bytes(&file).map_err(|e| e.to_string())?;
+    let uids = pacs_deid::uids_in(&instance.object);
+    let originals = index
+        .original_uids(project, &uids)
+        .await
+        .map_err(|e| format!("the index: {e}"))?;
+    let back = pacs_deid::reidentify(
+        &instance.object,
+        &originals,
+        &original.patient,
+        &original.study,
+    )
+    .map_err(|e| e.to_string())?;
+    let uid = |tag| {
+        back.element(tag)
+            .ok()
+            .and_then(|e| e.to_str().ok())
+            .map(|s| s.trim_end_matches(['\0', ' ']).to_owned())
+            .unwrap_or_default()
+    };
+    let meta = FileMetaTableBuilder::new()
+        .transfer_syntax(instance.key.transfer_syntax_uid.as_str())
+        .media_storage_sop_class_uid(uid(dicom_dictionary_std::tags::SOP_CLASS_UID))
+        .media_storage_sop_instance_uid(uid(dicom_dictionary_std::tags::SOP_INSTANCE_UID))
+        .implementation_class_uid(IMPLEMENTATION_CLASS_UID)
+        .implementation_version_name(IMPLEMENTATION_VERSION_NAME);
+    let mut out = Vec::new();
+    back.with_meta(meta)
+        .map_err(|e| e.to_string())?
+        .write_all(&mut out)
+        .map_err(|e| e.to_string())?;
+    Ok(out.into())
 }
