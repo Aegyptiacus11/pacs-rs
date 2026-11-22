@@ -578,7 +578,7 @@ Permission, when the login is on: `write`.
 
 | Send | Where | Type | |
 |---|---|---|---|
-| the body | | `multipart/related` | One part an instance, each `application/dicom`: `multipart/related; type="application/dicom"`. |
+| the body | | `multipart/related` | One part an instance, each `application/dicom`: `multipart/related; type="application/dicom"`. Or `type="application/dicom+json"`: a first part of DICOM JSON, one data set an instance, and the parts its BulkDataURIs name by their Content-Location (the pixel data `application/octet-stream`, or compressed: `image/jls`, `image/jpeg`, `image/jp2`, `image/jxl`). |
 
 | Status | Answer | |
 |---|---|---|
@@ -587,7 +587,7 @@ Permission, when the login is on: `write`.
 | 400 | [Problem](#problem) | The body is not `multipart/related` with parts. |
 | 403 | [Problem](#problem) | The account is limited to some projects: it stores nothing over HTTP. |
 | 409 | `application/dicom+json` | None was stored; the answer names each failure with its reason. |
-| 415 | [Problem](#problem) | The parts are not `application/dicom`. |
+| 415 | [Problem](#problem) | The parts are neither `application/dicom` nor DICOM JSON with bulk data; DICOM XML is not taken. |
 
 ### `GET /dicom-web/studies/{study}`
 
@@ -618,7 +618,7 @@ Permission, when the login is on: `write`.
 | Send | Where | Type | |
 |---|---|---|---|
 | `study` | path | string | Study Instance UID. |
-| the body | | `multipart/related` | One part an instance, each `application/dicom`: `multipart/related; type="application/dicom"`. |
+| the body | | `multipart/related` | One part an instance, each `application/dicom`: `multipart/related; type="application/dicom"`. Or `type="application/dicom+json"`: a first part of DICOM JSON, one data set an instance, and the parts its BulkDataURIs name by their Content-Location (the pixel data `application/octet-stream`, or compressed: `image/jls`, `image/jpeg`, `image/jp2`, `image/jxl`). |
 
 | Status | Answer | |
 |---|---|---|
@@ -627,7 +627,7 @@ Permission, when the login is on: `write`.
 | 400 | [Problem](#problem) | The body is not `multipart/related` with parts. |
 | 403 | [Problem](#problem) | The account is limited to some projects: it stores nothing over HTTP. |
 | 409 | `application/dicom+json` | None was stored; the answer names each failure with its reason. |
-| 415 | [Problem](#problem) | The parts are not `application/dicom`. |
+| 415 | [Problem](#problem) | The parts are neither `application/dicom` nor DICOM JSON with bulk data; DICOM XML is not taken. |
 
 ### `GET /dicom-web/studies/{study}/metadata`
 
