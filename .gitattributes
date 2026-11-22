@@ -1,2 +1,5 @@
 # DICOM files are bytes: no line-ending conversion on any platform
 *.dcm binary
+# SQL is checked out with LF everywhere: the migrations' checksums, kept in every index, are
+# taken from these bytes, and a CRLF checkout (Git for Windows' default) would change them
+*.sql text eol=lf
