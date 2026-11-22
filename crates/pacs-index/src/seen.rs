@@ -6,6 +6,10 @@
 //! [`Index`] value made by [`Index::limited_to`] reads within those bounds: every read of
 //! the hierarchy leaves out what the account may not see, as if it were not in the index.
 //!
+//! An account that may not see identities (a role without the server's `identities`
+//! permission) is bounded too, limited or not: it never sees a study in no project, and
+//! when it is not limited, it sees the studies of every project.
+//!
 //! A project is an account too, under the key of [`Index::project_account`]: it sees its
 //! own studies and nothing else, with nothing to set. It is who a DICOM application is
 //! when it calls a project's AE title, since DIMSE has no accounts of its own.
@@ -14,8 +18,9 @@ use std::sync::Arc;
 
 use crate::{Error, Index};
 
-/// The account a request is limited to: what a server leaves in the request's extensions
-/// for an account that does not see everything, and what a handler reads to bound its
+/// The account a request is bounded to: what a server leaves in the request's extensions
+/// for an account that does not see everything (limited to projects, or not allowed to see
+/// identities), and what a handler reads to bound its
 /// index with [`Index::limited_to`]. No such extension: no limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeenBy(pub String);
@@ -59,7 +64,9 @@ impl Index {
             "SELECT count(*) FROM studies st
               WHERE st.study_instance_uid = $1
                 AND (st.project IN (SELECT project FROM account_projects WHERE account = $2)
-                     OR ('project:' || st.project) = $2)",
+                     OR ('project:' || st.project) = $2
+                     OR (st.project IS NOT NULL AND $2 NOT LIKE 'project:%'
+                         AND $2 NOT IN (SELECT account FROM limited_accounts)))",
         )
         .bind(study_instance_uid)
         .bind(account)

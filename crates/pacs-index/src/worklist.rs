@@ -142,7 +142,9 @@ impl Index {
         let account = sql.text(self.account()?);
         Some(format!(
             "({alias}.project IN (SELECT project FROM account_projects WHERE account = {account})
-              OR ('project:' || {alias}.project) = {account})"
+              OR ('project:' || {alias}.project) = {account}
+              OR ({alias}.project IS NOT NULL AND {account} NOT LIKE 'project:%'
+                  AND {account} NOT IN (SELECT account FROM limited_accounts)))"
         ))
     }
 

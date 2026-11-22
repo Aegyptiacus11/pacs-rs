@@ -18,9 +18,10 @@ use sqlx::Row;
 use sqlx::any::AnyPoolOptions;
 
 /// SQL: the study `$alias` is one the account bound as `$n` may see. Always true when that
-/// is NULL (no limit); otherwise the study's project must be one of the account's, or the
-/// project the account itself is ([`Index::project_account`]), so a study without a
-/// project is never seen.
+/// is NULL (no limit); otherwise the study must be in a project: one of the account's when
+/// it is limited ([`Index::set_account_projects`]), the project the account itself is
+/// ([`Index::project_account`]), or any project for an account that is not limited but
+/// may not see identities ([`SeenBy`]). A study without a project is never seen.
 macro_rules! seen {
     ($alias:literal, $n:literal) => {
         concat!(
@@ -34,7 +35,13 @@ macro_rules! seen {
             $alias,
             ".project) = $",
             $n,
-            ") "
+            " OR (",
+            $alias,
+            ".project IS NOT NULL AND $",
+            $n,
+            " NOT LIKE 'project:%' AND $",
+            $n,
+            " NOT IN (SELECT account FROM limited_accounts))) "
         )
     };
 }

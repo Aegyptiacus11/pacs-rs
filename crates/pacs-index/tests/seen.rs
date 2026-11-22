@@ -306,11 +306,12 @@ async fn a_limited_index_reads_only_its_projects() {
         }
         check(&index, &[&liver, &lung, &received], &[]).await;
 
-        // not limited: everything, under any name
+        // bound but not limited (a role without identities): every project's studies, and
+        // never one in no project
         check(
             &index.limited_to("user:nobody-limited-me"),
-            &[],
-            &[&liver, &lung, &received],
+            &[&liver, &lung],
+            &[&received],
         )
         .await;
         let reader = index.limited_to(READER);
@@ -365,11 +366,12 @@ async fn a_project_sees_its_own_studies_and_no_other() {
             let none = index.limited_to(&Index::project_account(nothing));
             check(&none, &[], &[&liver, &lung, &received]).await;
         }
-        // a user is not a project for bearing its name
+        // a user is not a project for bearing its name: bound and not limited, it sees
+        // every project's studies and none in no project
         check(
             &index.limited_to("user:liver"),
-            &[],
-            &[&liver, &lung, &received],
+            &[&liver, &lung],
+            &[&received],
         )
         .await;
     }
