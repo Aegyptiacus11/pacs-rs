@@ -31,7 +31,7 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
 | Level | Keys |
 |---|---|
 | Studies | Study Date, Study Time, Accession Number, Modalities In Study, Referring Physician Name, Patient Name, Patient ID, Study Instance UID, Study ID; and Study Description, Patient Birth Date, Patient Sex |
-| A study's series | Modality, Series Instance UID, Series Number, Performed Procedure Step Start Date and Time; and Series Description |
+| A study's series | Modality, Series Instance UID, Series Number, Performed Procedure Step Start Date and Time, Request Attributes Sequence (its Scheduled Procedure Step ID and Requested Procedure ID); and Series Description |
 | A series' instances | SOP Class UID, SOP Instance UID, Instance Number |
 
 - **Names** are matched without regard to case, as the standard lets a server choose
@@ -50,9 +50,14 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
 - `fuzzymatching=true`, `emptyvaluematching=true` and `multiplevaluematching=true` are not
   done: the search is made without, and the answer carries the `Warning: 299` header the
   standard gives for each (PS3.18 8.3.4.2, 8.3.4.5, 8.3.4.6).
-- Not a key yet: Request Attributes Sequence and its items, which the matcher answers
-  (sequence matching, as [C-FIND](dimse.md#being-searched) uses it) but a query parameter
-  cannot yet name; and the searches from the root for all series or all instances.
+- **A key of a sequence's item** is named `Sequence.Attribute`, by keyword or tag
+  (PS3.18 8.3.4.1): `RequestAttributesSequence.ScheduledProcedureStepID=STEP1`, or
+  `00400275.00400009=STEP1`. A series answers when one item of its sequence answers every
+  key asked of that sequence (PS3.4 C.2.2.2.6, as [C-FIND](dimse.md#being-searched)
+  matches): `…ScheduledProcedureStepID=STEP1&RequestAttributesSequence.RequestedProcedureID=REQ2`
+  finds nothing when STEP1 and REQ2 are in two items of the series. The sequence itself takes
+  no value.
+- Not a key yet: the searches from the root for all series or all instances.
 
 SQLite and Postgres answer the same: one rule in the code decides every match, and the
 database only narrows what it is asked about.

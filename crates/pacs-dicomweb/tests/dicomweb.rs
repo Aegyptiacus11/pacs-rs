@@ -1132,3 +1132,86 @@ async fn a_frame_of_a_large_file_is_read_without_the_rest() {
     let reply = get(&app, &frame(4), CORNERSTONE_FRAMES).await;
     assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+/// PS3.18 8.3.4.1 and PS3.4 C.2.2.2.6: a key of a sequence's item is named
+/// `Sequence.Attribute`; a series answers when one item of its sequence answers every key
+/// asked of that sequence.
+#[tokio::test]
+async fn a_series_is_found_by_the_keys_of_one_request() {
+    let app = app().await;
+    let first = RealSeries::new(71, 1).requested(&[("STEP1", "REQ1"), ("STEP2", "REQ2")]);
+    let second = RealSeries::new(72, 1)
+        .in_study(71, 2)
+        .requested(&[("STEP3", "REQ1")]);
+    let bare = RealSeries::new(73, 1).in_study(71, 3);
+    let mut files = first.all_bytes();
+    files.extend(second.all_bytes());
+    files.extend(bare.all_bytes());
+    assert_eq!(stow(&app, "/studies", files).await.status, StatusCode::OK);
+    let json = "application/dicom+json";
+    let study = first.study_uid();
+    let found = async |query: &str| -> Vec<String> {
+        let reply = get(&app, &format!("/studies/{study}/series?{query}"), json).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::OK,
+            "{query}: {}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        let mut numbers: Vec<String> = reply
+            .json()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|series| value(series, "00200011").to_string())
+            .collect();
+        numbers.sort();
+        numbers
+    };
+    const STEP: &str = "RequestAttributesSequence.ScheduledProcedureStepID";
+    const PROCEDURE: &str = "RequestAttributesSequence.RequestedProcedureID";
+    for (query, expected) in [
+        (format!("{STEP}=STEP1"), vec!["1"]),
+        (format!("{PROCEDURE}=REQ1"), vec!["1", "2"]),
+        (format!("{STEP}=STEP*"), vec!["1", "2"]),
+        // both keys of the one item: STEP1 and REQ2 are in two items of the first series
+        (format!("{STEP}=STEP1&{PROCEDURE}=REQ2"), vec![]),
+        (format!("{STEP}=STEP2&{PROCEDURE}=REQ2"), vec!["1"]),
+        ("00400275.00400009=STEP3".to_owned(), vec!["2"]),
+        (
+            "00400275.00401001=REQ1&Modality=CT".to_owned(),
+            vec!["1", "2"],
+        ),
+        // universal: the sequence or a key of it, empty
+        ("RequestAttributesSequence=".to_owned(), vec!["1", "2", "3"]),
+        (format!("{STEP}="), vec!["1", "2", "3"]),
+    ] {
+        assert_eq!(found(&query).await, expected, "{query}");
+    }
+    // the series that answers carries its requests
+    let reply = get(&app, &format!("/studies/{study}/series?{STEP}=STEP3"), json).await;
+    let items = reply.json()[0]["00400275"]["Value"].clone();
+    assert_eq!(items[0]["00400009"]["Value"][0], "STEP3", "{items}");
+
+    for bad in [
+        "RequestAttributesSequence=STEP1".to_owned(),
+        "RequestAttributesSequence.PatientID=NEMA-71".to_owned(),
+        "RequestAttributesSequence.ScheduledProcedureStepID.Other=1".to_owned(),
+        "OtherSequence.ScheduledProcedureStepID=STEP1".to_owned(),
+        format!("{STEP}=STEP1&00400275.00400009=STEP2"),
+    ] {
+        let reply = get(&app, &format!("/studies/{study}/series?{bad}"), json).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // a key of the series, not of the study or the instance
+    for path in [
+        format!("/studies?{STEP}=STEP1"),
+        format!(
+            "/studies/{study}/series/{}/instances?{STEP}=STEP1",
+            first.series_uid()
+        ),
+    ] {
+        let reply = get(&app, &path, json).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{path}");
+    }
+}

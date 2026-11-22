@@ -10,6 +10,7 @@ use axum::extract::{Path, Query};
 use axum::http::HeaderMap;
 use axum::http::header::ACCEPT;
 use axum::response::{IntoResponse, Response};
+use pacs_index::matching::ItemKey;
 use pacs_index::{Key, Kind, Match, StudySearch};
 use serde_json::{Value, json};
 
@@ -58,6 +59,23 @@ const SERIES_KEYS: &[(&str, &str, Kind)] = &[
     ("PerformedProcedureStepStartTime", "00400245", Kind::Time),
     ("SeriesDescription", "0008103E", Kind::Text),
 ];
+/// The sequences one level can be searched by, each with the keys of its item it
+/// understands: a query parameter names one as `Sequence.Attribute` (PS3.18 8.3.4.1), by
+/// keyword or tag. Request Attributes Sequence is a required key of the series
+/// (Table 10.6.1-5).
+type Sequences = &'static [(
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str, Kind)],
+)];
+const SERIES_SEQUENCES: Sequences = &[(
+    "RequestAttributesSequence",
+    "00400275",
+    &[
+        ("ScheduledProcedureStepID", "00400009", Kind::Text),
+        ("RequestedProcedureID", "00401001", Kind::Text),
+    ],
+)];
 const INSTANCE_KEYS: &[(&str, &str, Kind)] = &[
     ("SOPClassUID", "00080016", Kind::Uid),
     ("SOPInstanceUID", "00080018", Kind::Uid),
@@ -96,8 +114,23 @@ impl Search {
     fn parse(
         params: &[(String, String)],
         keys: &[(&'static str, &'static str, Kind)],
+        sequences: Sequences,
     ) -> Result<Self, ApiError> {
         let mut search = Search::default();
+        // every key named, as tags joined by `.`, to refuse one given twice
+        let mut named: Vec<String> = Vec::new();
+        let mut once = |path: String, name: &str| {
+            if named.contains(&path) {
+                return Err(ApiError::bad_request(format!("{name} is given twice")));
+            }
+            named.push(path);
+            Ok(())
+        };
+        let cannot =
+            |name: &str| ApiError::bad_request(format!("cannot search on {name} here yet"));
+        let named_by = |name: &str, keyword: &str, tag: &str| {
+            name == keyword || name.eq_ignore_ascii_case(tag)
+        };
         for (name, value) in params {
             if let Some((_, said)) = NOT_DONE.iter().find(|(parameter, _)| name == parameter) {
                 match value.as_str() {
@@ -124,17 +157,59 @@ impl Search {
                 }
                 // the computed attributes are always returned; others are not yet
                 "includefield" => {}
+                // a key of a sequence's item (C.2.2.2.6): every key of one sequence is
+                // asked of the same item
+                _ if name.contains('.') => {
+                    let (outer, inner) = name.split_once('.').unwrap_or_default();
+                    let (_, sequence, items) = sequences
+                        .iter()
+                        .find(|(keyword, tag, _)| named_by(outer, keyword, tag))
+                        .ok_or_else(|| cannot(name))?;
+                    let (_, tag, kind) = items
+                        .iter()
+                        .find(|(keyword, tag, _)| named_by(inner, keyword, tag))
+                        .ok_or_else(|| cannot(name))?;
+                    once(format!("{sequence}.{tag}"), name)?;
+                    let Some(asked) = Match::parse(*kind, value)
+                        .map_err(|e| ApiError::bad_request(format!("{name}: {e}")))?
+                    else {
+                        continue;
+                    };
+                    let key = ItemKey {
+                        tag: (*tag).to_owned(),
+                        kind: *kind,
+                        asked,
+                    };
+                    match search.keys.iter_mut().find(|k| k.tag == *sequence) {
+                        Some(Key {
+                            asked: Match::Item(item),
+                            ..
+                        }) => item.push(key),
+                        _ => search.keys.push(Key {
+                            tag: sequence,
+                            kind: Kind::Sequence,
+                            asked: Match::Item(vec![key]),
+                        }),
+                    }
+                }
+                _ if sequences
+                    .iter()
+                    .any(|(keyword, tag, _)| named_by(name, keyword, tag)) =>
+                {
+                    // the sequence alone, empty, asks for nothing
+                    if !value.trim().is_empty() {
+                        return Err(ApiError::bad_request(format!(
+                            "{name} is matched by the keys of its item, as {name}.<attribute>=<value>, not by a value"
+                        )));
+                    }
+                }
                 _ => {
                     let (_, tag, kind) = keys
                         .iter()
-                        .find(|(keyword, tag, _)| name == keyword || name.eq_ignore_ascii_case(tag))
-                        .ok_or_else(|| {
-                            ApiError::bad_request(format!("cannot search on {name} here yet"))
-                        })?;
+                        .find(|(keyword, tag, _)| named_by(name, keyword, tag))
+                        .ok_or_else(|| cannot(name))?;
                     // "Each attribute in the Query Parameter shall be not be repeated"
-                    if search.keys.iter().any(|key| key.tag == *tag) {
-                        return Err(ApiError::bad_request(format!("{name} is given twice")));
-                    }
+                    once((*tag).to_owned(), name)?;
                     // an empty value matches everything: nothing to ask
                     if let Some(asked) = Match::parse(*kind, value)
                         .map_err(|e| ApiError::bad_request(format!("{name}: {e}")))?
@@ -278,7 +353,7 @@ pub(crate) async fn studies(
     Query(params): Params,
 ) -> Result<Response, ApiError> {
     check_accept(&headers)?;
-    let search = Search::parse(&params, STUDY_KEYS)?;
+    let search = Search::parse(&params, STUDY_KEYS, &[])?;
     let base = state.base_url(&headers);
     let asked = StudySearch {
         keys: search.keys.clone(),
@@ -333,7 +408,7 @@ pub(crate) async fn series(
     Query(params): Params,
 ) -> Result<Response, ApiError> {
     check_accept(&headers)?;
-    let search = Search::parse(&params, SERIES_KEYS)?;
+    let search = Search::parse(&params, SERIES_KEYS, SERIES_SEQUENCES)?;
     search.no_reversed_range()?;
     let base = state.base_url(&headers);
     let mut series = state.archive.index().series(&study, None).await?;
@@ -381,7 +456,7 @@ pub(crate) async fn instances(
     Query(params): Params,
 ) -> Result<Response, ApiError> {
     check_accept(&headers)?;
-    let search = Search::parse(&params, INSTANCE_KEYS)?;
+    let search = Search::parse(&params, INSTANCE_KEYS, &[])?;
     search.no_reversed_range()?;
     let base = state.base_url(&headers);
     let mut instances = state
