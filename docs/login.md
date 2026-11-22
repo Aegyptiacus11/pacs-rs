@@ -166,9 +166,32 @@ At the provider, the client is confidential (it has a secret), its redirect URI 
   cannot be reached, or names itself otherwise than `PACS_OIDC_ISSUER`, stops the start. Its
   keys are fetched again when a token names one not seen yet, so a key rotation needs no
   restart. Its URLs are HTTPS, or plain HTTP to `localhost` only.
+- **Tools.** With a provider, a tool gets its access tokens there, not from `POST /auth/token`
+  (see below).
 - After the callback, the session is the one a password would give: the refresh cookie,
   then access tokens from `POST /auth/refresh`. Signing out ends it here, not at the
   provider.
+
+### Tools through the provider
+
+A tool is a client at the provider (client credentials), and is registered here under that
+client id: `POST /clients` with `{"client_id": "<its id there>", "name", "role"}`, or
+Settings > Tools. It has no secret here. Its access tokens are accepted when:
+
+- a JWT signed with a key the provider publishes (RFC 9068), or, for any other token, one the
+  provider's introspection endpoint calls active (RFC 7662, IUA ITI-102), asked with this
+  server's client credentials;
+- issued by the provider, not expired, and **for this server**: its audience is
+  `PACS_OIDC_AUDIENCE`, by default the origin of `PACS_OIDC_REDIRECT_URL` (for example
+  `https://pacs.example.org`). The tool asks for it as `resource` (RFC 8707), which the
+  provider must allow for that client; a token issued for the tool itself is refused;
+- for a tool registered here, named by its `client_id` (or `azp`, for a provider that does
+  not send `client_id`).
+
+What the tool may do is its role here. The token's scopes `pacs:read`, `pacs:write`,
+`pacs:remote` and `pacs:delete` narrow it, never widen it: a token without any `pacs:` scope
+gets the whole role. A tool never manages users. A refused token is answered 401, with
+`error="invalid_token"` or `error="insufficient_scope"`.
 
 ## Users
 

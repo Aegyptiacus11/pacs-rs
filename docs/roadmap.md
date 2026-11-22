@@ -23,13 +23,11 @@ if the rest were not there), [TLS to a Postgres index](running.md#tls-to-postgre
 certificate checked, [DIMSE over TLS](dimse.md#dimse-over-tls) by the profile of PS3.15 B.12, with
 mutual authentication, the [audit trail](audit.md) written to a file and [sent to a
 repository](audit.md#sending-to-a-repository) over TLS, kept while it cannot be reached, and the sign-in page and the settings (users, roles, tools, account) of the
-[web interface](web-interface.md). Without it, anyone who reaches the
-server can read and delete everything. What remains:
-
-| Item | Done when |
-|---|---|
-| Signing in through a provider | a user signs in with OpenID Connect, and pacs-rs gives the same session as after a password |
-| Tokens from a provider | a tool's access token issued by the hospital's authorization server is accepted, checked with its published keys or by introspection (IUA ITI-102, ITI-103) |
+[web interface](web-interface.md). [Signing in through the hospital's OpenID
+provider](login.md#signing-in-through-a-provider), which is then the only way in, and [tools'
+tokens from that provider](login.md#tools-through-the-provider), checked with its published
+keys or by introspection. Without it, anyone who reaches the server can read and delete
+everything. Nothing remains of this milestone.
 
 ## 2. Safe to keep data
 
