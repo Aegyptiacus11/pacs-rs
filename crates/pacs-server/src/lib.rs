@@ -31,6 +31,7 @@ pub mod checks;
 pub mod consistency;
 mod dimse_tls;
 pub mod limits;
+pub mod metrics;
 mod modalities;
 pub mod oidc;
 pub mod projects;
@@ -210,6 +211,11 @@ pub struct Settings {
     /// through the provider and the provider says it verified the address. None by default.
     #[arg(long, env = "PACS_OIDC_ADMINS", value_delimiter = ',')]
     pub oidc_admins: Vec<String>,
+
+    /// Serve `GET /metrics` (Prometheus) on this address, apart from the rest: e.g.
+    /// `127.0.0.1:9100`. Off by default.
+    #[arg(long, env = "PACS_METRICS_LISTEN")]
+    pub metrics_listen: Option<std::net::SocketAddr>,
 
     /// Seconds a client has to send a request's head (see `pacs_server::limits`); 0: no
     /// limit.
@@ -826,6 +832,8 @@ pub fn app_with_audit(
     if !settings.cors_origins.is_empty() {
         app = app.layer(cors(&settings.cors_origins)?);
     }
+    // every request counted, refused by the limits or not
+    app = app.layer(axum::middleware::from_fn(metrics::count_requests));
     // outside everything that works for a request, inside the line that logs it
     app = limits::Limits::from_settings(settings).layer(app);
     // one line per request at INFO; tower-http's default is DEBUG

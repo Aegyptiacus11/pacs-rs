@@ -92,6 +92,31 @@ and each stored file has a key of its own, so no server removes a file another j
 - Sessions of the [login](login.md) are in the index: a person signed in on one server is
   signed in on all of them, given the same `PACS_AUTH_SECRET`.
 
+## Metrics
+
+With `PACS_METRICS_LISTEN` (e.g. `127.0.0.1:9100`), the server serves `GET /metrics` in the
+Prometheus text format on that address, and nothing else there. It is apart from the
+address users reach, so a scraper needs no login, and the metrics are never public by
+chance: keep it on a private network. Off by default.
+
+| Series | Kind | |
+|---|---|---|
+| `pacs_http_requests_total{method, status}` | counter | HTTP requests answered, by method and status class (`2xx`, `4xx`...) |
+| `pacs_http_request_seconds_total{method, status}` | counter | the time spent answering them |
+| `pacs_dimse_associations_open` | gauge | DIMSE associations being served |
+| `pacs_dimse_associations_total{outcome}` | counter | connections that became an association (`accepted`) or did not (`refused`) |
+| `pacs_instances_stored_total{outcome}` | counter | instances received: `added`, `replaced`, `already_stored` |
+| `pacs_errors_total{crate}` | counter | lines logged at ERROR, by the crate that logged them |
+| `pacs_studies`, `pacs_instances` | gauge | what the archive holds |
+| `pacs_storage_bytes` | gauge | the bytes of the files the index names (the trash aside) |
+| `pacs_files_failed`, `pacs_files_never_checked` | gauge | [file checks](integrity.md) that failed, files not checked yet |
+| `pacs_trash_entries` | gauge | deletions waiting in the [trash](trash.md) |
+| `pacs_build_info{version}`, `pacs_uptime_seconds` | gauge | the version running, and since when |
+
+The counters start at 0 with the process; the gauges of the archive are read from the index
+at each scrape, which answers 503 when the index does not. With
+[several servers](#several-servers), scrape each: the archive's gauges are the same on all.
+
 ## Limits on requests
 
 So that one client cannot hold the server, each part of a request has a time, and the
