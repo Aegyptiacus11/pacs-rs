@@ -1512,6 +1512,9 @@ async fn a_remote_search_and_a_move_are_in_the_audit_trail() {
     }
 }
 
+/// How old a heartbeat must be for the tests' sweeps to take a move up.
+const STALE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A server stopped with a move running, as the next start finds it: the job is in the
 /// index, still running. Its settings, and the index of a server opened on them.
 async fn left_running(
@@ -1530,6 +1533,12 @@ async fn left_running(
         .create_job("C-MOVE", "qr", "PACSRS", &["2.25.1".into()])
         .await
         .unwrap();
+    // its server stopped: the heartbeat went silent a minute ago
+    sqlx::query("UPDATE jobs SET heartbeat_ms = heartbeat_ms - 60000 WHERE id = $1")
+        .bind(id)
+        .execute(index.pool())
+        .await
+        .unwrap();
     (settings, index, id)
 }
 
@@ -1541,7 +1550,7 @@ async fn a_restart_takes_up_a_move_that_was_running() {
     let dir = tempfile::tempdir().unwrap();
     let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
     let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
-    assert_eq!(resume_jobs(&settings, &index).await.unwrap(), 1);
+    assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 1);
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
     let job = job_over(&app, &format!("/jobs/{id}")).await;
     assert_eq!(job["State"], "Success", "{job}");
@@ -1550,7 +1559,7 @@ async fn a_restart_takes_up_a_move_that_was_running() {
     // listed as before the restart
     assert_eq!(get(&app, "/jobs").await.1, json!([id.to_string()]));
     // nothing left to take up
-    assert_eq!(resume_jobs(&settings, &index).await.unwrap(), 0);
+    assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 0);
 }
 
 /// A move that cannot be taken up ends as a failure that says why: taken up too often, its
@@ -1560,10 +1569,13 @@ async fn a_move_that_cannot_be_taken_up_fails_saying_why() {
     let dir = tempfile::tempdir().unwrap();
     let reason = async |dir: &Path, remotes: &str, listen: bool, restarts: i64| {
         let (settings, index, id) = left_running(dir, remotes, listen).await;
-        for _ in 0..restarts {
-            index.restart_job(id).await.unwrap();
-        }
-        assert_eq!(resume_jobs(&settings, &index).await.unwrap(), 0);
+        sqlx::query("UPDATE jobs SET restarts = $1 WHERE id = $2")
+            .bind(restarts)
+            .bind(id)
+            .execute(index.pool())
+            .await
+            .unwrap();
+        assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 0);
         let job = index.job(id).await.unwrap().unwrap();
         assert_eq!(job.state, "Failure");
         assert!(job.finished_ms.is_some());
@@ -1588,7 +1600,7 @@ async fn a_move_taken_up_again_can_be_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
     let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
-    resume_jobs(&settings, &index).await.unwrap();
+    resume_jobs(&settings, &index, STALE).await.unwrap();
     let app = app(open_archive(&settings).await.unwrap(), &settings).unwrap();
     let (status, _) = send(
         &app,
@@ -1601,4 +1613,30 @@ async fn a_move_taken_up_again_can_be_cancelled() {
     let job = job_over(&app, &format!("/jobs/{id}")).await;
     assert_eq!(job["State"], "Cancelled", "{job}");
     assert!(scp.await.unwrap(), "the SCP got a C-CANCEL");
+}
+
+/// A move whose server is alive, its heartbeat fresh, is not taken up; and of two servers
+/// sweeping at once for one that stopped, one takes it.
+#[tokio::test]
+async fn a_live_move_is_left_alone_and_a_stale_one_is_taken_up_once() {
+    let (port, _scp) = slow_move_scp(2, 20).await;
+    let dir = tempfile::tempdir().unwrap();
+    let remotes = format!("qr=QRSCP@127.0.0.1:{port}");
+    let (settings, index, id) = left_running(dir.path(), &remotes, true).await;
+    // alive again: another server beats for it
+    index.job_heartbeat(id, None).await.unwrap();
+    assert_eq!(resume_jobs(&settings, &index, STALE).await.unwrap(), 0);
+    assert_eq!(index.job(id).await.unwrap().unwrap().restarts, 0);
+    // silent again; two servers look at once
+    sqlx::query("UPDATE jobs SET heartbeat_ms = 0 WHERE id = $1")
+        .bind(id)
+        .execute(index.pool())
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        resume_jobs(&settings, &index, STALE),
+        resume_jobs(&settings, &index, STALE)
+    );
+    assert_eq!(a.unwrap() + b.unwrap(), 1);
+    assert_eq!(index.job(id).await.unwrap().unwrap().restarts, 1);
 }

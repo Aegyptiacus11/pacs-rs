@@ -129,7 +129,23 @@ async fn resending_replaces_and_moving_between_studies_is_refused() {
         let bytes = series.slice_bytes(0);
         let instance = Instance::from_bytes(&bytes).unwrap();
         let again = NewInstance::new(&instance, "dicom/new.dcm".into(), bytes.len()).unwrap();
-        assert_eq!(index.record(&again).await.unwrap(), Recorded::Replaced);
+        // the entry names the new file; the one it named is the caller's to remove
+        assert_eq!(
+            index.record(&again).await.unwrap(),
+            Recorded::Replaced {
+                previous_key: "dicom/0.dcm".into()
+            }
+        );
+        // asked to keep what is there: nothing changes
+        let kept = NewInstance::new(&instance, "dicom/newer.dcm".into(), bytes.len())
+            .unwrap()
+            .keeping_existing(true);
+        assert_eq!(
+            index.record(&kept).await.unwrap(),
+            Recorded::Kept {
+                existing_key: "dicom/new.dcm".into()
+            }
+        );
         let study = index.study(&series.study_uid()).await.unwrap().unwrap();
         assert_eq!(study.instance_count, 1);
 

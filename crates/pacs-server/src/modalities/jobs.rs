@@ -2,9 +2,10 @@
 //! Pending responses bring them (PS3.4 C.4.2.1.6-9), and `POST /jobs/{id}/cancel`, which
 //! sends C-CANCEL-MOVE-RQ.
 //!
-//! Jobs are kept in the index, not in memory: a restart finds the moves it was running and
-//! takes them up again ([`resume`]), from the start: what had arrived stays, and comes again
-//! as already stored. A move taken up three times, or whose remote AE is no longer
+//! Jobs are kept in the index, not in memory. A running move shows it is alive with a
+//! heartbeat; one silent for [`STALE_AFTER`] is a stopped server's, and any server on the
+//! index takes it up again ([`take_up_stale`]), from the start: what had arrived stays, and
+//! comes again as already stored. A move taken up three times, or whose remote AE is no longer
 //! configured, or that can no longer arrive here, ends as a failure that says why. A cancel
 //! goes through the index too: the move reads it within a quarter of a second, and stops
 //! with the remote AE's next response.
@@ -159,14 +160,13 @@ async fn run(
         tokio::spawn(async move {
             while !done.load(Ordering::Relaxed) {
                 tokio::time::sleep(PROGRESS_EVERY).await;
-                let progress = latest.lock().map(|mut p| p.take()).unwrap_or(None);
-                let written = match progress {
-                    Some(p) => index.job_progress(id, &progress_json(&p)).await,
-                    None => index
-                        .job(id)
-                        .await
-                        .map(|j| j.is_some_and(|j| j.cancel_asked)),
-                };
+                let progress = latest
+                    .lock()
+                    .map(|mut p| p.take())
+                    .unwrap_or(None)
+                    .map(|p| progress_json(&p));
+                // the heartbeat says this server still runs it
+                let written = index.job_heartbeat(id, progress.as_ref()).await;
                 match written {
                     Ok(asked) if asked => cancel.store(true, Ordering::Relaxed),
                     Ok(_) => {}
@@ -242,21 +242,32 @@ pub(super) async fn spawn_move(
         .into_response()
 }
 
-/// Take up the jobs a stopped server left running: each starts again, or ends as a failure
-/// that says why it cannot. `receiving`: whether this server listens for DIMSE, without
-/// which nothing moved here can arrive. Call once, at the start.
-pub async fn resume(
+/// A running job whose heartbeat stopped this long ago is a stopped server's.
+pub const STALE_AFTER: Duration = Duration::from_secs(30);
+/// How often a server looks for them.
+const SWEEP_EVERY: Duration = Duration::from_secs(10);
+
+/// Take up the jobs a stopped server left running, its heartbeat silent for `stale_after`:
+/// each is claimed first, so that of several servers on one index only one takes it, then
+/// starts again or ends as a failure that says why it cannot. `receiving`: whether this server
+/// listens for DIMSE, without which nothing moved here can arrive. How many start again.
+pub async fn take_up_stale(
     index: &Index,
     config: Arc<Config>,
     receiving: bool,
+    stale_after: Duration,
 ) -> Result<usize, pacs_index::Error> {
-    let jobs = index.running_jobs().await?;
+    let before = now_ms() - i64::try_from(stale_after.as_millis()).unwrap_or(i64::MAX);
     let mut resumed = 0;
-    for job in jobs {
-        let refuse = if job.restarts >= MAX_RESTARTS {
+    for job in index.stale_jobs(before).await? {
+        if !index.claim_job(job.id, before).await? {
+            continue;
+        }
+        // the claim counted this start among the restarts
+        let restarts = job.restarts + 1;
+        let refuse = if restarts > MAX_RESTARTS {
             Some(format!(
-                "stopped by a restart of the server {} times; not taken up again",
-                job.restarts + 1
+                "stopped by a restart of the server {restarts} times; not taken up again"
             ))
         } else if config.remote(&job.remote).is_none() {
             Some(format!(
@@ -301,8 +312,7 @@ pub async fn resume(
                     .await?;
             }
             (None, Ok(destination)) => {
-                index.restart_job(job.id).await?;
-                tracing::info!(job = job.id, remote = %job.remote, restarts = job.restarts + 1, "a job left running is taken up again");
+                tracing::info!(job = job.id, remote = %job.remote, restarts, "a job left running is taken up again");
                 tokio::spawn(run(
                     index.clone(),
                     config.clone(),
@@ -316,6 +326,24 @@ pub async fn resume(
         }
     }
     Ok(resumed)
+}
+
+/// Look for jobs left running every ten seconds, for the life of the server: one stopped by
+/// this server's own restart is taken up once its heartbeat is stale, as is one of another
+/// server on the same index.
+pub fn spawn_sweeps(index: Index, config: Arc<Config>, receiving: bool) {
+    tokio::spawn(async move {
+        loop {
+            match take_up_stale(&index, config.clone(), receiving, STALE_AFTER).await {
+                Ok(0) => {}
+                Ok(resumed) => tracing::info!(resumed, "moves left running taken up again"),
+                Err(error) => {
+                    tracing::error!(%error, "looking for jobs left running failed; trying again")
+                }
+            }
+            tokio::time::sleep(SWEEP_EVERY).await;
+        }
+    });
 }
 
 fn index_failed(e: pacs_index::Error) -> Response {

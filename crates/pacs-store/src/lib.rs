@@ -27,6 +27,8 @@ pub enum Error {
     PastEnd { object_key: String, end: u64 },
     #[error(transparent)]
     Backend(#[from] object_store::Error),
+    #[error("no random bytes for a storage key: {0}")]
+    Random(String),
 }
 
 /// An S3-compatible bucket.
@@ -160,6 +162,22 @@ impl Store {
                 modified: meta.last_modified.into(),
             })
             .collect())
+    }
+
+    /// Store an instance's file under a key of its own: its UIDs and a random suffix
+    /// (`<study>/<series>/<instance>.<16 hex>.dcm`). Two servers storing the same instance,
+    /// or one storing it while another deletes an earlier copy, never touch the same object:
+    /// a deletion removes only the files it took out of the index. Returns the key.
+    pub async fn put_new(&self, key: &InstanceKey, bytes: Bytes) -> Result<String, Error> {
+        let mut suffix = [0u8; 8];
+        getrandom::fill(&mut suffix).map_err(|e| Error::Random(e.to_string()))?;
+        let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+        let fixed = self.key_for(key)?;
+        let object_key = format!("{}.{suffix}.dcm", fixed.trim_end_matches(".dcm"));
+        self.backend
+            .put(&Path::from(object_key.as_str()), bytes.into())
+            .await?;
+        Ok(object_key)
     }
 
     /// Store an instance's file, replacing any earlier copy. Returns its key.

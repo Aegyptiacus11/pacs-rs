@@ -99,6 +99,9 @@ pub struct NewInstance {
     pub size_bytes: i64,
     /// The SHA-256 of the stored file, lower-case hex: what later checks compare it with.
     pub sha256: Option<String>,
+    /// An instance already indexed keeps its entry ([`Recorded::Kept`]) instead of being
+    /// replaced: decided inside the write, so that two servers storing it at once agree.
+    pub keep_existing: bool,
     /// The project the instance came in through; none when it is stored as received.
     pub project: Option<String>,
     patient_id: Option<String>,
@@ -125,6 +128,12 @@ impl NewInstance {
     /// The same instance, with the SHA-256 of its stored file (lower-case hex).
     pub fn with_sha256(mut self, sha256: String) -> Self {
         self.sha256 = Some(sha256);
+        self
+    }
+
+    /// The same instance, to be recorded only if it is not indexed yet.
+    pub fn keeping_existing(mut self, keep: bool) -> Self {
+        self.keep_existing = keep;
         self
     }
 
@@ -162,6 +171,7 @@ impl NewInstance {
             object_key,
             size_bytes: size_bytes as i64,
             sha256: None,
+            keep_existing: false,
             project: None,
             patient_id: instance.string(tags::PATIENT_ID),
             patient_name: instance.string(tags::PATIENT_NAME),
@@ -178,10 +188,19 @@ impl NewInstance {
 }
 
 /// Whether [`Index::record`] added an instance or replaced one with the same UIDs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Recorded {
     Added,
-    Replaced,
+    /// An entry was there: it names the new file now, and `previous_key` is the file it
+    /// named, for the caller to remove.
+    Replaced {
+        previous_key: String,
+    },
+    /// An entry was there and [`NewInstance::keeping_existing`] said to keep it: nothing
+    /// changed, and the new file is the caller's to remove.
+    Kept {
+        existing_key: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -468,12 +487,13 @@ impl Index {
                 new.series_instance_uid, new.study_instance_uid
             )));
         }
-        let instance_series: Option<String> = sqlx::query_scalar(
-            "SELECT series_instance_uid FROM instances WHERE sop_instance_uid = $1",
+        let existing: Option<(String, String)> = sqlx::query_as(
+            "SELECT series_instance_uid, object_key FROM instances WHERE sop_instance_uid = $1",
         )
         .bind(&new.sop_instance_uid)
         .fetch_optional(&mut *tx)
         .await?;
+        let instance_series = existing.as_ref().map(|(series, _)| series.clone());
         if let Some(series) = instance_series
             .as_ref()
             .filter(|s| **s != new.series_instance_uid)
@@ -482,6 +502,14 @@ impl Index {
                 "instance {} is already in series {series}, not {}",
                 new.sop_instance_uid, new.series_instance_uid
             )));
+        }
+
+        if new.keep_existing
+            && let Some((_, existing_key)) = &existing
+        {
+            return Ok(Recorded::Kept {
+                existing_key: existing_key.clone(),
+            });
         }
 
         // A study is in one project, or in none, from its first instance on: an instance that
@@ -588,10 +616,9 @@ impl Index {
         .await?;
 
         tx.commit().await?;
-        Ok(if instance_series.is_some() {
-            Recorded::Replaced
-        } else {
-            Recorded::Added
+        Ok(match existing {
+            Some((_, previous_key)) => Recorded::Replaced { previous_key },
+            None => Recorded::Added,
         })
     }
 

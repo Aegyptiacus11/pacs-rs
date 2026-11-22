@@ -124,17 +124,20 @@ async fn a_refused_instance_leaves_no_file_behind() {
         .await
         .unwrap_err();
     assert!(matches!(err, IngestError::Conflict(_)));
-    let key = pacs_core::Instance::from_bytes(&bytes).unwrap().key;
-    let object_key = store.key_for(&key).unwrap();
-    assert!(matches!(
-        store.get(&object_key).await,
-        Err(pacs_store::Error::NotFound(_))
-    ));
-    // the first one is untouched
+    // its file went: the store holds the first one's alone, which the index names
+    let objects = store.list().await.unwrap();
+    assert_eq!(objects.len(), 1, "{objects:?}");
     let original = pacs_core::Instance::from_bytes(&first.slice_bytes(0))
         .unwrap()
         .key;
-    assert!(store.get(&store.key_for(&original).unwrap()).await.is_ok());
+    let (_, named) = archive
+        .index()
+        .instance_file(&original.sop_instance_uid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(objects[0].key, named);
+    assert!(store.get(&named).await.is_ok());
 }
 
 #[tokio::test]
@@ -168,21 +171,29 @@ async fn the_first_copy_is_kept_unless_overwriting() {
 
     let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap())
         .with_compression(Compression::Off);
+    // the file the index names, and how many files the store holds
+    let named = async |archive: &Archive| {
+        let (_, object_key) = archive
+            .index()
+            .instance_file(&key.sop_instance_uid)
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            store.get(&object_key).await.unwrap(),
+            store.list().await.unwrap().len(),
+        )
+    };
     archive.ingest(first.clone().into()).await.unwrap();
     let again = archive.ingest(second.clone().into()).await.unwrap();
     assert_eq!(again.outcome, Outcome::AlreadyStored);
-    assert_eq!(
-        store.get(&store.key_for(&key).unwrap()).await.unwrap(),
-        first
-    );
+    assert_eq!(named(&archive).await, (first.clone().into(), 1));
 
+    // replaced: the index names the new file, and the old one is gone
     let archive = archive.with_overwrite(true);
     let again = archive.ingest(second.clone().into()).await.unwrap();
     assert_eq!(again.outcome, Outcome::Replaced);
-    assert_eq!(
-        store.get(&store.key_for(&key).unwrap()).await.unwrap(),
-        second
-    );
+    assert_eq!(named(&archive).await, (second.clone().into(), 1));
 }
 
 #[tokio::test]

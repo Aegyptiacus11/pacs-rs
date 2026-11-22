@@ -214,7 +214,8 @@ async fn a_replaced_file_gets_its_own_layout() {
     let (fragments, offset) = two_frames_in_three();
     let file = series.refragmented(0, 2, vec![0, offset], fragments);
     let replaced = stored(&archive, &series, file).await;
-    assert_eq!(replaced.object_key, entry.object_key);
+    // a file of its own: the layout found for the first cannot be taken for it
+    assert_ne!(replaced.object_key, entry.object_key);
     let layout = archive.frame_layout(&replaced).await.expect("a layout");
     assert_eq!(layout.frames(), 2);
     assert_frames_alone(&archive, &replaced).await;

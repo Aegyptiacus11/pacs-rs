@@ -59,6 +59,27 @@ The index holds patient names and identifiers, and the connection to Postgres ca
   does not check out, a server without TLS under `verify-full`, a file that cannot be read,
   or these settings with a SQLite index. Set the TLS here, not as `sslmode` in the URL.
 
+## Several servers
+
+Two or more pacs-rs can serve the same archive: one Postgres index (`PACS_INDEX`) and one
+store (`PACS_STORAGE`, a directory they share or the same S3 bucket), behind a load balancer.
+Uploads and deletions stay correct across them (`crates/pacs-server/tests/several_servers.rs`
+races them on two servers): the index serializes its writes with a Postgres advisory lock,
+and each stored file has a key of its own, so no server removes a file another just stored.
+
+- **Moves in the background** run on the server that started them; each shows it is alive
+  every quarter of a second, and any server takes up one whose server went silent for 30
+  seconds, after a crash or a restart (see [DIMSE](dimse.md)).
+- **The scheduled tasks** (file checks, emptying the trash) may run on every server: what
+  they do twice does no harm.
+- **SQLite is one server's.** Its file cannot be shared between hosts; for several servers,
+  use Postgres.
+- **The audit trail** is each server's own file (`PACS_AUDIT_FILE`): give each server its
+  own `PACS_AUDIT_SOURCE_ID`, and send them all to one
+  [repository](audit.md#sending-to-a-repository) (`PACS_AUDIT_REPOSITORY`).
+- Sessions of the [login](login.md) are in the index: a person signed in on one server is
+  signed in on all of them, given the same `PACS_AUTH_SECRET`.
+
 ## Limits on requests
 
 So that one client cannot hold the server, each part of a request has a time, and the

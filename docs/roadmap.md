@@ -37,12 +37,12 @@ compared](integrity.md#the-store-and-the-index-compared) by one command that rep
 request, and [upgrades](backup.md#upgrading) tested on the index every release since 0.5.2
 wrote, on SQLite and Postgres. [Moves in the background](dimse.md) are kept in the index, and
 a restart takes them up again or ends them saying why. [Deletion can be undone](trash.md) for
-30 days. What remains:
+30 days. [Several servers](running.md#several-servers) share one Postgres index and one
+store. What remains:
 
 | Item | Done when |
 |---|---|
 | Backup and restore | a documented procedure for SQLite and Postgres with disk and S3, restored in a test |
-| Several processes on one index | uploads and deletions stay correct with two servers on one Postgres ([REST API](rest-api.md)) |
 
 ## 3. Operable
 
