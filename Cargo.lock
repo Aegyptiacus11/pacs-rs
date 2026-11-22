@@ -2137,6 +2137,8 @@ version = "0.14.0"
 dependencies = [
  "axum",
  "bytes",
+ "dicom-core",
+ "dicom-dictionary-std",
  "futures",
  "http-body-util",
  "memchr",

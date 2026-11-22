@@ -827,6 +827,35 @@ impl Index {
     }
 }
 
+impl Index {
+    /// The metadata of one instance of a study, or of one of its series when
+    /// `series_instance_uid` is given: the first by instance number. What a search's
+    /// `includefield` takes the attributes of a study or a series from that the index does
+    /// not keep at that level. `None` for a study or series it does not have.
+    pub async fn representative_metadata(
+        &self,
+        study_instance_uid: &str,
+        series_instance_uid: Option<&str>,
+    ) -> Result<Option<Value>, Error> {
+        if !self.sees_study(study_instance_uid).await? {
+            return Ok(None);
+        }
+        let text: Option<String> = sqlx::query_scalar(
+            "SELECT i.metadata
+               FROM instances i JOIN series se USING (series_instance_uid)
+              WHERE se.study_instance_uid = $1
+                AND (CAST($2 AS TEXT) IS NULL OR i.series_instance_uid = $2)
+              ORDER BY i.instance_number IS NULL, i.instance_number, i.sop_instance_uid
+              LIMIT 1",
+        )
+        .bind(study_instance_uid)
+        .bind(series_instance_uid)
+        .fetch_optional(&self.pool)
+        .await?;
+        text.map(parse).transpose()
+    }
+}
+
 fn parse(text: String) -> Result<Value, Error> {
     Ok(serde_json::from_str(&text)?)
 }
