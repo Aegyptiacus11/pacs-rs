@@ -750,6 +750,32 @@ Permission, when the login is on: `read`.
 | 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
 | 501 | [Problem](#problem) | The pixel data is in a form this server cannot give frames of. |
 
+### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/frames/{frame}/rendered`
+
+Renders a frame of an instance (WADO-RS).
+
+One frame, by its number from 1, as a picture: see the instance's.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `instance` | path | string | SOP Instance UID. |
+| `frame` | path | string | One frame number, from 1. |
+| `window` | query, optional | string | `center,width,function`. |
+| `viewport` | query, optional | string | `vw,vh` or `vw,vh,sx,sy,sw,sh`. |
+| `quality` | query, optional | integer | JPEG quality, 1 to 100 (90). |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `image/jpeg` | The picture. |
+| 400 | [Problem](#problem) | Not one frame number, or a parameter that is not valid. |
+| 404 | [Problem](#problem) | No such instance, or a frame past the last. |
+| 406 | [Problem](#problem) | `Accept` takes neither JPEG nor PNG. |
+| 422 | [Problem](#problem) | An instance this server does not render, or a viewport region past the frame. |
+
 ### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/metadata`
 
 An instance's metadata (WADO-RS).
@@ -769,6 +795,31 @@ Permission, when the login is on: `read`.
 | 200 | `application/dicom+json` | The instance's data set. |
 | 404 | [Problem](#problem) | Nothing stored is named by this address. |
 | 406 | [Problem](#problem) | `Accept` asks for something else than this answers in. |
+
+### `GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/rendered`
+
+Renders an instance (WADO-RS).
+
+Its first frame as a picture: monochrome through its rescale and a window (the one asked for, else the file's first, else its range of values), colour as RGB.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `study` | path | string | Study Instance UID. |
+| `series` | path | string | Series Instance UID. |
+| `instance` | path | string | SOP Instance UID. |
+| `window` | query, optional | string | `center,width,function`, the function `linear`, `linear-exact` or `sigmoid`. |
+| `viewport` | query, optional | string | `vw,vh`, or `vw,vh,sx,sy,sw,sh` with a region of the frame: the picture fits the viewport, its proportions kept. |
+| `quality` | query, optional | integer | JPEG quality, 1 to 100 (90). |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `image/jpeg` | The picture. |
+| 400 | [Problem](#problem) | A parameter that is not one, or not a valid value. |
+| 404 | [Problem](#problem) | No such instance. |
+| 406 | [Problem](#problem) | `Accept` takes neither JPEG nor PNG. |
+| 422 | [Problem](#problem) | An instance this server does not render (no pixel data, a photometric interpretation it does not take), or a viewport region past the frame. |
 
 ### `GET /dicom-web/studies/{study}/series/{series}/metadata`
 

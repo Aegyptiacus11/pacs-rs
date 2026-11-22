@@ -9,11 +9,11 @@ with its parameters and statuses, is in the [reference](api-reference.md#dicomwe
 | `GET /studies/{study}`, `.../series/{series}`, `.../instances/{instance}` | WADO-RS retrieve, `multipart/related; type="application/dicom"`, as stored or transcoded (below) |
 | `GET .../metadata` (study, series, instance) | DICOM JSON without pixel data |
 | `GET .../instances/{instance}/frames/{list}` | frames as stored or transcoded: `application/octet-stream` or the compressed type of PS3.18 Table 8.7.3-5 |
+| `GET .../instances/{instance}/rendered`, `.../frames/{frame}/rendered` | a frame as a picture, JPEG or PNG ([below](#rendered)) |
 | `POST /studies`, `POST /studies/{study}` | STOW-RS, `application/dicom` parts |
 
-Not yet: fuzzy, empty value, multiple value and sequence matching ([below](#searching));
-`includefield` for attributes beyond the stored levels; rendered media; JSON/XML + bulk data
-STOW; BulkDataURI in metadata.
+Not yet: fuzzy, empty value and multiple value matching ([below](#searching)); JSON/XML +
+bulk data STOW; BulkDataURI in metadata; rendered series and studies, thumbnails.
 
 ## Searching
 
@@ -69,6 +69,29 @@ PS3.18 Table 10.6.1-5 and a few more the index keeps.
 
 SQLite and Postgres answer the same: one rule in the code decides every match, and the
 database only narrows what it is asked about.
+
+## Rendered
+
+A frame as a picture for clients that do not read DICOM, a web page's `<img>` or a report
+(PS3.18 9.5): an instance's first frame, or one frame by its number. JPEG, which every server
+makes and which is given without an `Accept` header or for `image/*`, or PNG when the client
+prefers `image/png`; anything else is 406.
+
+- **Monochrome** goes through its rescale (Rescale Slope and Intercept, PS3.3 C.11.1), then a
+  window (C.11.2) to 8 bits: the one asked for, `window=center,width,function` with the
+  function `linear`, `linear-exact` or `sigmoid`; else the file's first Window Center and
+  Width with its VOI LUT Function; else the frame's own range of values. MONOCHROME1 is
+  inverted, so white is high either way.
+- **Colour**: RGB as it is, YBR_FULL made RGB, palette colour through its lookup tables; 16-bit
+  samples are brought to 8. Subsampled colour (YBR_FULL_422) and segmented palettes are not
+  rendered (422).
+- **`viewport=vw,vh`** fits the picture in that box, its proportions kept;
+  `viewport=vw,vh,sx,sy,sw,sh` renders only that region of the frame. **`quality`** is the
+  JPEG's, 1 to 100 (90). `annotation` is taken and not done: nothing is written on the
+  picture.
+
+`GET /dicom-web/studies/{study}/series/{series}/instances/{instance}/rendered?window=40,400,linear&viewport=256,256`
+is a 256 x 256 JPEG of a CT slice in an abdominal window.
 
 ## Compression and transcoding
 
