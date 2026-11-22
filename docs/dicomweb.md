@@ -66,8 +66,8 @@ database only narrows what it is asked about.
 
 Uncompressed pixel data is stored as **JPEG-LS lossless** (`1.2.840.10008.1.2.4.80`, codecsls):
 each frame is decoded back and compared with what arrived before the file is kept, and an
-instance that does not come back exact, or that the codecs do not handle (colour, more than 16
-bits), is stored as received. So is anything that arrives compressed, **JPEG XL** included.
+instance that does not come back exact, or that the codecs do not handle (more than 16 bits,
+subsampled colour such as YBR_FULL_422), is stored as received. So is anything that arrives compressed, **JPEG XL** included.
 `PACS_COMPRESSION=off` stores everything as received.
 
 The client's preference decides what a retrieve sends (PS3.18 8.7.3.5): the Accept header's
@@ -83,8 +83,11 @@ So one header asks for JPEG-LS where the server can make it and anything otherwi
 | JPEG-LS lossless `1.2.840.10008.1.2.4.80` (`.81` read) | `image/jls` | codecsls | codecsls |
 | JPEG XL lossless `1.2.840.10008.1.2.4.110` (`.112` read) | `image/jxl` | jxl-rs | zune-jpegxl |
 
-Grayscale, 8 or 16 bits allocated; signed pixels are coded as their raw bit pattern, as DCMTK and
-GDCM do.
+Monochrome, palette colour, RGB and YBR_FULL, 8 or 16 bits allocated; signed pixels are coded
+as their raw bit pattern, as DCMTK and GDCM do. Colour is coded by pixel, and a file that had
+its samples by plane is kept with Planar Configuration 0, as compressed colour always is (PS3.5
+8.2.3); decoded again, it comes back by pixel. Palette colour keeps its lookup tables as they
+are. JPEG XL is for monochrome only here.
 
 JPEG XL is served and accepted, not chosen for storage. On 172 slices of a public CT (3D-IRCADb
 patient 1.2, signed 16-bit, one core) JPEG-LS took the pixels to 1/3.38 at about 5 ms a slice

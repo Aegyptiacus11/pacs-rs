@@ -48,24 +48,49 @@ pub struct Shape {
     pub columns: u16,
     pub bits_allocated: u16,
     pub bits_stored: u16,
+    /// Samples per pixel: 1, or 3 for colour.
+    pub samples: u16,
+    /// Of a native colour frame, whether its samples are by plane (Planar Configuration 1:
+    /// all the reds, then the greens, then the blues) rather than by pixel (0: RGBRGB...).
+    /// A compressed frame decodes by pixel, whatever its data set says (PS3.5 8.2.3).
+    pub planar: bool,
 }
 
 impl Shape {
+    /// A monochrome frame.
     pub fn new(rows: u16, columns: u16, bits_allocated: u16, bits_stored: u16) -> Self {
         Shape {
             rows,
             columns,
             bits_allocated,
             bits_stored,
+            samples: 1,
+            planar: false,
         }
+    }
+
+    /// The same frame, of `samples` per pixel, by plane when `planar`.
+    pub fn with_samples(mut self, samples: u16, planar: bool) -> Self {
+        self.samples = samples;
+        self.planar = planar && samples > 1;
+        self
     }
 
     /// Bytes of one native frame.
     pub fn frame_len(&self) -> usize {
-        usize::from(self.rows) * usize::from(self.columns) * usize::from(self.bits_allocated / 8)
+        usize::from(self.rows)
+            * usize::from(self.columns)
+            * usize::from(self.samples)
+            * usize::from(self.bits_allocated / 8)
     }
 
     fn check(&self) -> Result<(), CodecError> {
+        if !matches!(self.samples, 1 | 3) {
+            return Err(CodecError::Unsupported(format!(
+                "{} samples per pixel",
+                self.samples
+            )));
+        }
         if !matches!(self.bits_allocated, 8 | 16) {
             return Err(CodecError::Unsupported(format!(
                 "{} bits allocated",
@@ -188,9 +213,32 @@ fn encode_jpeg_ls(shape: Shape, native: &[u8]) -> Result<Vec<u8>, CodecError> {
         width: u32::from(shape.columns),
         height: u32::from(shape.rows),
         bits_per_sample: bits,
-        components: 1,
+        components: u8::try_from(shape.samples)
+            .map_err(|_| CodecError::JpegLs("too many samples per pixel".into()))?,
     };
-    codecsls::jpegls::encode(frame, native).map_err(|e| CodecError::JpegLs(e.to_string()))
+    // codecsls takes the samples of a pixel together, as JPEG-LS decodes them
+    let by_pixel = by_pixel(shape, native);
+    codecsls::jpegls::encode(frame, &by_pixel).map_err(|e| CodecError::JpegLs(e.to_string()))
+}
+
+/// A native frame with its samples by pixel (RGBRGB...): a planar one interleaved, any other
+/// as it is.
+pub fn by_pixel(shape: Shape, native: &[u8]) -> Cow<'_, [u8]> {
+    if !shape.planar {
+        return Cow::Borrowed(native);
+    }
+    let sample = usize::from(shape.bits_allocated / 8);
+    let samples = usize::from(shape.samples);
+    let plane = native.len() / samples;
+    let pixels = plane / sample;
+    let mut out = Vec::with_capacity(native.len());
+    for pixel in 0..pixels {
+        for s in 0..samples {
+            let at = s * plane + pixel * sample;
+            out.extend_from_slice(&native[at..at + sample]);
+        }
+    }
+    Cow::Owned(out)
 }
 
 fn decode_jpeg_ls(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
@@ -200,6 +248,11 @@ fn decode_jpeg_ls(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
 }
 
 fn encode_jpeg_xl(shape: Shape, native: &[u8]) -> Result<Vec<u8>, CodecError> {
+    if shape.samples != 1 {
+        return Err(CodecError::Unsupported(
+            "JPEG XL here is for monochrome frames".into(),
+        ));
+    }
     // zune takes 16-bit samples in native byte order.
     let data: Cow<[u8]> = if shape.bits_allocated == 16 && cfg!(target_endian = "big") {
         Cow::Owned(

@@ -209,7 +209,7 @@ How the instances are sent, to the destination of a C-MOVE or the requester of a
   the requester has proposed its own. A peer that takes the stored one
   gets the data set as stored, byte for byte; one that takes only uncompressed ones, as
   DCMTK's `storescp` does unless told otherwise, gets the pixel data decoded. What the
-  codecs do not decode (colour, more than 16 bits) and the peer does not take as stored is
+  codecs do not decode (more than 16 bits, subsampled colour) and the peer does not take as stored is
   not sent, and says so.
 - **An instance whose SOP class the peer accepted no presentation context for is not sent**,
   and the others are: a failed sub-operation, as PS3.4 C.4.2.3.1 has it.
