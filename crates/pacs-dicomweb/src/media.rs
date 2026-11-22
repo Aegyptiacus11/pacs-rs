@@ -129,6 +129,24 @@ fn range_accepts(range: &MediaType, part_type: &str, ts: &str) -> Option<Packagi
     }
 }
 
+/// The media type of a rendered resource the client takes (PS3.18 8.7.4): JPEG, the one
+/// every server makes and the one given without an Accept header or for `image/*`, or PNG;
+/// its ranges by quality, ties in the order sent. `None` for neither.
+pub fn rendered_type(accept: &Accept) -> Option<&'static str> {
+    let Some(ranges) = &accept.0 else {
+        return Some("image/jpeg");
+    };
+    let mut ranges: Vec<&MediaType> = ranges.iter().collect();
+    ranges.sort_by(|a, b| b.quality().total_cmp(&a.quality()));
+    ranges
+        .into_iter()
+        .find_map(|range| match range.essence.as_str() {
+            "image/jpeg" | "image/*" | "*/*" => Some("image/jpeg"),
+            "image/png" => Some("image/png"),
+            _ => None,
+        })
+}
+
 /// Whether the client takes DICOM JSON.
 pub fn accepts_json(accept: &Accept) -> bool {
     accept.0.as_ref().is_none_or(|ranges| {

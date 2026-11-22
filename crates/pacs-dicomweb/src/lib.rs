@@ -18,6 +18,7 @@ mod error;
 pub mod media;
 pub mod multipart;
 mod qido;
+mod rendered;
 pub mod schema;
 mod scope;
 mod stow;
@@ -93,6 +94,8 @@ fn described() -> OpenApiRouter<scope::Whole> {
         .routes(routes!(wado::instance))
         .routes(routes!(wado::instance_metadata))
         .routes(routes!(wado::frames))
+        .routes(routes!(rendered::instance))
+        .routes(routes!(rendered::frame))
 }
 
 /// The description alone, for writing the reference.

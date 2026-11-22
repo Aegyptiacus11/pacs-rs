@@ -1292,3 +1292,155 @@ async fn includefield_brings_the_attributes_asked_for() {
         assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
+
+/// A PNG answer decoded: width, height, samples a pixel, the samples.
+fn decoded_png(body: &[u8]) -> (u32, u32, usize, Vec<u8>) {
+    let decoder = png::Decoder::new(std::io::Cursor::new(body.to_vec()));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    pixels.truncate(info.buffer_size());
+    (info.width, info.height, info.color_type.samples(), pixels)
+}
+
+/// The width and height of a JPEG, from its start-of-frame segment.
+fn jpeg_size(body: &[u8]) -> (u16, u16) {
+    assert_eq!(&body[..2], [0xFF, 0xD8], "not a JPEG");
+    let mut at = 2;
+    while at + 9 < body.len() {
+        let (marker, len) = (
+            body[at + 1],
+            u16::from_be_bytes([body[at + 2], body[at + 3]]),
+        );
+        if (0xC0..=0xC2).contains(&marker) {
+            let height = u16::from_be_bytes([body[at + 5], body[at + 6]]);
+            let width = u16::from_be_bytes([body[at + 7], body[at + 8]]);
+            return (width, height);
+        }
+        at += 2 + usize::from(len);
+    }
+    panic!("no start of frame");
+}
+
+/// Rendered resources (PS3.18 9.5): JPEG by default, PNG when asked; the window, the
+/// viewport and the quality as the query says; what cannot be met refused.
+#[tokio::test]
+async fn an_instance_is_rendered_as_asked() {
+    let app = app().await;
+    let (big, _) = two_series_study(&app).await;
+    let at = format!(
+        "/studies/{}/series/{}/instances/{}",
+        big.study_uid(),
+        big.series_uid(),
+        big.instance_uid(0)
+    );
+    let jpeg = get(&app, &format!("{at}/rendered"), "*/*").await;
+    assert_eq!(jpeg.status, StatusCode::OK);
+    assert_eq!(jpeg.content_type, "image/jpeg");
+    assert_eq!(jpeg_size(&jpeg.body), (128, 128));
+    let small = get(&app, &format!("{at}/rendered?quality=10"), "image/jpeg").await;
+    assert!(small.body.len() < jpeg.body.len());
+
+    // as the file says, and the window asked for: all white below it, all black above
+    let png = |query: &str| {
+        let path = format!("{at}/rendered{query}");
+        let app = app.clone();
+        async move {
+            let reply = get(&app, &path, "image/png").await;
+            assert_eq!(reply.status, StatusCode::OK, "{path}");
+            assert_eq!(reply.content_type, "image/png");
+            decoded_png(&reply.body)
+        }
+    };
+    let (w, h, samples, pixels) = png("").await;
+    assert_eq!((w, h, samples), (128, 128, 1));
+    assert!(pixels.iter().any(|&p| p > 0) && pixels.iter().any(|&p| p < 255));
+    assert!(
+        png("?window=-5000,2,linear")
+            .await
+            .3
+            .iter()
+            .all(|&p| p == 255)
+    );
+    assert!(
+        png("?window=50000,2,linear")
+            .await
+            .3
+            .iter()
+            .all(|&p| p == 0)
+    );
+    let (w, h, ..) = png("?viewport=64,32").await;
+    assert_eq!((w, h), (32, 32));
+    let (w, h, ..) = png("?viewport=40,20,0,0,64,32&annotation=patient").await;
+    assert_eq!((w, h), (40, 20));
+    // a frame by its number
+    let one = get(&app, &format!("{at}/frames/1/rendered"), "image/png").await;
+    assert_eq!(decoded_png(&one.body).3, pixels);
+
+    for (query, status) in [
+        ("/rendered?window=40,400", StatusCode::BAD_REQUEST),
+        ("/rendered?viewport=0,10", StatusCode::BAD_REQUEST),
+        ("/rendered?quality=0", StatusCode::BAD_REQUEST),
+        ("/rendered?colour=red", StatusCode::BAD_REQUEST),
+        (
+            "/rendered?viewport=10,10,100,100,64,64",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("/frames/2/rendered", StatusCode::NOT_FOUND),
+        ("/frames/0/rendered", StatusCode::BAD_REQUEST),
+        ("/frames/1,2/rendered", StatusCode::BAD_REQUEST),
+    ] {
+        let reply = get(&app, &format!("{at}{query}"), "image/jpeg").await;
+        assert_eq!(reply.status, status, "{query}");
+    }
+    let html = get(&app, &format!("{at}/rendered"), "text/html").await;
+    assert_eq!(html.status, StatusCode::NOT_ACCEPTABLE);
+}
+
+/// Colour rendered as RGB: the ultrasound's own pixels, from the JPEG-LS the archive keeps;
+/// palette colour through its lookup tables.
+#[tokio::test]
+async fn colour_is_rendered_as_rgb() {
+    let archive = Archive::new(Store::memory(), Index::in_memory().await.unwrap());
+    let app = router(archive, Config::default());
+    for (name, palette) in [
+        ("examples_rgb_color.dcm", false),
+        ("examples_palette.dcm", true),
+    ] {
+        let file = pacs_core::real::file_bytes(name);
+        let instance = pacs_core::Instance::from_bytes(&file).unwrap();
+        assert_eq!(
+            stow(&app, "/studies", vec![file.clone()]).await.status,
+            StatusCode::OK
+        );
+        let key = &instance.key;
+        let reply = get(
+            &app,
+            &format!(
+                "/studies/{}/series/{}/instances/{}/rendered",
+                key.study_instance_uid, key.series_instance_uid, key.sop_instance_uid
+            ),
+            "image/png",
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{name}");
+        let (w, h, samples, pixels) = decoded_png(&reply.body);
+        let shape = instance.shape().unwrap();
+        assert_eq!(
+            (w, h, samples),
+            (u32::from(shape.columns), u32::from(shape.rows), 3),
+            "{name}"
+        );
+        if !palette {
+            assert_eq!(pixels, instance.native_frame(1, shape).unwrap(), "{name}");
+        } else {
+            assert!(
+                pixels
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .any(|[r, g, b]| r != g || g != b)
+            );
+        }
+    }
+}
