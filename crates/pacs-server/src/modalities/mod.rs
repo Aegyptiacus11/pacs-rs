@@ -7,6 +7,7 @@ pub(crate) mod jobs;
 mod retrieve;
 pub(crate) mod retriever;
 pub mod schema;
+mod send;
 mod studies;
 
 use std::collections::HashMap;
@@ -45,6 +46,7 @@ fn described() -> OpenApiRouter<Arc<Remotes>> {
         .routes(routes!(echo))
         .routes(routes!(studies::studies))
         .routes(routes!(retrieve::move_studies))
+        .routes(routes!(send::send))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

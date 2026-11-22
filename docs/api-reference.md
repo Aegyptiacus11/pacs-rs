@@ -851,6 +851,30 @@ Permission, when the login is on: `remote`.
 | 404 | nothing | No remote AE has this id; the body is empty. |
 | 502 | [Error](#error) | The remote AE could not be reached or failed, by C-MOVE and C-GET alike; `Details` says why. |
 
+### `POST /modalities/{id}/store`
+
+Sends studies to a remote AE.
+
+A C-STORE of each instance of the studies, on one association pacs-rs opens. The remote AE
+must be one instances may be sent to (`PACS_DIMSE_MOVE_DESTINATIONS`). The answer, once
+all is sent, has the counts; with `Asynchronous` it is a job.
+
+Permission, when the login is on: `remote`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id, as `PACS_DIMSE_REMOTES` names it. |
+| the body | | [Send](#send) | The studies. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Moved](#moved) | All is sent. |
+| 202 | [Started](#started) | With `Asynchronous`: the sending started, as a job. |
+| 400 | [Error](#error) | The body names no valid Study Instance UID. |
+| 404 | [Error](#error) | No remote AE has this id (the body is empty), or a study is not in the archive, or not in the account's projects. |
+| 409 | [Error](#error) | The remote AE is not one instances may be sent to. |
+| 502 | [Error](#error) | The remote AE could not be reached, or stored none of the instances. |
+
 ### `GET /modalities/{id}/studies`
 
 Searches a remote AE's studies.
@@ -1541,7 +1565,7 @@ A move in the background, or one that is over. Jobs are kept in the index, the l
 | `Restarts` | integer | How many starts of the server took it up again, it having been running when the server stopped. |
 | `State` | string | `Running`, `Success`, `Warning`, `Cancelled` or `Failure`. |
 | `StudyInstanceUIDs` | list of string |  |
-| `Type` | string | `C-MOVE`, or `C-GET` once a move gave way to one. |
+| `Type` | string | `C-MOVE`, `C-GET` once a move gave way to one, or `C-STORE` for a send. |
 | `Warning` | integer or null |  |
 
 ### Kept
@@ -1586,7 +1610,7 @@ How a move ended.
 | `ElapsedMs` | integer |  |
 | `Failed` | integer or null |  |
 | `FailedSOPInstanceUIDs` | list of string | The instances the remote AE said it could not send. |
-| `Method` | string | `C-MOVE`, or `C-GET` when the move gave way to one. |
+| `Method` | string | `C-MOVE`, `C-GET` when the move gave way to one, or `C-STORE` for a send. |
 | `Status` | string | `Success`, or `Warning` when some instances failed. |
 | `Warning` | integer or null |  |
 
@@ -1711,6 +1735,15 @@ What to change of a role. What is left out stays as it is.
 |---|---|---|
 | `name` | string or null, optional |  |
 | `permissions` | list of string or null, optional |  |
+
+### Send
+
+Studies to send.
+
+| Field | Type | |
+|---|---|---|
+| `Asynchronous` | boolean or null, optional | Answer at once with a job, instead of when all is sent. |
+| `StudyInstanceUID` | [Uids](#uids) |  |
 
 ### Series
 

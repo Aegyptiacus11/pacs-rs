@@ -183,7 +183,7 @@ pub(super) async fn move_studies(
     }
 }
 
-fn status_name(status: Status) -> &'static str {
+pub(super) fn status_name(status: Status) -> &'static str {
     match status.class() {
         pacs_dimse::StatusClass::Success => "Success",
         pacs_dimse::StatusClass::Cancel => "Cancel",
