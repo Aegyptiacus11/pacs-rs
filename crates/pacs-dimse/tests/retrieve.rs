@@ -67,6 +67,7 @@ async fn pull(
     let result = move_studies(
         remote,
         &AeTitle::new("PACSRS").unwrap(),
+        None,
         &studies,
         &AeTitle::new("PACSRS").unwrap(),
         Duration::from_secs(2),

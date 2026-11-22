@@ -10,7 +10,7 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
     for index in common::indexes().await {
         let studies = vec!["1.2.3".to_owned(), "1.2.4".to_owned()];
         let id = index
-            .create_job("C-MOVE", "qr", "PACSRS", &studies)
+            .create_job("C-MOVE", "qr", "PACSRS", Some("NEMA-1"), &studies)
             .await
             .unwrap();
         let job = index.job(id).await.unwrap().unwrap();
@@ -18,6 +18,7 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
             (job.state.as_str(), job.studies.clone()),
             ("Running", studies.clone())
         );
+        assert_eq!(job.patient_id.as_deref(), Some("NEMA-1"));
         assert_eq!(
             (job.restarts, job.cancel_asked, job.finished_ms),
             (0, false, None)
@@ -74,13 +75,13 @@ async fn a_job_is_kept_from_its_start_to_its_end() {
 async fn only_the_latest_finished_jobs_are_kept_and_running_ones_always() {
     for index in common::indexes().await {
         let running = index
-            .create_job("C-MOVE", "qr", "PACSRS", &[])
+            .create_job("C-MOVE", "qr", "PACSRS", None, &[])
             .await
             .unwrap();
         let mut finished = Vec::new();
         for _ in 0..KEPT_FINISHED + 5 {
             let id = index
-                .create_job("C-MOVE", "qr", "PACSRS", &[])
+                .create_job("C-MOVE", "qr", "PACSRS", None, &[])
                 .await
                 .unwrap();
             index

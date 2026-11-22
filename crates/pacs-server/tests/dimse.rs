@@ -622,6 +622,8 @@ async fn move_refuses_what_cannot_work() {
         r#"{"StudyInstanceUID": 7}"#,
         r#"{"StudyInstanceUID": "not a uid"}"#,
         r#"{"StudyInstanceUID": []}"#,
+        r#"{"StudyInstanceUID": "2.25.1", "PatientID": 7}"#,
+        r#"{"StudyInstanceUID": "2.25.1", "PatientID": "LIV-*"}"#,
     ] {
         assert_eq!(
             send(&app, move_request("qr", bad)).await.0,
@@ -1214,6 +1216,7 @@ async fn a_move_asked_over_dimse_is_in_the_audit_trail() {
         pacs_dimse::move_studies(
             &here,
             &pacs_dimse::AeTitle::new(calling).unwrap(),
+            None,
             &[series.study_uid()],
             &pacs_dimse::AeTitle::new(destination).unwrap(),
             std::time::Duration::from_secs(5),
@@ -1530,7 +1533,7 @@ async fn left_running(
     let archive = open_archive(&settings).await.unwrap();
     let index = archive.index().clone();
     let id = index
-        .create_job("C-MOVE", "qr", "PACSRS", &["2.25.1".into()])
+        .create_job("C-MOVE", "qr", "PACSRS", Some("NEMA-1"), &["2.25.1".into()])
         .await
         .unwrap();
     // its server stopped: the heartbeat went silent a minute ago
@@ -1556,6 +1559,8 @@ async fn a_restart_takes_up_a_move_that_was_running() {
     assert_eq!(job["State"], "Success", "{job}");
     assert_eq!(job["Completed"], 3);
     assert_eq!(job["Restarts"], 1);
+    // the patient the studies were named under is kept for the restart
+    assert_eq!(job["PatientID"], "NEMA-1");
     // listed as before the restart
     assert_eq!(get(&app, "/jobs").await.1, json!([id.to_string()]));
     // nothing left to take up

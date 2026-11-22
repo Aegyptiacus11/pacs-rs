@@ -79,6 +79,7 @@ fn to_json(job: &StoredJob) -> Value {
         "ID": job.id.to_string(),
         "Type": job.kind,
         "Remote": job.remote,
+        "PatientID": job.patient_id,
         "StudyInstanceUIDs": job.studies,
         "State": job.state,
         "Progress": percent,
@@ -138,6 +139,7 @@ async fn run(
     config: Arc<Config>,
     id: i64,
     remote_id: String,
+    patient_id: Option<String>,
     studies: Vec<String>,
     destination: AeTitle,
 ) {
@@ -180,6 +182,7 @@ async fn run(
     let result = pacs_dimse::move_studies(
         remote,
         &config.ae_title,
+        patient_id.as_deref(),
         &studies,
         &destination,
         config.timeout,
@@ -208,12 +211,19 @@ async fn run(
 pub(super) async fn spawn_move(
     remotes: Arc<Remotes>,
     remote_id: String,
+    patient_id: Option<String>,
     studies: Vec<String>,
     destination: AeTitle,
 ) -> Response {
     let id = match remotes
         .index
-        .create_job("C-MOVE", &remote_id, destination.as_str(), &studies)
+        .create_job(
+            "C-MOVE",
+            &remote_id,
+            destination.as_str(),
+            patient_id.as_deref(),
+            &studies,
+        )
         .await
     {
         Ok(id) => id,
@@ -232,6 +242,7 @@ pub(super) async fn spawn_move(
         Arc::new(remotes.config.clone()),
         id,
         remote_id,
+        patient_id,
         studies,
         destination,
     ));
@@ -318,6 +329,7 @@ pub async fn take_up_stale(
                     config.clone(),
                     job.id,
                     job.remote.clone(),
+                    job.patient_id.clone(),
                     job.studies.clone(),
                     destination,
                 ));

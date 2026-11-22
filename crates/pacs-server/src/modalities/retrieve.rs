@@ -83,6 +83,20 @@ pub(super) async fn move_studies(
             .into_response();
         }
     };
+    // the patient the studies are named under, for a remote AE in Patient Root only
+    let patient_id = match body.as_ref().and_then(|b| b.get("PatientID")) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) if id.trim().is_empty() => None,
+        Some(Value::String(id)) => {
+            if let Err(e) = pacs_dimse::scu::retrieve::check_patient_id(id.trim()) {
+                return RestError::bad_request("Bad request", e).into_response();
+            }
+            Some(id.trim().to_owned())
+        }
+        Some(_) => {
+            return RestError::bad_request("Bad request", "PatientID is a string").into_response();
+        }
+    };
     if !remotes.receiving {
         return RestError::Status {
             status: StatusCode::CONFLICT,
@@ -123,12 +137,14 @@ pub(super) async fn move_studies(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if asynchronous {
-        return super::jobs::spawn_move(remotes.clone(), id, studies, destination).await;
+        return super::jobs::spawn_move(remotes.clone(), id, patient_id, studies, destination)
+            .await;
     }
     let started = Instant::now();
     let result = pacs_dimse::move_studies(
         remote,
         &config.ae_title,
+        patient_id.as_deref(),
         &studies,
         &destination,
         config.timeout,

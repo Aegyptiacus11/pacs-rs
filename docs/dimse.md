@@ -9,7 +9,7 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
 
 - **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the AEs of
   `PACS_DIMSE_REMOTES`, through `POST /modalities/{id}/echo`, to test a hospital link.
-- **C-FIND SCU**, Study Root at study level, through `GET /modalities/{id}/studies`: by Patient
+- **C-FIND SCU** at study level, through `GET /modalities/{id}/studies`: by Patient
   ID, Patient's Name and Accession Number (exact, or with `*` and `?`), Study Date (a date,
   `20260101-20260131`, `-20260131` or `20260101-`) and one modality; Specific Character Set
   ISO_IR 192 when a value is not ASCII. The matches come back as DICOM JSON, as a QIDO-RS search
@@ -17,12 +17,20 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   every key (PS3.4 C.4.1.2.1). Past `limit` (100 unless given, 1000 at most) it cancels the
   search with C-CANCEL and a `Warning` header says more studies match; one also says when the
   archive did not support a key or ended the search early. A query that breaks the matching
-  rules of PS3.4 C.2.2.2 (two values, a malformed date, an unknown parameter) is 400.
-- **C-MOVE SCU**, Study Root at study level, through `POST /modalities/{id}/move`: the remote AE
+  rules of PS3.4 C.2.2.2 (two values, a malformed date, an unknown parameter) is 400. Both
+  models are proposed, and Study Root is used when the archive takes it. An archive of Patient
+  Root only is searched in two steps on one association, as its model has studies below their
+  patient (PS3.4 C.6.1.1): the patients that meet Patient ID and Patient's Name, then the
+  studies of each by its Patient ID, the other keys asked there; each study comes back with its
+  patient's attributes.
+- **C-MOVE SCU** at study level, through `POST /modalities/{id}/move`: the remote AE
   is asked to send one or more studies to pacs-rs's own AE title, never elsewhere, and they arrive
   through the C-STORE SCP below. The answer, once the move is over, has the final status
   (`Success`, or `Warning` with the failed instances named) and the Completed, Failed and Warning
-  counts. 502 when the remote AE fails, saying when it does not know pacs-rs as a destination
+  counts. Both models are proposed, Study Root used when the archive takes it; an archive of
+  Patient Root only names a study under its patient (PS3.4 C.4.2.2.1), so the request gives
+  the studies' `PatientID` too (a search's matches carry it), and without it the move is 400
+  saying so. 502 when the remote AE fails, saying when it does not know pacs-rs as a destination
   (status A801: register pacs-rs's AE title, host and port there); 409 when pacs-rs is not
   listening for DIMSE; a `Warning` header when the remote AE sent nothing, as it does for a
   study it does not have. With `"Asynchronous": true` it answers 202 at once with a job:
@@ -67,9 +75,8 @@ C-STORE statuses (PS3.4 Table B.2-1, PS3.7 9.1.1.1.9), each with an Error Commen
 
 Tested against DCMTK 3.6.9 (`echoscu`, `storescu`, `storescp`, `dcmqrscp`, `findscu`, `movescu`, `getscu`) and pynetdicom 3.0.4,
 both ways (see [Building](building.md)); a study pulled from dcmqrscp by C-MOVE shows in `/ui/`, and one pulled
-into a project shows there de-identified. Not yet: C-GET as SCU, and Patient Root as SCU
-(pacs-rs asks other archives on the Study Root model). The order is in [the hospital
-interfaces plan](interop.md).
+into a project shows there de-identified. Not yet: C-GET as SCU. The order is in [the
+hospital interfaces plan](interop.md).
 
 ## Being retrieved from
 

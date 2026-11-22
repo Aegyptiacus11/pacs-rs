@@ -62,6 +62,11 @@ pub enum Uids {
 pub struct Move {
     #[serde(rename = "StudyInstanceUID")]
     pub study_instance_uid: Uids,
+    /// The Patient ID the studies belong to. A remote AE that retrieves in Patient Root
+    /// only names a study under its patient, and is refused without it; one that takes
+    /// Study Root does not need it.
+    #[serde(rename = "PatientID")]
+    pub patient_id: Option<String>,
     /// The name of a project: the studies are sent to its AE title, and de-identified on
     /// the way in. Without it they come to pacs-rs's own AE title, as they are.
     pub project: Option<String>,
@@ -110,6 +115,10 @@ pub struct Job {
     pub r#type: String,
     /// The id of the remote AE asked.
     pub remote: String,
+    /// The Patient ID given with the move; `null` when none was.
+    #[serde(rename = "PatientID")]
+    #[schema(required)]
+    pub patient_id: Option<String>,
     #[serde(rename = "StudyInstanceUIDs")]
     pub study_instance_uids: Vec<String>,
     /// `Running`, `Success`, `Warning`, `Cancelled` or `Failure`.

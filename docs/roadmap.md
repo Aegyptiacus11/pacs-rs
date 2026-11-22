@@ -67,7 +67,6 @@ remains:
 
 | Item | Done when |
 |---|---|
-| Patient Root as SCU | pacs-rs searches and pulls from an archive on the Patient Root model too (as SCP it answers both models) |
 | C-GET SCU | a study is pulled from an archive that refuses C-MOVE to an unknown destination |
 | Sending without being asked | pacs-rs sends studies to another AE on its own, from the REST API or by a rule (the C-STORE SCU is built; today only a retrieval makes it send) |
 | Capabilities per AE title | each AE title has its own SOP classes and transfer syntaxes on one port |

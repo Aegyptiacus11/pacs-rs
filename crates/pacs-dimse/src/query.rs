@@ -20,6 +20,17 @@ pub const PATIENT_ROOT_GET: &str = "1.2.840.10008.5.1.4.1.2.1.3";
 /// Study Root Query/Retrieve Information Model - GET (PS3.4 C.6.2.3).
 pub const STUDY_ROOT_GET: &str = "1.2.840.10008.5.1.4.1.2.2.3";
 
+/// The Query/Retrieve Information Model a remote AE is searched and retrieved in, as an
+/// SCU uses it: Study Root when the remote AE takes it, Patient Root otherwise (PS3.4 C.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Root {
+    /// Study, series, instance (C.6.2).
+    Study,
+    /// Patient, study, series, instance (C.6.1): below the patient level, a hierarchical
+    /// query or retrieval names its patient by Patient ID (C.4.1.2.2.1, C.4.2.2.1).
+    Patient,
+}
+
 /// What to search a remote archive's studies by. Every key left out matches anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StudyQuery {
@@ -238,6 +249,76 @@ impl StudyQuery {
             String::new(),
         );
         identifier
+    }
+
+    /// The Request Identifier of the first step of a search in Patient Root
+    /// (PS3.4 C.6.1.1.2): Query/Retrieve Level PATIENT, Patient ID and Patient's Name as
+    /// given, Patient's Birth Date and Sex empty so that they come back.
+    pub fn patient_identifier(&self) -> InMemDicomObject {
+        let mut identifier = InMemDicomObject::new_empty();
+        let mut put = |tag: Tag, vr: VR, value: String| {
+            identifier.put(DataElement::new(tag, vr, PrimitiveValue::from(value)));
+        };
+        if [&self.patient_id, &self.patient_name]
+            .iter()
+            .any(|v| v.as_deref().is_some_and(|v| !v.is_ascii()))
+        {
+            put(tags::SPECIFIC_CHARACTER_SET, VR::CS, "ISO_IR 192".into());
+        }
+        put(tags::QUERY_RETRIEVE_LEVEL, VR::CS, "PATIENT".into());
+        put(
+            tags::PATIENT_NAME,
+            VR::PN,
+            self.patient_name.clone().unwrap_or_default(),
+        );
+        put(
+            tags::PATIENT_ID,
+            VR::LO,
+            self.patient_id.clone().unwrap_or_default(),
+        );
+        put(tags::PATIENT_BIRTH_DATE, VR::DA, String::new());
+        put(tags::PATIENT_SEX, VR::CS, String::new());
+        identifier
+    }
+
+    /// The Request Identifier of the second step in Patient Root: the studies of one patient
+    /// found in the first (PS3.4 C.6.1.1.3). Query/Retrieve Level STUDY, the patient's
+    /// Patient ID as its unique key (C.4.1.2.2.1), and the study keys of
+    /// [`StudyQuery::identifier`]; the patient's own attributes are of the level above and
+    /// are not asked again.
+    pub fn patient_study_identifier(&self, patient_id: &str) -> InMemDicomObject {
+        let mut identifier = self.identifier();
+        for tag in [
+            tags::PATIENT_NAME,
+            tags::PATIENT_BIRTH_DATE,
+            tags::PATIENT_SEX,
+        ] {
+            identifier.remove_element(tag);
+        }
+        if !patient_id.is_ascii() {
+            identifier.put(DataElement::new(
+                tags::SPECIFIC_CHARACTER_SET,
+                VR::CS,
+                PrimitiveValue::from("ISO_IR 192"),
+            ));
+        }
+        identifier.put(DataElement::new(
+            tags::PATIENT_ID,
+            VR::LO,
+            PrimitiveValue::from(patient_id),
+        ));
+        identifier
+    }
+
+    /// Whether a patient found in the first step of a Patient Root search meets the keys of
+    /// that level, Patient ID and Patient's Name, as [`StudyQuery::accepts`] checks them.
+    pub fn accepts_patient(&self, found: &InMemDicomObject) -> bool {
+        StudyQuery {
+            patient_id: self.patient_id.clone(),
+            patient_name: self.patient_name.clone(),
+            ..StudyQuery::default()
+        }
+        .accepts(found)
     }
 
     /// Whether a Response Identifier meets every key, by the SCU's own filtering (PS3.4
