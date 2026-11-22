@@ -107,7 +107,9 @@ backup up, and again after an upgrade that changes the index.
 1. **Read the release's notes**: they say what changes without a setting.
 2. **Back up the index.** An upgrade may change its layout, and that cannot be undone.
 3. **Start the new version.** It brings the index up to its own layout by itself as it
-   starts, before it serves anything.
+   starts, before it serves anything. Every release opens the index of every release before
+   it, from 0.5.2 on: the tests open the indexes those releases wrote themselves, on SQLite
+   and on Postgres (`crates/pacs-index/tests/upgrades.rs`).
 
 ```bash
 PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.12.0 docker compose up -d --wait
@@ -119,7 +121,8 @@ Name the version, as above, rather than `latest`: the server then changes when y
 index changed by a newer one does not start, and says which change it does not know: it
 does not touch the index. To go back, restore the index you saved in step 2, and start the
 old version on it. What arrived since that backup is then in the files and not in the
-index.
+index: [`pacs-server --consistency --repair`](integrity.md#the-store-and-the-index-compared)
+indexes it again.
 
 The files never change with an upgrade: an instance is kept as it was stored.
 
