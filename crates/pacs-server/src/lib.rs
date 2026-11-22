@@ -36,6 +36,7 @@ pub mod oidc;
 pub mod projects;
 mod protocols;
 mod scope;
+pub mod trash;
 mod ui;
 mod worklist;
 
@@ -121,6 +122,11 @@ pub struct Settings {
     /// whose file is gone, in the audit trail. Never deletes a file.
     #[arg(long, requires = "consistency")]
     pub repair: bool,
+
+    /// Days a deleted resource stays in the trash, restorable, before its files go: see
+    /// `pacs_server::trash`. 0: deleted at once.
+    #[arg(long, env = "PACS_TRASH_DAYS", default_value_t = 30)]
+    pub trash_days: u64,
 
     /// Check a stored file against the index again once its last check is this many days old,
     /// in the background, one file at a time. 0: no scheduled checks.
@@ -492,7 +498,8 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     Ok(Archive::new(store, index)
         .with_overwrite(settings.overwrite_instances)
         .with_compression(settings.compression.into())
-        .with_read_limit(settings.max_read_bytes))
+        .with_read_limit(settings.max_read_bytes)
+        .with_trash(settings.trash_days))
 }
 
 /// The DIMSE side's configuration, from the settings. A remote AE named twice is an error.
@@ -753,7 +760,7 @@ pub fn app_with_audit(
         ));
     let index = archive.index().clone();
     let audit_index = index.clone();
-    let checks = checks::router(archive.clone());
+    let checks = checks::router(archive.clone()).merge(trash::router(archive.clone()));
     let dicomweb = pacs_dicomweb::router(
         archive,
         pacs_dicomweb::Config {

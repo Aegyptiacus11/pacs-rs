@@ -64,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let audit = pacs_server::audit::open_audit(&settings)?;
     pacs_server::checks::spawn_due_checks(archive.clone(), settings.check_files_days);
+    pacs_server::trash::spawn_emptying(archive.clone());
     let resumed = pacs_server::resume_jobs(&settings, archive.index()).await?;
     if resumed > 0 {
         tracing::info!(resumed, "moves left running by the last run taken up again");
