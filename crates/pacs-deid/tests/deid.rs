@@ -509,3 +509,47 @@ fn a_patient_without_id_is_one_per_study() {
         value(&run(&b, &basic), tags::PATIENT_ID)
     );
 }
+
+/// What a server keeps to find a result's original study: every UID the profile replaced,
+/// in sequences too, with the one it replaced; nothing when the UIDs are kept.
+#[test]
+fn the_replaced_uids_are_paired_with_their_originals() {
+    let mut original = instance("1.2.3.4.100.1.1", "20240301");
+    let mut item = InMemDicomObject::new_empty();
+    put(&mut item, tags::REFERENCED_SOP_CLASS_UID, VR::UI, CT);
+    put(
+        &mut item,
+        tags::REFERENCED_SOP_INSTANCE_UID,
+        VR::UI,
+        "1.2.3.4.100.1.7",
+    );
+    original.put(DataElement::new(
+        tags::REFERENCED_IMAGE_SEQUENCE,
+        VR::SQ,
+        Value::Sequence(DataSetSequence::new(vec![item], Length::UNDEFINED)),
+    ));
+    let k = keys();
+    let deidentified = run(&original, &Profile::basic("t"));
+    let pairs = pacs_deid::replaced_uids(&original, &deidentified, &k);
+    let originals: Vec<&str> = pairs.iter().map(|(_, o)| o.as_str()).collect();
+    for uid in [
+        "1.2.3.4.100",
+        "1.2.3.4.100.1",
+        "1.2.3.4.100.1.1",
+        "1.2.3.4.100.1.7",
+        "1.2.3.4.100.9",
+    ] {
+        assert!(originals.contains(&uid), "{uid} not paired: {pairs:?}");
+    }
+    for (replacement, original) in &pairs {
+        assert_eq!(&k.uid(original), replacement);
+    }
+    // the SOP Class is kept, so it is not a replacement
+    assert!(!originals.contains(&CT));
+
+    let kept = run(
+        &original,
+        &profile(r#"{"name": "t", "options": ["retain-uids"]}"#),
+    );
+    assert!(pacs_deid::replaced_uids(&original, &kept, &k).is_empty());
+}
