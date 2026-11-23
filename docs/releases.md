@@ -34,7 +34,7 @@ cargo run -p pacs-dimse --example conformance
 A release is a tag `v<version>` matching the workspace version in `Cargo.toml`:
 
 ```bash
-git tag -a v0.15.0 -m v0.15.0 && git push origin v0.15.0
+git tag -a v0.16.0 -m v0.16.0 && git push origin v0.16.0
 ```
 
 `.github/workflows/release.yml` first runs every job of `ci.yml` on the tagged commit, and stops
