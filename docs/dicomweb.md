@@ -185,7 +185,7 @@ them so. The bytes of the value are the same. A file stored as received keeps wh
 written anew when compressed has the VR above.
 
 An attribute with no value has no `Value` in the metadata (PS3.18 F.2.5), a person name included.
-Instances stored before 0.16.2 answer an empty person name as `{"Alphabetic": ""}`: metadata is
+Instances stored by 0.16.1 or earlier answer an empty person name as `{"Alphabetic": ""}`: metadata is
 kept as it was made when the instance was stored.
 
 A value declared longer than the file, or nesting deeper than 64 sequences, is refused before
