@@ -28,6 +28,8 @@ PACS_INDEX_TLS=verify-full                      # and PACS_INDEX_CA_FILE when a 
 
 - **TLS**: [TLS to Postgres](running.md#tls-to-postgres) says what each mode checks. Across a
   network, `verify-full`.
+- **No just-in-time compilation**: pacs-rs turns `jit` off on its own connections, since its
+  queries are short and compiling one costs more than running it. Nothing to set on the server.
 - **Backups**: `pg_dump` while the server runs, then the files, in that order
   ([backing up](backup.md#with-postgres)).
 - **Connections**: each server keeps a small pool. Two servers on one database need nothing
