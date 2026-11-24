@@ -1166,3 +1166,95 @@ async fn labels_stay_within_the_account_s_projects() {
     let refused = send(app, Method::PUT, &own, &reader, None, None).await;
     assert_eq!(refused.status, StatusCode::FORBIDDEN);
 }
+
+/// Jobs name patients and studies: an account limited to projects has those of its projects,
+/// the moves into them and the sendings of studies it sees, and cancels no other.
+#[tokio::test]
+async fn jobs_stay_within_the_account_s_projects() {
+    let s = server().await;
+    let app = &s.app;
+    let index = s.archive.index();
+    let (liver, lung, received) = (
+        s.liver.study_uid(),
+        s.lung.study_uid(),
+        s.received.study_uid(),
+    );
+    let job = async |kind: &str, destination: &str, studies: &[&String]| {
+        let studies: Vec<String> = studies.iter().map(|uid| (*uid).clone()).collect();
+        index
+            .create_job(kind, "hospital", destination, Some("NEMA-90"), &studies)
+            .await
+            .unwrap()
+    };
+    let remote = "2.25.999".to_owned();
+    let into_liver = job("C-MOVE", "LIVER_2026", &[&remote]).await;
+    let got_into_liver = job("C-GET", "LIVER_2026", &[&remote]).await;
+    let into_lung = job("C-MOVE", "LUNG_2026", &[&remote]).await;
+    let as_received = job("C-MOVE", "PACSRS", &[&remote]).await;
+    let liver_sent = job("C-STORE", "WORKSTATION", &[&liver]).await;
+    let lung_sent = job("C-STORE", "WORKSTATION", &[&lung]).await;
+    let both_sent = job("C-STORE", "WORKSTATION", &[&liver, &lung]).await;
+    let received_sent = job("C-STORE", "WORKSTATION", &[&received]).await;
+    let none_sent = job("C-STORE", "WORKSTATION", &[]).await;
+    let own = [into_liver, got_into_liver, liver_sent];
+    let others = [
+        into_lung,
+        as_received,
+        lung_sent,
+        both_sent,
+        received_sent,
+        none_sent,
+    ];
+    let listed = |reply: &Reply| -> Vec<i64> {
+        reply
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().parse().unwrap())
+            .collect()
+    };
+
+    // a role that allows everything, so that only the limit refuses
+    let (_, token) = user(app, &s.admin, "second", "admin", json!(["liver-2026"])).await;
+    let jobs = get(app, "/jobs", &token).await;
+    assert_eq!(jobs.status, StatusCode::OK, "{}", jobs.body);
+    assert_eq!(listed(&jobs), own);
+    for id in own {
+        let one = get(app, &format!("/jobs/{id}"), &token).await;
+        assert_eq!(one.status, StatusCode::OK, "job {id}: {}", one.body);
+    }
+    for id in others {
+        // as a job that does not exist: not even that there is one
+        let one = get(app, &format!("/jobs/{id}"), &token).await;
+        assert_eq!(one.status, StatusCode::NOT_FOUND, "job {id}: {}", one.body);
+        assert!(nothing(&one), "job {id}: {}", one.body);
+        let cancelled = post(app, &format!("/jobs/{id}/cancel"), &token, json!({})).await;
+        assert_eq!(cancelled.status, StatusCode::NOT_FOUND, "job {id}");
+        let kept = index.job(id).await.unwrap().unwrap();
+        assert!(!kept.cancel_asked, "job {id} was asked to stop");
+    }
+    let cancelled = post(
+        app,
+        &format!("/jobs/{into_liver}/cancel"),
+        &token,
+        json!({}),
+    )
+    .await;
+    assert_eq!(cancelled.status, StatusCode::ACCEPTED, "{}", cancelled.body);
+    assert!(index.job(into_liver).await.unwrap().unwrap().cancel_asked);
+
+    // an account that sees everything has them all, and cancels any
+    let all = get(app, "/jobs", &s.admin).await;
+    assert_eq!(listed(&all).len(), own.len() + others.len());
+    let one = get(app, &format!("/jobs/{into_lung}"), &s.admin).await;
+    assert_eq!(one.status, StatusCode::OK, "{}", one.body);
+    let cancelled = post(
+        app,
+        &format!("/jobs/{into_lung}/cancel"),
+        &s.admin,
+        json!({}),
+    )
+    .await;
+    assert_eq!(cancelled.status, StatusCode::ACCEPTED, "{}", cancelled.body);
+}
