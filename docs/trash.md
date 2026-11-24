@@ -21,3 +21,7 @@ holds what every project deleted. They are in the [API reference](api-reference.
   0.13.
 - The trash takes room in the store until it is emptied. The
   [consistency check](integrity.md#the-store-and-the-index-compared) leaves it alone.
+- The index forgets a resource and lists its files for the trash in one transaction, then
+  moves them. A server that stops in between leaves files where they were, still the
+  trash's: restoring or emptying the entry finds them there, and the consistency check does
+  not take them for orphans.

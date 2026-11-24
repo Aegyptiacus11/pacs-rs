@@ -519,3 +519,109 @@ async fn a_project_s_archive_records_its_studies_and_takes_no_other_s() {
         Some(None)
     );
 }
+
+/// A study stored in an archive with a trash, then deleted as a server that stops right
+/// after the index's transaction leaves it: forgotten, listed in the trash, no file moved.
+async fn deleted_and_stopped() -> (Archive, Store, RealSeries, i64) {
+    let store = Store::memory();
+    let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap())
+        .with_compression(Compression::Off)
+        .with_trash(30);
+    let series = RealSeries::new(61, 2);
+    for bytes in series.all_bytes() {
+        archive.ingest(Bytes::from(bytes)).await.unwrap();
+    }
+    let study = pacs_core::public_ids::study(&series.patient_id(), &series.study_uid());
+    let studies = serde_json::json!([{ "StudyInstanceUID": series.study_uid() }]);
+    let keys = store.clone();
+    let trash_key = move |id: i64, object_key: &str| keys.trash_key(id, object_key);
+    let mut trash = pacs_index::IntoTrash {
+        level: "Study",
+        public_id: &study,
+        studies: &studies,
+        trash_key: &trash_key,
+        id: None,
+    };
+    archive
+        .index()
+        .delete_into_trash(Level::Study, &study, &mut trash)
+        .await
+        .unwrap()
+        .unwrap();
+    let id = trash.id.unwrap();
+    (archive, store, series, id)
+}
+
+#[tokio::test]
+async fn files_a_stopped_deletion_left_in_place_are_not_orphans() {
+    let (archive, store, _, _) = deleted_and_stopped().await;
+    assert_eq!(store.list().await.unwrap().len(), 2);
+    let found = archive
+        .inconsistencies(std::time::Duration::ZERO)
+        .await
+        .unwrap();
+    // an orphan would be indexed again by the repair: the deletion undone
+    assert_eq!(found.orphans, vec![]);
+    assert_eq!(found.lost, vec![]);
+}
+
+#[tokio::test]
+async fn a_stopped_deletion_is_restored_from_where_its_files_stayed() {
+    let (archive, store, series, id) = deleted_and_stopped().await;
+    let restored = archive.restore(id).await.unwrap().unwrap();
+    assert_eq!((restored.restored, restored.kept.len()), (2, 0));
+    assert!(archive.index().trash_entry(id).await.unwrap().is_none());
+    for slice in 0..2 {
+        let entry = archive
+            .index()
+            .instance(
+                &series.study_uid(),
+                &series.series_uid(),
+                &series.instance_uid(slice),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            archive.file(&entry).await.unwrap(),
+            series.slice_bytes(slice)
+        );
+    }
+    // the copies restored, and nothing left where the deleted ones were
+    assert_eq!(store.list().await.unwrap().len(), 2);
+    let found = archive
+        .inconsistencies(std::time::Duration::ZERO)
+        .await
+        .unwrap();
+    assert_eq!((found.orphans, found.lost), (vec![], vec![]));
+}
+
+#[tokio::test]
+async fn a_stopped_deletion_is_emptied_where_its_files_stayed() {
+    let (archive, store, _, id) = deleted_and_stopped().await;
+    assert!(archive.empty_trash(id).await.unwrap());
+    assert_eq!(store.list().await.unwrap(), vec![]);
+    assert!(archive.index().trash().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_deletion_moves_every_file_into_its_trash_entry() {
+    let store = Store::memory();
+    let archive = Archive::new(store.clone(), Index::in_memory().await.unwrap()).with_trash(30);
+    let series = RealSeries::new(62, 2);
+    for bytes in series.all_bytes() {
+        archive.ingest(Bytes::from(bytes)).await.unwrap();
+    }
+    let study = pacs_core::public_ids::study(&series.patient_id(), &series.study_uid());
+    archive.delete(Level::Study, &study).await.unwrap().unwrap();
+    let [entry] = &archive.index().trash().await.unwrap()[..] else {
+        panic!("one entry");
+    };
+    assert_eq!(entry.files, 2);
+    let objects = store.list().await.unwrap();
+    assert_eq!(objects.len(), 2);
+    assert!(objects.iter().all(|object| store.is_trash(&object.key)));
+    for file in archive.index().trash_files(entry.id).await.unwrap() {
+        assert!(store.get(&file.trash_key).await.is_ok());
+    }
+}

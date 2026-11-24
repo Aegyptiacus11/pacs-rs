@@ -61,7 +61,7 @@ mod worklist;
 pub use audited::AuditedStudy;
 pub use checks::{CheckCounts, FailedFile, StoredFile};
 pub use clients::StoredClient;
-pub use delete::{Deleted, Level};
+pub use delete::{Deleted, IntoTrash, Level};
 pub use jobs::{KEPT_FINISHED, StoredJob};
 pub use matching::{Kind, Match};
 pub use originals::OriginalStudy;
