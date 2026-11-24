@@ -132,3 +132,33 @@ impl Config {
         })
     }
 }
+
+/// Send what is written at once, without Nagle's algorithm (`TCP_NODELAY`).
+///
+/// A DIMSE message goes out as several small PDUs, a command and then its data set. Left to
+/// Nagle, the second waits for the peer to acknowledge the first, and a peer that delays
+/// its acknowledgements (most do, about 40 ms) holds every exchange back by that much: a
+/// C-FIND with one match took 60 ms where it takes 15. A socket that refuses the option is
+/// used as it is, with a warning.
+pub(crate) fn without_delay(socket: &tokio::net::TcpStream) {
+    if let Err(error) = socket.set_nodelay(true) {
+        tracing::warn!(%error, "TCP_NODELAY could not be set on a DIMSE connection");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn a_dimse_connection_sends_without_delay() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (calling, accepted) =
+            tokio::join!(tokio::net::TcpStream::connect(address), listener.accept());
+        let (calling, (accepted, _)) = (calling.unwrap(), accepted.unwrap());
+        // as the system gives them: Nagle's algorithm on
+        assert!(!calling.nodelay().unwrap() && !accepted.nodelay().unwrap());
+        super::without_delay(&calling);
+        super::without_delay(&accepted);
+        assert!(calling.nodelay().unwrap() && accepted.nodelay().unwrap());
+    }
+}

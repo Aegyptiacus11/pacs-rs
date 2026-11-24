@@ -235,6 +235,7 @@ impl Scp {
                     }
                 },
             };
+            crate::without_delay(&socket);
             let scp = self.clone();
             let options = options.clone();
             tokio::spawn(async move {

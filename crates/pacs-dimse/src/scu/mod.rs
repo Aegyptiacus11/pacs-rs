@@ -193,16 +193,18 @@ pub(crate) async fn associate_with_roles(
             return Err(ConnectError::NoTls(remote.id.clone()));
         };
         // the certificate must be good for the host the AE is configured under
-        let association = options
+        let mut association = options
             .tls_config(config.clone())
             .server_name(&remote.host)
             .establish_tls_async(address)
             .await
             .map_err(refused)?;
+        crate::without_delay(association.inner_stream().get_ref().0);
         let contexts = association.presentation_contexts().to_vec();
         (Link::Tls(Box::new(association)), contexts)
     } else {
-        let association = options.establish_async(address).await.map_err(refused)?;
+        let mut association = options.establish_async(address).await.map_err(refused)?;
+        crate::without_delay(association.inner_stream());
         let contexts = association.presentation_contexts().to_vec();
         (Link::Plain(Box::new(association)), contexts)
     };
