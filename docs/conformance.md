@@ -41,7 +41,7 @@ what it negotiates, over TLS they hold per operation (status `0122`).
 ### Accepted presentation contexts
 
 Every abstract syntax of the services, in the first transfer syntax the requester proposes
-among these, which this build reads:
+among these, whose data sets this build reads:
 
 | Transfer syntax | UID |
 |---|---|
@@ -88,6 +88,10 @@ among these, which this build reads:
 | SMPTE ST 2110-20 Uncompressed Interlaced Active Video | `1.2.840.10008.1.2.7.2` |
 | SMPTE ST 2110-30 PCM Digital Audio | `1.2.840.10008.1.2.7.3` |
 | Deflated Image Frame Compression | `1.2.840.10008.1.2.8.1` |
+
+Pixel data is decoded, to be transcoded or rendered, in Implicit and Explicit VR Little Endian,
+JPEG-LS, JPEG XL and Deflated Image Frame Compression; in the others it is stored and sent as
+received.
 
 | Service | Role | Extended negotiation |
 |---|---|---|

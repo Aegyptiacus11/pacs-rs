@@ -179,13 +179,23 @@ pub fn statement() -> String {
         w,
         "Every abstract syntax of the services, in the first transfer syntax the requester proposes",
     );
-    line(w, "among these, which this build reads:");
+    line(w, "among these, whose data sets this build reads:");
     line(w, "");
     line(w, "| Transfer syntax | UID |");
     line(w, "|---|---|");
     for (uid, name) in transfer_syntaxes() {
         let _ = writeln!(w, "| {name} | `{uid}` |");
     }
+    line(w, "");
+    line(
+        w,
+        "Pixel data is decoded, to be transcoded or rendered, in Implicit and Explicit VR Little Endian,",
+    );
+    line(
+        w,
+        "JPEG-LS, JPEG XL and Deflated Image Frame Compression; in the others it is stored and sent as",
+    );
+    line(w, "received.");
     line(w, "");
     line(w, "| Service | Role | Extended negotiation |");
     line(w, "|---|---|---|");
