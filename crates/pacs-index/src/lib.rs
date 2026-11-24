@@ -449,6 +449,18 @@ impl Index {
                 })
             });
         }
+        if dialect == Dialect::Postgres {
+            // No just-in-time compilation: every query here is short, and compiling one costs
+            // more than running it. Postgres turns it on by its estimate of a query's cost,
+            // which is far too high on tables it has not analysed yet (after a first load, a
+            // restore): listing 45 studies then took 33 ms where it takes 5.
+            options = options.after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET jit = off").execute(connection).await?;
+                    Ok(())
+                })
+            });
+        }
         let pool = options.connect(url).await?;
         if dialect == Dialect::Sqlite && !url.starts_with("sqlite::memory:") {
             // write-ahead logging: readers never wait for the writer; it sticks to the file
