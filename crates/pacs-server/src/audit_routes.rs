@@ -24,7 +24,9 @@ pub(crate) enum Subject {
     /// What a study is: its attributes, lists and counts, its measurements. (DICOM
     /// Instances Accessed, read)
     Viewed(Target),
-    /// The measurements of a study replaced. (DICOM Instances Accessed, update)
+    /// What is kept about a study changed: its measurements replaced, a label or a metadata
+    /// value put on it or on a resource of it, or taken off. (DICOM Instances Accessed,
+    /// update)
     Annotated(Target),
     /// Instances, frames or images of a study sent to the caller. (DICOM Instances
     /// Transferred, read)
@@ -125,6 +127,9 @@ pub(crate) fn subject(method: &Method, path: &str, mount: &str) -> Option<Subjec
             let target = Target::Resource(level, (*id).to_owned());
             match (method.as_str(), rest) {
                 ("DELETE", []) => Some(Subject::Deleted(level, (*id).to_owned())),
+                ("PUT" | "DELETE", ["labels", _] | ["metadata", _]) => {
+                    Some(Subject::Annotated(target))
+                }
                 ("GET", ["archive"] | ["media"]) => Some(Subject::Exported(target)),
                 ("GET", ["file"]) => Some(Subject::Sent(target)),
                 ("GET", _) => Some(Subject::Viewed(target)),
@@ -318,6 +323,29 @@ mod tests {
                 "/ui/api/annotations/1.2.3",
                 Some(Annotated(study())),
             ),
+            (
+                Method::PUT,
+                "/studies/abc/labels/reviewed",
+                Some(Annotated(rest(Level::Study, "abc"))),
+            ),
+            (
+                Method::DELETE,
+                "/series/abc/labels/reviewed",
+                Some(Annotated(rest(Level::Series, "abc"))),
+            ),
+            (
+                Method::PUT,
+                "/patients/abc/metadata/note",
+                Some(Annotated(rest(Level::Patient, "abc"))),
+            ),
+            (
+                Method::DELETE,
+                "/instances/abc/metadata/note",
+                Some(Annotated(rest(Level::Instance, "abc"))),
+            ),
+            // not a deletion of the resource, and nothing else is written under one
+            (Method::DELETE, "/studies/abc/labels", None),
+            (Method::PUT, "/studies/abc/archive", None),
             (Method::GET, "/ui/api/protocols", None),
             // nothing of the archive's data
             (Method::GET, "/healthz", None),
