@@ -64,6 +64,9 @@ impl Archive {
             }
         }
         let entries = indexed.len();
+        // files a deletion listed for the trash and did not get to move
+        let trashed: std::collections::HashSet<String> =
+            self.index.trash_object_keys().await?.into_iter().collect();
         let objects = self.store.list().await.map_err(CheckError::Store)?;
         let recent = SystemTime::now()
             .checked_sub(grace)
@@ -78,7 +81,7 @@ impl Archive {
                 continue;
             }
             // deleted files waiting to be restored or emptied: the trash's, not orphans
-            if self.store.is_trash(&object.key) {
+            if self.store.is_trash(&object.key) || trashed.contains(&object.key) {
                 continue;
             }
             if object.modified > recent {
