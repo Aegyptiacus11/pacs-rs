@@ -6,6 +6,7 @@ use dicom_core::Tag;
 use dicom_ul::Pdu;
 use dicom_ul::association::AsyncAssociation;
 use dicom_ul::pdu::{PDataValue, PDataValueType};
+use std::future::Future as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::command::{Command, field, tag};
@@ -53,14 +54,18 @@ where
     A: AsyncAssociation<S> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    let waiting = tokio::time::timeout(
-        std::time::Duration::ZERO,
-        AsyncAssociation::receive(association),
-    )
-    .await;
-    let pdu = match waiting {
-        Err(_) => return Ok(Interruption::Nothing),
-        Ok(pdu) => pdu?,
+    // Polled once, not timed: a timeout of zero still waits for the runtime's next timer tick,
+    // a millisecond, and that between every two responses.
+    let pdu = {
+        let mut receiving = std::pin::pin!(AsyncAssociation::receive(association));
+        let polled = std::future::poll_fn(|context| {
+            std::task::Poll::Ready(receiving.as_mut().poll(context))
+        })
+        .await;
+        match polled {
+            std::task::Poll::Pending => return Ok(Interruption::Nothing),
+            std::task::Poll::Ready(pdu) => pdu?,
+        }
     };
     let unexpected = |what: &str| {
         MessageError::Protocol(format!("{what} while a {operation} is being answered"))
