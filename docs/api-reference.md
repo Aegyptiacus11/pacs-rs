@@ -1538,7 +1538,7 @@ Moves from a remote archive that run in the background.
 
 Lists the jobs.
 
-The moves running in the background and the latest 100 that are over, oldest first. They are kept in the index: a restart takes up the ones it was running.
+The moves running in the background and the latest 100 that are over, oldest first. They are kept in the index: a restart takes up the ones it was running. An account limited to projects has the jobs of its projects only.
 
 Permission, when the login is on: `remote`.
 
@@ -1559,7 +1559,7 @@ Permission, when the login is on: `remote`.
 | Status | Answer | |
 |---|---|---|
 | 200 | [Job](#job) | The job. |
-| 404 | nothing | No job has this id; the body is empty. |
+| 404 | nothing | No job has this id, or none the account's projects have; the body is empty. |
 
 ### `POST /jobs/{id}/cancel`
 
@@ -1577,7 +1577,7 @@ Permission, when the login is on: `remote`.
 | Status | Answer | |
 |---|---|---|
 | 202 | [Job](#job) | Asked to stop; the job as it is now. |
-| 404 | nothing | No job has this id; the body is empty. |
+| 404 | nothing | No job has this id, or none the account's projects have; the body is empty. |
 | 409 | [Error](#error) | The job is over already. |
 
 ## Trash

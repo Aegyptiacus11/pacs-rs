@@ -300,6 +300,8 @@ there.
   [results](de-identification.md) for its projects' studies: anything else would be in no
   project, out of its own sight (403 for an upload, the instance's failure in a STOW-RS
   answer). A study comes into a project through the project's AE title.
+- **Jobs.** `/jobs` lists, shows and cancels the moves into its projects and the sendings of
+  studies it sees; any other job is answered 404.
 - **Remote archives.** With the `remote` permission it may search them, and bring studies in
   only with `"Project"` naming one of its own (403 otherwise). A search there shows the
   hospital's patients, identified: `remote` is not for an account that must not see them.
