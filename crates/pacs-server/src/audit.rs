@@ -6,7 +6,9 @@
 //! Each event is one line of the file: the syslog message of IHE's Record Audit Event
 //! [ITI-20] (RFC 5424, MSGID `IHE+RFC-3881`) whose content is the DICOM audit message of
 //! PS3.15 A.5, built by the `pacs-audit` crate. A line is written before the answer to
-//! the request leaves, so the file never lacks an event a client saw succeed.
+//! the request leaves, so the file does not lack an event a client saw succeed, but when
+//! the write itself fails: the request has happened by then and is not undone, and the
+//! failure is an error in the application log, with the event's kind.
 //!
 //! Recorded now:
 //!
@@ -19,7 +21,7 @@
 //! | Security Alert, Security Roles Changed | a role is made, changed or removed |
 //! | Security Alert, Access Control Decision | a request the caller's role or scope does not allow |
 //! | DICOM Instances Transferred | instances received (REST upload, STOW-RS), and instances, frames or images sent to a caller |
-//! | DICOM Instances Accessed | a study's attributes, lists or measurements read; measurements replaced; part of a study deleted |
+//! | DICOM Instances Accessed | a study's attributes, lists or measurements read; measurements replaced, a label or a metadata value put or taken off; part of a study deleted |
 //! | DICOM Study Deleted | a study deleted whole, alone or with its patient |
 //! | Export | a ZIP archive or a media file-set downloaded |
 //! | Query | a search: QIDO-RS, the REST API's lists and `/tools/find`, the web interface's lists |

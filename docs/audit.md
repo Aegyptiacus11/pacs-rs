@@ -38,7 +38,7 @@ About the data, for requests that succeeded; each names the study and its patien
 | DICOM Instances Transferred, to the server | instances received: `POST /instances`, STOW-RS. One line per study in the request, with the number of instances of each SOP class; Create when the archive gained any, Update when it only replaced copies, Read when it held them all already |
 | DICOM Instances Transferred, to the caller | instances, frames, rendered images and bulk data retrieved (WADO-RS), `GET /instances/{id}/file` |
 | DICOM Instances Accessed, read | what a study is: its metadata, its lists of series and instances (QIDO-RS under a study, the REST API's resources), its measurements |
-| DICOM Instances Accessed, update | a study's measurements replaced |
+| DICOM Instances Accessed, update | a study's measurements replaced; a label or a metadata value put on a patient, study, series or instance, or taken off (the studies it is of are named, not the label or the value) |
 | DICOM Instances Accessed, delete | a series or an instance deleted, the study staying |
 | DICOM Study Deleted | a study deleted whole (by itself, with its patient, or by its last series or instance), with the instances it had |
 | Export | a ZIP archive or a media file-set downloaded, with the address it went to |
