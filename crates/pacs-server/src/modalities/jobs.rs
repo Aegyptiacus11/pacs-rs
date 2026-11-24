@@ -18,16 +18,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use pacs_dimse::{AeTitle, MoveError, MoveOutcome, Progress, StatusClass};
-use pacs_index::{Index, StoredJob};
+use pacs_index::{Index, SeenBy, StoredJob};
 use pacs_rest::RestError;
 use serde_json::{Value, json};
 
 use super::Remotes;
 use super::retriever::{Method, Retriever};
+use crate::auth::Limited;
 
 /// Takes up a job left running at most this many times; the next start ends it.
 pub const MAX_RESTARTS: i64 = 3;
@@ -148,6 +149,9 @@ enum Work {
     WriteBack,
 }
 
+/// The kinds of a retrieval: a move, and the get it gives way to.
+const MOVE: &str = "C-MOVE";
+const GET: &str = "C-GET";
 /// The kind a job of sending is kept under.
 const SEND: &str = "C-STORE";
 /// The kind a job of write-back is kept under.
@@ -260,7 +264,7 @@ pub(super) async fn spawn_move(
     let id = match remotes
         .index
         .create_job(
-            "C-MOVE",
+            MOVE,
             &remote_id,
             destination.as_str(),
             patient_id.as_deref(),
@@ -492,23 +496,66 @@ fn index_failed(e: pacs_index::Error) -> Response {
     .into_response()
 }
 
+/// The account a request comes from, when it is limited to projects: the projects, and what
+/// bounds the index to them.
+type Account = (Option<Extension<Limited>>, Option<Extension<SeenBy>>);
+
+/// Whether a job is the account's to see and to cancel. An account limited to projects has
+/// the moves into its projects, by the AE title they come to, and the sendings of studies it
+/// sees, all of them; a job naming no study, or one it does not see, is not its own.
+async fn shown(
+    remotes: &Remotes,
+    (limited, seen): &Account,
+    job: &StoredJob,
+) -> Result<bool, pacs_index::Error> {
+    let Some(Extension(Limited(projects))) = limited else {
+        return Ok(true);
+    };
+    if job.kind == MOVE || job.kind == GET {
+        return Ok(remotes.projects.iter().any(|(name, ae_title)| {
+            ae_title.as_str() == job.destination && projects.contains(name)
+        }));
+    }
+    let Some(Extension(SeenBy(account))) = seen else {
+        return Ok(false);
+    };
+    let index = remotes.index.limited_to(account);
+    for study in &job.studies {
+        if index.audited_study(study).await?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(!job.studies.is_empty())
+}
+
 /// Lists the jobs.
 ///
-/// The moves running in the background and the latest 100 that are over, oldest first. They are kept in the index: a restart takes up the ones it was running.
+/// The moves running in the background and the latest 100 that are over, oldest first. They are kept in the index: a restart takes up the ones it was running. An account limited to projects has the jobs of its projects only.
 #[utoipa::path(
     get,
     path = "/jobs",
     tag = "Jobs",
     responses((status = 200, description = "The jobs' ids.", body = Vec<String>))
 )]
-pub(super) async fn list(State(remotes): State<Arc<Remotes>>) -> Response {
-    match remotes.index.jobs().await {
-        Ok(jobs) => {
-            let ids: Vec<String> = jobs.iter().map(|j| j.id.to_string()).collect();
-            Json(json!(ids)).into_response()
+pub(super) async fn list(
+    State(remotes): State<Arc<Remotes>>,
+    limited: Option<Extension<Limited>>,
+    seen: Option<Extension<SeenBy>>,
+) -> Response {
+    let account = (limited, seen);
+    let jobs = match remotes.index.jobs().await {
+        Ok(jobs) => jobs,
+        Err(e) => return index_failed(e),
+    };
+    let mut ids = Vec::new();
+    for job in &jobs {
+        match shown(&remotes, &account, job).await {
+            Ok(true) => ids.push(job.id.to_string()),
+            Ok(false) => {}
+            Err(e) => return index_failed(e),
         }
-        Err(e) => index_failed(e),
     }
+    Json(json!(ids)).into_response()
 }
 
 /// A job: its state, progress and counts.
@@ -519,16 +566,26 @@ pub(super) async fn list(State(remotes): State<Arc<Remotes>>) -> Response {
     params(("id" = String, Path, description = "The job's id.")),
     responses(
         (status = 200, description = "The job.", body = super::schema::Job),
-        (status = 404, description = "No job has this id; the body is empty.")
+        (status = 404, description = "No job has this id, or none the account's projects have; the body is empty.")
     )
 )]
-pub(super) async fn get(State(remotes): State<Arc<Remotes>>, Path(id): Path<String>) -> Response {
+pub(super) async fn get(
+    State(remotes): State<Arc<Remotes>>,
+    limited: Option<Extension<Limited>>,
+    seen: Option<Extension<SeenBy>>,
+    Path(id): Path<String>,
+) -> Response {
     let Ok(id) = id.parse::<i64>() else {
         return RestError::NotFound.into_response();
     };
-    match remotes.index.job(id).await {
-        Ok(Some(job)) => Json(to_json(&job)).into_response(),
-        Ok(None) => RestError::NotFound.into_response(),
+    let job = match remotes.index.job(id).await {
+        Ok(Some(job)) => job,
+        Ok(None) => return RestError::NotFound.into_response(),
+        Err(e) => return index_failed(e),
+    };
+    match shown(&remotes, &(limited, seen), &job).await {
+        Ok(true) => Json(to_json(&job)).into_response(),
+        Ok(false) => RestError::NotFound.into_response(),
         Err(e) => index_failed(e),
     }
 }
@@ -544,17 +601,29 @@ pub(super) async fn get(State(remotes): State<Arc<Remotes>>, Path(id): Path<Stri
     params(("id" = String, Path, description = "The job's id.")),
     responses(
         (status = 202, description = "Asked to stop; the job as it is now.", body = super::schema::Job),
-        (status = 404, description = "No job has this id; the body is empty."),
+        (status = 404, description = "No job has this id, or none the account's projects have; the body is empty."),
         (status = 409, description = "The job is over already.", body = Error)
     )
 )]
 pub(super) async fn cancel(
     State(remotes): State<Arc<Remotes>>,
+    limited: Option<Extension<Limited>>,
+    seen: Option<Extension<SeenBy>>,
     Path(id): Path<String>,
 ) -> Response {
     let Ok(id) = id.parse::<i64>() else {
         return RestError::NotFound.into_response();
     };
+    // whose it is, before anything is asked of it
+    match remotes.index.job(id).await {
+        Ok(Some(job)) => match shown(&remotes, &(limited, seen), &job).await {
+            Ok(true) => {}
+            Ok(false) => return RestError::NotFound.into_response(),
+            Err(e) => return index_failed(e),
+        },
+        Ok(None) => return RestError::NotFound.into_response(),
+        Err(e) => return index_failed(e),
+    }
     match remotes.index.ask_cancel(id).await {
         Ok(None) => RestError::NotFound.into_response(),
         Ok(Some(job)) if job.state != "Running" => RestError::Status {
