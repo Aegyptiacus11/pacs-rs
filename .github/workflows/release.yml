@@ -114,6 +114,8 @@ jobs:
             --output "type=local,dest=$RUNNER_TEMP/rootfs" .
           bin="$RUNNER_TEMP/rootfs/pacs-server"
           [ -x "$bin" ] || { echo "::error::no pacs-server in the image"; exit 1; }
+          # a server listening for DIMSE spools there, and does not start without it
+          [ -d "$RUNNER_TEMP/rootfs/tmp" ] || { echo "::error::no /tmp in the image"; exit 1; }
           file "$bin" | grep -qE "(statically|static-pie) linked" || { file "$bin"; echo "::error::binary is not static"; exit 1; }
           # the command-line tools, from the same build (cached), beside the server
           docker buildx build --platform "${{ matrix.platform }}" --provenance=false --sbom=false \

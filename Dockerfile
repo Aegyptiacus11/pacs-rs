@@ -16,7 +16,7 @@ WORKDIR /src
 COPY . .
 COPY --from=ui /ui/dist ui/dist
 RUN cargo build --release --locked -p pacs-server -p pacs-dimse --features pacs-dimse/tools \
-    && mkdir -p /out/data
+    && mkdir -p /out/data /out/tmp
 
 # The DIMSE command-line tools, for the release archives: `--target tools`. Not in the image.
 FROM scratch AS tools
@@ -28,6 +28,10 @@ FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /src/target/release/pacs-server /pacs-server
 COPY --from=build --chown=10001:10001 /out/data /data
+# The system's temporary folder, which a scratch image does not have: where large data sets
+# arriving over DIMSE are spooled unless PACS_DIMSE_SPOOL_DIR says elsewhere. The user's own,
+# as /data is.
+COPY --from=build --chown=10001:10001 /out/tmp /tmp
 USER 10001:10001
 ENV PACS_LISTEN=0.0.0.0:8080 \
     PACS_INDEX=/data/index.sqlite \
