@@ -178,6 +178,16 @@ stays as received (a native one is written anew when compressed, then under the 
 UN for private elements with a defined length, for tags the dictionary does not have, and for
 values too long for the VR's 16-bit length or of a size it does not come in.
 
+An element the standard gives as US or SS (Pixel Padding Value, Smallest and Largest Image Pixel
+Value and the like) is read and answered as SS when Pixel Representation is 1 and as US when it is
+0, as PS3.5 says it is encoded, also where a file in Explicit VR wrote the other: dicom-rs reads
+them so. The bytes of the value are the same. A file stored as received keeps what it wrote; one
+written anew when compressed has the VR above.
+
+An attribute with no value has no `Value` in the metadata (PS3.18 F.2.5), a person name included.
+Instances stored before 0.16.2 answer an empty person name as `{"Alphabetic": ""}`: metadata is
+kept as it was made when the instance was stored.
+
 A value declared longer than the file, or nesting deeper than 64 sequences, is refused before
 dicom-rs allocates for it: 400 on `POST /instances`, a failed part in STOW-RS, a failure status in
 C-STORE. A last fragment of encapsulated pixel data cut short stays readable, as it was.
