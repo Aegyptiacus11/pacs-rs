@@ -5,7 +5,7 @@ use serde_json::Value;
 use sqlx::Row;
 use sqlx::any::AnyRow;
 
-use crate::{Error, Index, now_ms};
+use crate::{Error, Index, IntoTrash, now_ms};
 
 /// A deletion in the trash.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,46 +40,64 @@ fn entry(row: &AnyRow) -> Result<TrashEntry, Error> {
     })
 }
 
+/// Within a deletion's transaction: its trash entry, made unless an earlier transaction of
+/// the same deletion made it, and the files it took, each with where it is to wait.
+pub(crate) async fn keep(
+    conn: &mut sqlx::AnyConnection,
+    trash: &IntoTrash<'_>,
+    object_keys: &[String],
+) -> Result<i64, Error> {
+    let id = match trash.id {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO trash (deleted_ms, level, public_id, studies)
+                 VALUES ($1, $2, $3, $4) RETURNING id",
+            )
+            .bind(now_ms())
+            .bind(trash.level)
+            .bind(trash.public_id)
+            .bind(trash.studies.to_string())
+            .fetch_one(&mut *conn)
+            .await?
+        }
+    };
+    for object_key in object_keys {
+        sqlx::query(
+            "INSERT INTO trash_files (trash_key, trash_id, object_key) VALUES ($1, $2, $3)",
+        )
+        .bind((trash.trash_key)(id, object_key))
+        .bind(id)
+        .bind(object_key)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(id)
+}
+
 const ENTRY: &str = "SELECT t.id, t.deleted_ms, t.level, t.public_id, t.studies,
                             (SELECT count(*) FROM trash_files f WHERE f.trash_id = t.id) AS files
                      FROM trash t";
 
 impl Index {
-    /// A deletion goes in the trash; its id. Its files are added as they are moved.
-    pub async fn create_trash(
-        &self,
-        level: &str,
-        public_id: &str,
-        studies: &Value,
-    ) -> Result<i64, Error> {
+    /// What entry `id` keeps of its studies, replaced.
+    pub async fn set_trash_studies(&self, id: i64, studies: &Value) -> Result<(), Error> {
         let mut tx = self.begin_write().await?;
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO trash (deleted_ms, level, public_id, studies) VALUES ($1, $2, $3, $4)
-             RETURNING id",
-        )
-        .bind(now_ms())
-        .bind(level)
-        .bind(public_id)
-        .bind(studies.to_string())
-        .fetch_one(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(id)
-    }
-
-    /// A file moved into the trash entry `trash_id`.
-    pub async fn add_trash_file(&self, trash_id: i64, file: &TrashFile) -> Result<(), Error> {
-        let mut tx = self.begin_write().await?;
-        sqlx::query(
-            "INSERT INTO trash_files (trash_key, trash_id, object_key) VALUES ($1, $2, $3)",
-        )
-        .bind(&file.trash_key)
-        .bind(trash_id)
-        .bind(&file.object_key)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE trash SET studies = $1 WHERE id = $2")
+            .bind(studies.to_string())
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Where every file of the trash was before its deletion. A file still there is one a
+    /// deletion did not get to move: the trash's all the same, not an orphan.
+    pub async fn trash_object_keys(&self) -> Result<Vec<String>, Error> {
+        Ok(sqlx::query_scalar("SELECT object_key FROM trash_files")
+            .fetch_all(&self.pool)
+            .await?)
     }
 
     /// Every entry, the latest first.

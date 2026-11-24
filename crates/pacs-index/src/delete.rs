@@ -49,6 +49,31 @@ pub struct Deleted {
     pub remaining_ancestor: Option<(Level, String)>,
 }
 
+/// A deletion that keeps its files: the trash entry and the list of its files are written in
+/// the deletion's own transaction, so the index never forgets a resource without saying
+/// where its files are to wait. The caller then moves the files ([`crate::TrashFile`]).
+pub struct IntoTrash<'a> {
+    /// The level asked, as the REST API names it.
+    pub level: &'a str,
+    pub public_id: &'a str,
+    /// What the entry keeps of each study (see [`crate::TrashEntry::studies`]).
+    pub studies: &'a serde_json::Value,
+    /// Where a file waits: the trash key of an object key in the entry of this id.
+    pub trash_key: &'a (dyn Fn(i64, &str) -> String + Send + Sync),
+    /// The entry made, once a transaction has deleted something.
+    pub id: Option<i64>,
+}
+
+impl std::fmt::Debug for IntoTrash<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntoTrash")
+            .field("level", &self.level)
+            .field("public_id", &self.public_id)
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Where a deletion starts its walk up: the series, study and patient it was under.
 struct Parents {
     series_instance_uid: Option<String>,
@@ -64,8 +89,29 @@ impl Index {
     /// it sees. Of a patient it deletes the studies it sees and leaves the others; and it
     /// is not told of an ancestor it does not see.
     pub async fn delete(&self, level: Level, public_id: &str) -> Result<Option<Deleted>, Error> {
+        self.delete_with(level, public_id, None).await
+    }
+
+    /// [`Index::delete`], with the trash entry of what went and the list of its files written
+    /// in the same transaction: `trash.id` is the entry, `None` when nothing was deleted.
+    /// The files are still where they were; they are the caller's to move.
+    pub async fn delete_into_trash(
+        &self,
+        level: Level,
+        public_id: &str,
+        trash: &mut IntoTrash<'_>,
+    ) -> Result<Option<Deleted>, Error> {
+        self.delete_with(level, public_id, Some(trash)).await
+    }
+
+    async fn delete_with(
+        &self,
+        level: Level,
+        public_id: &str,
+        mut trash: Option<&mut IntoTrash<'_>>,
+    ) -> Result<Option<Deleted>, Error> {
         if self.account().is_none() {
-            return self.delete_any(level, public_id).await;
+            return self.delete_any(level, public_id, trash).await;
         }
         let whole = self.unlimited();
         if level == Level::Patient {
@@ -74,7 +120,11 @@ impl Index {
             };
             let mut object_keys = Vec::new();
             for study in &patient.studies {
-                if let Some(deleted) = whole.delete_any(Level::Study, study).await? {
+                // a study a transaction: the first makes the trash entry, the others add to it
+                if let Some(deleted) = whole
+                    .delete_any(Level::Study, study, trash.as_deref_mut())
+                    .await?
+                {
                     object_keys.extend(deleted.object_keys);
                 }
             }
@@ -90,7 +140,7 @@ impl Index {
         {
             return Ok(None);
         }
-        let Some(mut deleted) = whole.delete_any(level, public_id).await? else {
+        let Some(mut deleted) = whole.delete_any(level, public_id, trash).await? else {
             return Ok(None);
         };
         if let Some((Level::Patient, patient)) = &deleted.remaining_ancestor
@@ -101,7 +151,12 @@ impl Index {
         Ok(Some(deleted))
     }
 
-    async fn delete_any(&self, level: Level, public_id: &str) -> Result<Option<Deleted>, Error> {
+    async fn delete_any(
+        &self,
+        level: Level,
+        public_id: &str,
+        trash: Option<&mut IntoTrash<'_>>,
+    ) -> Result<Option<Deleted>, Error> {
         let mut tx = self.begin_write().await?;
         let conn = &mut *tx;
         let (keys_sql, parents) = match level {
@@ -232,7 +287,15 @@ impl Index {
         let remaining_ancestor = prune(conn, parents).await?;
         crate::labels::drop_orphans(conn).await?;
         crate::metadata::drop_orphans(conn).await?;
+        let entry = match &trash {
+            Some(trash) => Some(crate::trash::keep(conn, trash, &keys_sql).await?),
+            None => None,
+        };
         tx.commit().await?;
+        // told only once it is so
+        if let (Some(trash), Some(entry)) = (trash, entry) {
+            trash.id = Some(entry);
+        }
         Ok(Some(Deleted {
             object_keys: keys_sql,
             remaining_ancestor,

@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use pacs_index::{Deleted, Level, TrashFile};
+use pacs_index::{Deleted, IntoTrash, Level, TrashFile};
 
 use crate::{Archive, CheckError, Outcome};
 
@@ -47,51 +47,94 @@ impl Archive {
                 self.index.annotations(uid).await?,
             ));
         }
-        let Some(deleted) = self.index.delete(level, public_id).await? else {
+        // As the entry is written with the deletion, before it is known which studies went
+        // whole: with every study's annotations, corrected below.
+        let describe = |whole: &dyn Fn(&str) -> bool| -> Value {
+            kept.iter()
+                .map(|(study, project, annotations)| {
+                    json!({
+                        "StudyInstanceUID": study.study_instance_uid,
+                        "PatientID": study.patient_id,
+                        "PatientName": study.patient_name,
+                        "project": project,
+                        // a study that lost a part keeps its annotations in the index
+                        "annotations": if whole(&study.study_instance_uid) {
+                            annotations.clone()
+                        } else {
+                            None
+                        },
+                    })
+                })
+                .collect()
+        };
+        let first = describe(&|_| true);
+        let store = self.store.clone();
+        let trash_key = move |id: i64, object_key: &str| store.trash_key(id, object_key);
+        let mut trash = IntoTrash {
+            level: level.name(),
+            public_id,
+            studies: &first,
+            trash_key: &trash_key,
+            id: None,
+        };
+        // The index forgets the resource and notes where each file is to wait, at once: a
+        // server that stops from here on leaves files the trash knows, not orphans.
+        let Some(deleted) = self
+            .index
+            .delete_into_trash(level, public_id, &mut trash)
+            .await?
+        else {
             return Ok(None);
         };
-        let mut described = Vec::new();
-        for (study, project, annotations) in kept {
-            let whole = self
-                .index
-                .audited_study(&study.study_instance_uid)
-                .await?
-                .is_none();
-            described.push(json!({
-                "StudyInstanceUID": study.study_instance_uid,
-                "PatientID": study.patient_id,
-                "PatientName": study.patient_name,
-                "project": project,
-                // a study that lost a part keeps its annotations in the index
-                "annotations": if whole { annotations } else { None },
-            }));
-        }
-        let trash_id = self
-            .index
-            .create_trash(level.name(), public_id, &Value::from(described))
-            .await?;
-        for object_key in &deleted.object_keys {
-            let trash_key = self.store.trash_key(trash_id, object_key);
-            match self.store.rename(object_key, &trash_key).await {
-                Ok(()) => {
-                    self.index
-                        .add_trash_file(
-                            trash_id,
-                            &TrashFile {
-                                trash_key,
-                                object_key: object_key.clone(),
-                            },
-                        )
-                        .await?
-                }
-                Err(error) => tracing::warn!(
-                    object_key = %object_key,
-                    %error,
-                    "a deleted file could not go to the trash; it stays where it was"
-                ),
+        let Some(trash_id) = trash.id else {
+            return Ok(Some(deleted));
+        };
+        let mut gone = std::collections::HashSet::new();
+        for (study, _, _) in &kept {
+            let uid = &study.study_instance_uid;
+            if self.index.audited_study(uid).await?.is_none() {
+                gone.insert(uid.clone());
             }
         }
+        let described = describe(&|uid| gone.contains(uid));
+        if described != first {
+            self.index.set_trash_studies(trash_id, &described).await?;
+        }
+        for file in self.index.trash_files(trash_id).await? {
+            self.move_to_trash(&file).await;
+        }
         Ok(Some(deleted))
+    }
+
+    /// Move a file the trash lists to where it waits. One that cannot be moved stays where
+    /// it was, still the trash's: restoring or emptying its entry finds it there.
+    async fn move_to_trash(&self, file: &TrashFile) {
+        match self.store.rename(&file.object_key, &file.trash_key).await {
+            // not there: moved already
+            Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
+            Err(error) => tracing::warn!(
+                object_key = %file.object_key,
+                %error,
+                "a deleted file could not go to the trash; it stays where it was until its \
+                 entry is restored or emptied"
+            ),
+        }
+    }
+
+    /// A file of the trash: where it waits, or where it was when its deletion did not get
+    /// to move it. `None`: in neither place.
+    async fn trashed(
+        &self,
+        file: &TrashFile,
+    ) -> Result<Option<(String, bytes::Bytes)>, CheckError> {
+        for key in [&file.trash_key, &file.object_key] {
+            match self.store.get(key).await {
+                Ok(bytes) => return Ok(Some((key.clone(), bytes))),
+                Err(pacs_store::Error::NotFound(_)) => {}
+                Err(e) => return Err(CheckError::Store(e)),
+            }
+        }
+        Ok(None)
     }
 
     /// Put trash entry `id` back: its files indexed again, in their study's project, and the
@@ -111,15 +154,11 @@ impl Archive {
         };
         let mut done = Restored::default();
         for file in self.index.trash_files(id).await? {
-            let bytes = match self.store.get(&file.trash_key).await {
-                Ok(bytes) => bytes,
-                Err(pacs_store::Error::NotFound(_)) => {
-                    self.index.remove_trash_file(&file.trash_key).await?;
-                    done.kept
-                        .push((file.object_key, "gone from the trash".into()));
-                    continue;
-                }
-                Err(e) => return Err(CheckError::Store(e)),
+            let Some((found_at, bytes)) = self.trashed(&file).await? else {
+                self.index.remove_trash_file(&file.trash_key).await?;
+                done.kept
+                    .push((file.object_key, "gone from the trash".into()));
+                continue;
             };
             let study = pacs_core::Instance::from_bytes(&bytes)
                 .map(|i| i.key.study_instance_uid)
@@ -136,7 +175,7 @@ impl Archive {
                     ));
                 }
                 Ok(_) => {
-                    match self.store.delete(&file.trash_key).await {
+                    match self.store.delete(&found_at).await {
                         Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
                         Err(e) => return Err(CheckError::Store(e)),
                     }
@@ -169,9 +208,12 @@ impl Archive {
             return Ok(false);
         }
         for file in self.index.trash_files(id).await? {
-            match self.store.delete(&file.trash_key).await {
-                Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
-                Err(e) => return Err(CheckError::Store(e)),
+            // where it waits, and where it was, had its deletion not got to move it
+            for key in [&file.trash_key, &file.object_key] {
+                match self.store.delete(key).await {
+                    Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
+                    Err(e) => return Err(CheckError::Store(e)),
+                }
             }
             self.index.remove_trash_file(&file.trash_key).await?;
         }
