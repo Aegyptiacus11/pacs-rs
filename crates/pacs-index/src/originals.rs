@@ -83,7 +83,10 @@ impl Index {
         Ok(found)
     }
 
-    /// The original patient and study of `project`'s de-identified study `replaced_study`.
+    /// The original patient and study of `project`'s de-identified study `replaced_study`;
+    /// `None` too for a study whose UID the project kept (`retain-uids`). Its copy has the
+    /// original's own UID, so an identified instance of the study cannot be told from a
+    /// result made on the copy, and none is taken for one.
     pub async fn original_study(
         &self,
         project: &str,
@@ -91,7 +94,9 @@ impl Index {
     ) -> Result<Option<OriginalStudy>, Error> {
         let row: Option<(String, String)> = sqlx::query_as(
             "SELECT patient_main_tags, study_main_tags FROM project_studies
-              WHERE project = $1 AND replaced_study = $2",
+              WHERE project = $1 AND replaced_study = $2
+                AND EXISTS (SELECT 1 FROM project_uids u
+                             WHERE u.project = $1 AND u.replaced = $2 AND u.original <> $2)",
         )
         .bind(project)
         .bind(replaced_study)
