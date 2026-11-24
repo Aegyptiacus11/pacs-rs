@@ -245,6 +245,34 @@ async fn a_file_index_opens_at_a_path_with_url_characters() {
     assert!(index.study(&series.study_uid()).await.unwrap().is_some());
 }
 
+/// Postgres compiles no query just in time for the index: on every connection of the pool,
+/// those opened later included. (Tested where a Postgres server is configured.)
+#[tokio::test]
+async fn postgres_connections_have_no_just_in_time_compilation() {
+    let Some(index) = common::postgres().await else {
+        return;
+    };
+    // several at once, so that the pool opens more than its first connection
+    let mut asked = Vec::new();
+    for _ in 0..6 {
+        let pool = index.pool().clone();
+        asked.push(tokio::spawn(async move {
+            let mut connection = pool.acquire().await.unwrap();
+            sqlx::query("SELECT pg_sleep(0.05)")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+            sqlx::query_scalar::<_, String>("SELECT current_setting('jit')")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap()
+        }));
+    }
+    for one in asked {
+        assert_eq!(one.await.unwrap(), "off");
+    }
+}
+
 /// Concurrent uploads: a file index (and Postgres) has several connections, and every
 /// write must wait its turn instead of failing with "database is locked".
 #[tokio::test]
