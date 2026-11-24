@@ -2,7 +2,7 @@ mod common;
 
 use pacs_core::real::RealSeries;
 use pacs_core::{Instance, public_ids};
-use pacs_index::{Deleted, Index, Level, NewInstance, Statistics};
+use pacs_index::{Deleted, Index, IntoTrash, Level, NewInstance, Statistics};
 
 /// Record a series, each instance's storage key its SOP Instance UID.
 async fn record(index: &Index, series: &RealSeries) {
@@ -230,5 +230,78 @@ async fn a_deletion_takes_the_labels_and_metadata_of_what_it_removed() {
             .unwrap()
             .unwrap();
         assert_eq!((count("labels").await, count("metadata").await), (0, 0));
+    }
+}
+
+fn into_trash<'a>(
+    public_id: &'a str,
+    studies: &'a serde_json::Value,
+    trash_key: &'a (dyn Fn(i64, &str) -> String + Send + Sync),
+) -> IntoTrash<'a> {
+    IntoTrash {
+        level: "Study",
+        public_id,
+        studies,
+        trash_key,
+        id: None,
+    }
+}
+
+#[tokio::test]
+async fn a_deletion_into_the_trash_lists_its_files_at_once() {
+    for index in common::indexes().await {
+        let [a, b, _] = patient(&index).await;
+        let (_, study, _) = ids(&a);
+        let studies = serde_json::json!([{ "StudyInstanceUID": a.study_uid() }]);
+        let key = |id: i64, object_key: &str| format!("trash/{id}/{object_key}");
+        let mut trash = into_trash(&study, &studies, &key);
+        let deleted = index
+            .delete_into_trash(Level::Study, &study, &mut trash)
+            .await
+            .unwrap()
+            .unwrap();
+        // with nothing else done, as when the server stops here: the entry and every file
+        let id = trash.id.expect("an entry");
+        let entry = index.trash_entry(id).await.unwrap().unwrap();
+        assert_eq!((entry.level.as_str(), entry.files), ("Study", 3));
+        assert_eq!(entry.studies, studies);
+        let mut listed: Vec<String> = index
+            .trash_files(id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|file| {
+                assert_eq!(file.trash_key, format!("trash/{id}/{}", file.object_key));
+                file.object_key
+            })
+            .collect();
+        listed.sort();
+        let mut expected = vec![a.instance_uid(0), a.instance_uid(1), b.instance_uid(0)];
+        expected.sort();
+        assert_eq!(listed, expected);
+        let mut taken = deleted.object_keys.clone();
+        taken.sort();
+        assert_eq!(taken, expected);
+        let mut waiting = index.trash_object_keys().await.unwrap();
+        waiting.sort();
+        assert_eq!(waiting, expected);
+    }
+}
+
+#[tokio::test]
+async fn deleting_nothing_puts_nothing_in_the_trash() {
+    for index in common::indexes().await {
+        patient(&index).await;
+        let studies = serde_json::json!([]);
+        let key = |id: i64, object_key: &str| format!("trash/{id}/{object_key}");
+        let mut trash = into_trash("no-such-study", &studies, &key);
+        let deleted = index
+            .delete_into_trash(Level::Study, "no-such-study", &mut trash)
+            .await
+            .unwrap();
+        assert_eq!(deleted, None);
+        assert_eq!(trash.id, None);
+        assert!(index.trash().await.unwrap().is_empty());
+        assert!(index.trash_object_keys().await.unwrap().is_empty());
     }
 }
