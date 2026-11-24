@@ -971,6 +971,51 @@ async fn what_is_stored_read_searched_exported_and_deleted_leaves_a_line() {
         ],
     );
 
+    // A label and a metadata value, put on the study and taken off: a change each, of the
+    // study, and nothing of what the label or the value is. Reading them is no new line.
+    for (method, path) in [
+        (Method::PUT, format!("/studies/{study}/labels/reviewed")),
+        (Method::PUT, format!("/studies/{study}/metadata/note")),
+        (Method::DELETE, format!("/studies/{study}/metadata/note")),
+        (Method::DELETE, format!("/studies/{study}/labels/reviewed")),
+    ] {
+        let body = (method == Method::PUT).then(|| json!("seen"));
+        let changed = call(&app, method.clone(), &path, admin, body).await;
+        assert!(
+            changed.status.is_success(),
+            "{method} {path}: {}",
+            changed.status
+        );
+        let line = lines.one();
+        has(
+            &line,
+            &[
+                ACCESSED,
+                "EventActionCode=\"U\"",
+                by_admin,
+                &study_object(&uid),
+                &patient,
+            ],
+        );
+        assert!(
+            !line.contains("reviewed") && !line.contains("note"),
+            "{line}"
+        );
+    }
+    read(format!("/studies/{study}/labels")).await;
+    lines.none();
+    // a label that is not put, on a study that is not there, is no change
+    let missing = call(
+        &app,
+        Method::PUT,
+        "/studies/nothing/labels/reviewed",
+        admin,
+        None,
+    )
+    .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    lines.none();
+
     // Exported: every download is a line, with the whole study counted.
     for _ in 0..2 {
         read(format!("/studies/{study}/archive")).await;
