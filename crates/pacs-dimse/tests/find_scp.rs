@@ -983,6 +983,32 @@ async fn a_cancel_in_the_middle_ends_with_status_cancel() {
     client.release().await;
 }
 
+/// Between two matches the server looks for a cancel without waiting. A look that waited
+/// for the runtime's next timer tick cost a millisecond a match: 1500 matches then took
+/// over 1.5 s, whatever the machine, and take a fraction of that without.
+#[tokio::test]
+async fn matches_follow_each_other_without_a_pause() {
+    const STUDIES: u32 = 1500;
+    let archive = archive().await;
+    for seed in 0..STUDIES {
+        index_only(&archive, &RealSeries::new(20_000 + seed, 1)).await;
+    }
+    let addr = start(answering(), archive).await;
+    let mut client = viewer(addr, "PACSRS").await;
+    let started = std::time::Instant::now();
+    let all = client.find(STUDY_ROOT_FIND, &study_query(&[])).await;
+    let took = started.elapsed();
+    assert_eq!(all.status(), Status::SUCCESS);
+    assert_eq!(all.matches.len(), STUDIES as usize);
+    // a millisecond a match is the pause this guards against
+    assert!(
+        took < std::time::Duration::from_millis(u64::from(STUDIES)),
+        "{STUDIES} matches took {took:?}: a pause between them?"
+    );
+    eprintln!("{STUDIES} matches in {took:?}");
+    client.release().await;
+}
+
 /// A cancel that comes when nothing is being answered asks for nothing (PS3.7 9.3.2.3).
 #[tokio::test]
 async fn a_cancel_after_the_final_response_is_ignored() {
