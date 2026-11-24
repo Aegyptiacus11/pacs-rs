@@ -134,7 +134,7 @@ backup up, and again after an upgrade that changes the index.
    and on Postgres (`crates/pacs-index/tests/upgrades.rs`).
 
 ```bash
-PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.16.1 docker compose up -d --wait
+PACS_IMAGE=ghcr.io/aegyptiacus11/pacs-rs:0.16.2 docker compose up -d --wait
 ```
 
 Name the version, as above, rather than `latest`: the server then changes when you decide.
