@@ -67,6 +67,13 @@ async fn originals_are_kept_per_project_and_the_first_stays() {
 async fn a_damaged_original_is_an_error() {
     for index in common::indexes().await {
         sqlx::query(
+            "INSERT INTO project_uids (project, replaced, original)
+             VALUES ('liver', '2.25.1', '1.2.3')",
+        )
+        .execute(index.pool())
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO project_studies (project, replaced_study, patient_main_tags,
                                           study_main_tags) VALUES ('liver', '2.25.1', 'not json', '{}')",
         )
@@ -120,5 +127,28 @@ async fn a_result_is_due_for_write_back_and_told_apart_from_the_copy() {
         let results = index.results_of("liver", &copy.study_uid()).await.unwrap();
         let uids: Vec<_> = results.iter().map(|r| r.sop_instance_uid.clone()).collect();
         assert_eq!(uids, [result.instance_uid(0)]);
+    }
+}
+
+/// A study whose UID the project kept is no copy that takes results: not as 0.16.0 recorded
+/// it (no UID pair), nor with the UID paired with itself.
+#[tokio::test]
+async fn a_study_whose_uid_was_kept_has_no_way_back() {
+    for index in common::indexes().await {
+        let original = OriginalStudy {
+            patient: tags(json!({"PatientID": "P123"})),
+            study: Map::new(),
+        };
+        for pairs in [
+            vec![],
+            vec![("2.25.7".to_owned(), "1.2.3.7".to_owned())],
+            vec![("1.2.3".to_owned(), "1.2.3".to_owned())],
+        ] {
+            index
+                .record_originals("liver", &pairs, "1.2.3", &original)
+                .await
+                .unwrap();
+            assert_eq!(index.original_study("liver", "1.2.3").await.unwrap(), None);
+        }
     }
 }

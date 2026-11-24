@@ -1045,7 +1045,7 @@ async fn a_result_for_a_project_s_copy_is_stored_in_its_study() {
         index
             .record_originals(
                 project,
-                &[],
+                &[(series.study_uid(), format!("{}.9", series.study_uid()))],
                 &series.study_uid(),
                 &pacs_index::OriginalStudy {
                     patient: serde_json::Map::new(),

@@ -394,3 +394,92 @@ async fn a_result_for_another_project_s_study_is_refused() {
         assert!(index.rest_instance_by_uid(&uid).await.unwrap().is_none());
     }
 }
+
+/// A profile that keeps the UIDs gives a copy its original's study UID: the study's other
+/// instances, still identified, are not results of it, and are de-identified like the first.
+#[tokio::test]
+async fn with_the_uids_kept_every_instance_is_still_de_identified() {
+    const KEPT: &str = r#"[{"ae_title": "LIVER_2026", "profile": {"name": "liver-2026",
+        "options": ["retain-uids"]}}]"#;
+    let dir = tempfile::tempdir().unwrap();
+    let s = settings(dir.path(), KEPT, &[]);
+    let archive = open_archive(&s).await.unwrap();
+    let projects = open_projects(
+        &s,
+        &archive,
+        env_with("PACS_PROJECT_SECRET_LIVER_2026", SECRET),
+    )
+    .unwrap();
+    let series = RealSeries::new(131, 3);
+    for bytes in series.all_bytes() {
+        projects[0].receive(bytes.into()).await.unwrap();
+    }
+    let index = archive.index();
+    for slice in 0..3 {
+        let stored = index
+            .rest_instance_by_uid(&series.instance_uid(slice))
+            .await
+            .unwrap()
+            .unwrap();
+        let file = archive.file_at(&stored.object_key).await.unwrap();
+        let instance = pacs_core::Instance::from_bytes(&file).unwrap();
+        assert_ne!(
+            instance.string(tags::PATIENT_ID).as_deref(),
+            Some(series.patient_id().as_str()),
+            "slice {slice} is stored identified"
+        );
+    }
+    // sent again as received, past the project's AE title, it is refused as before: neither
+    // stored identified in the project nor noted for write-back
+    let more = RealSeries::new(132, 1).in_study(131, 2);
+    let refused = archive.ingest(more.slice_bytes(0).into()).await;
+    assert!(
+        matches!(
+            refused,
+            Err(pacs_archive::IngestError::Index(_) | pacs_archive::IngestError::Conflict(_))
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        index
+            .rest_instance_by_uid(&more.instance_uid(0))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(index.claim_write_backs(i64::MAX).await.unwrap().is_empty());
+}
+
+/// An override that keeps the SOP Instance UIDs: the copy's images are still the copy's, and
+/// not results of it.
+#[tokio::test]
+async fn with_the_instance_uids_kept_the_copy_is_not_its_own_result() {
+    const KEPT: &str = r#"[{"ae_title": "LIVER_2026", "profile": {"name": "liver-2026",
+        "overrides": [{"tag": "(0008,0018)", "action": "K", "reason": "test"}]}}]"#;
+    let dir = tempfile::tempdir().unwrap();
+    let s = settings(dir.path(), KEPT, &[]);
+    let archive = open_archive(&s).await.unwrap();
+    let projects = open_projects(
+        &s,
+        &archive,
+        env_with("PACS_PROJECT_SECRET_LIVER_2026", SECRET),
+    )
+    .unwrap();
+    let series = RealSeries::new(141, 2);
+    for bytes in series.all_bytes() {
+        projects[0].receive(bytes.into()).await.unwrap();
+    }
+    let keys = pacs_deid::Keys::new(SECRET.as_bytes().to_vec()).unwrap();
+    let copy = keys.uid(&series.study_uid());
+    let index = archive.index();
+    assert_eq!(index.study(&copy).await.unwrap().unwrap().instance_count, 2);
+    assert!(
+        index
+            .original_study("liver-2026", &copy)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let results = index.results_of("liver-2026", &copy).await.unwrap();
+    assert!(results.is_empty(), "{} of the copy", results.len());
+}

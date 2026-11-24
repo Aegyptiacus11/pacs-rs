@@ -187,8 +187,15 @@ fn deidentify_file(file: &[u8], profile: &Profile, keys: &Keys) -> Result<Done, 
             .map(|s| s.trim_end_matches(['\0', ' ']).to_owned())
             .unwrap_or_default()
     };
+    // the copy's own instance too when its UID was kept: it is what tells the copy from the
+    // results made on it
+    let mut uids = pacs_deid::replaced_uids(dataset, &deidentified, keys);
+    let copy = uid(dicom_dictionary_std::tags::SOP_INSTANCE_UID);
+    if !uids.iter().any(|(replaced, _)| *replaced == copy) {
+        uids.push((copy.clone(), copy));
+    }
     let originals = Originals {
-        uids: pacs_deid::replaced_uids(dataset, &deidentified, keys),
+        uids,
         replaced_study: uid(dicom_dictionary_std::tags::STUDY_INSTANCE_UID),
         study: pacs_index::OriginalStudy {
             patient: original.main_tags(pacs_core::main_tags::PATIENT),

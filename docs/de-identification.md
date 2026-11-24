@@ -48,6 +48,9 @@ projects sees their studies and nothing else.
   project's AE title, or stored over HTTP (STOW-RS, upload) by an account that sees the
   study, it is stored in that study as it comes, not de-identified again. A result for
   another project's study sent to a project's AE title is refused (status C003).
+  A profile that keeps the study's UID (`retain-uids`, or an override) takes no results: an
+  identified instance of the study could not be told from one, so each is de-identified on
+  the project's AE title and refused elsewhere.
 - **Write-back**: with `"write_back"` naming a remote AE studies may be sent to (one of
   `PACS_DIMSE_MOVE_DESTINATIONS`), a study's results go there once it has been quiet for
   `PACS_FORWARD_AFTER` seconds, as a job (`/jobs`, `Type` `WRITE-BACK`, taken up again after
