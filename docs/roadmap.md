@@ -7,8 +7,8 @@ the first three make it safe to run with real data, the next two complete the re
 the sixth adds what a hospital's own archive needs, the last one proves it. Inside a milestone
 the order is free.
 
-Every behaviour comes from the DICOM standard or an IHE profile and is tested against DCMTK,
-dcm4che and pynetdicom ([sources](interop.md)). An item is done when its "done when" holds in a
+Every behaviour comes from the DICOM standard or an IHE profile and is tested against DCMTK
+and pynetdicom ([sources](interop.md)). An item is done when its "done when" holds in a
 test that CI runs.
 
 ## 1. Safe to expose

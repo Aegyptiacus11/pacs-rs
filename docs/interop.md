@@ -13,7 +13,8 @@ It is meant to be both kinds of PACS in one program:
   This comes after ([the clinical archive](#the-clinical-archive)).
 
 Sources, checked on 2026-10-31: DICOM 2026d (PS3.2, PS3.4, PS3.7, PS3.15) and the IHE Radiology Technical
-Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK, dcm4che and pynetdicom.
+Framework, Revision 23.0 (8 August 2025). Behaviour is tested against DCMTK and pynetdicom; the
+cases for elements in UN follow dcm4che's own tests. No test runs dcm4che's tools yet.
 
 ## The role
 
@@ -149,5 +150,6 @@ Two things from the other milestones carry more weight here than in research: th
 deletion that can be undone ([roadmap](roadmap.md#2-safe-to-keep-data)).
 
 Each transaction above is to be read in the current IHE Radiology Technical Framework and DICOM text
-before it is built, and tested against DCMTK and dcm4che like the rest; the numbers here were checked on
+before it is built, and tested against DCMTK and pynetdicom like the rest, and against dcm4che's
+tools where DCMTK has none for it; the numbers here were checked on
 2026-10-31 against Revision 23.0.
