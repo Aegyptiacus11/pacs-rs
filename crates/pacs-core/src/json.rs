@@ -5,6 +5,9 @@
 //! numbers or strings. IS become numbers when they parse; DS stay strings, trimmed, which
 //! keeps the stored decimal exactly ("2.50" is not 2.5 to everyone) and is what the
 //! reference server answers too.
+//!
+//! dicom-json also writes an empty person name as `{"Alphabetic": ""}`. An attribute with no
+//! value has no `Value` (PS3.18 F.2.5), and an empty value among others is `null`: so here.
 
 use serde_json::Value;
 
@@ -36,6 +39,31 @@ pub fn normalize(dataset: &mut Value) {
                 _ => {}
             }
         }
+        if vr == "PN" {
+            for value in values.iter_mut() {
+                if no_name(value) {
+                    *value = Value::Null;
+                }
+            }
+            if values.iter().all(Value::is_null)
+                && let Some(element) = element.as_object_mut()
+            {
+                element.remove("Value");
+            }
+        }
+    }
+}
+
+/// Whether a person name value says nothing: no component group, or empty ones only.
+fn no_name(value: &Value) -> bool {
+    match value {
+        Value::Object(groups) => groups.values().all(|group| {
+            group
+                .as_str()
+                .is_some_and(|text| text.trim_end().is_empty())
+        }),
+        Value::String(text) => text.is_empty(),
+        _ => false,
     }
 }
 
@@ -50,6 +78,33 @@ fn int(s: &str) -> Value {
 mod tests {
     use super::normalize;
     use serde_json::json;
+
+    #[test]
+    fn an_empty_person_name_has_no_value() {
+        let mut ds = json!({
+            "00100010": {"vr": "PN", "Value": [{"Alphabetic": ""}]},
+            "00080090": {"vr": "PN", "Value": [{"Alphabetic": "", "Ideographic": ""}]},
+            "00081048": {"vr": "PN", "Value": [{"Alphabetic": "A^B"}, {"Alphabetic": ""}]},
+            "00081050": {"vr": "PN", "Value": [{"Ideographic": "山田^太郎"}]},
+            "00081060": {"vr": "PN"},
+            "00400275": {"vr": "SQ", "Value": [{"00321032": {"vr": "PN", "Value": [{}]}}]},
+            // not a name: an empty string of another VR is left to what wrote it
+            "00081030": {"vr": "LO", "Value": [""]}
+        });
+        normalize(&mut ds);
+        assert_eq!(
+            ds,
+            json!({
+                "00100010": {"vr": "PN"},
+                "00080090": {"vr": "PN"},
+                "00081048": {"vr": "PN", "Value": [{"Alphabetic": "A^B"}, null]},
+                "00081050": {"vr": "PN", "Value": [{"Ideographic": "山田^太郎"}]},
+                "00081060": {"vr": "PN"},
+                "00400275": {"vr": "SQ", "Value": [{"00321032": {"vr": "PN"}}]},
+                "00081030": {"vr": "LO", "Value": [""]}
+            })
+        );
+    }
 
     #[test]
     fn padding_goes_and_numbers_become_numbers() {
