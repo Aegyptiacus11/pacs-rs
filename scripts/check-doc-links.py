@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Checks the links of the documentation: README.md and the mdBook in docs/.
+"""Checks the links of the documentation: README.md and the pages of docs/.
 
 Every relative link must name a file that exists, every `#fragment` a heading of the page it
-points to, a page of the book must stay inside docs/ (mdBook publishes nothing else), and every
-page in docs/ must be listed in docs/SUMMARY.md (mdBook leaves out the others). Links to other
+points to, a page of the book must stay inside docs/ (nothing else is published), and every
+page in docs/ must be listed in docs/SUMMARY.md (the site's sidebar is built from it). Links to other
 sites are not fetched. Exits 1 with one line per problem.
 
     python3 scripts/check-doc-links.py [repository root]
@@ -30,7 +30,7 @@ def prose_lines(text):
 
 
 def slug(heading):
-    """The id mdBook and GitHub give a heading: lower case, spaces to hyphens, punctuation gone."""
+    """The id GitHub and the site give a heading: lower case, spaces to hyphens, punctuation gone."""
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading).replace("`", "")
     kept = (c for c in text.lower() if c.isalnum() or c in "_- ")
     return "".join(kept).replace(" ", "-")

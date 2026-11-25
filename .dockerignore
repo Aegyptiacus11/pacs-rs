@@ -2,3 +2,4 @@ target
 .git
 ui/node_modules
 ui/dist
+docs-site

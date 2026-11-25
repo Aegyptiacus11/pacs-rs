@@ -2,17 +2,18 @@
 """Builds the site that GitHub Pages serves, into target/site.
 
     /                 the homepage: site/ as it is
-    /docs/            the book: mdBook's build of docs/
+    /docs/            the book: the pages of docs/, built by Starlight (docs-site/)
     /<page>.html      a redirect to /docs/<page>.html, for each page the book had when it
                       was the whole site (MOVED): the addresses people may still hold
     /sample/          the sample study, at the address the quickstart downloads it from
 
-Then checks the homepage: every relative link must name a file of the site, and every
-`#fragment` an id of the page it points to. Exits 1 with one line per problem.
+Then checks the homepage and every page of the book: every relative link must name a file of
+the site, and every `#fragment` an id of the page it points to. Exits 1 with one line per
+problem.
 
     python3 scripts/build-site.py [repository root]
 
-Needs mdbook on the PATH.
+Needs npm on the PATH, and the packages of docs-site/ installed (`npm ci` there).
 """
 
 import html
@@ -60,6 +61,8 @@ def check_links(page, site):
     for target in LINK.findall(text):
         if re.match(r"[a-z][a-z0-9+.-]*:", target) or target.startswith("//"):
             continue  # another site
+        if target.startswith("/"):
+            continue  # written by the site's builder from its own list of pages
         path, _, fragment = target.partition("#")
         linked = (page.parent / path).resolve() if path else page
         if linked.is_dir():
@@ -74,13 +77,21 @@ def check_links(page, site):
     return problems
 
 
+def check_book(book, site):
+    """The broken links of the book's pages: what a page of docs/ says of another."""
+    pages = sorted(book.glob("*.html"))
+    if not pages:
+        raise SystemExit(f"{book}: no page")
+    return [problem for page in pages for problem in check_links(page, site)]
+
+
 def assemble(root, book, site):
     """Puts the homepage, the book, its redirects and the sample study together in `site`."""
     home = root / "site"
     if not (home / "index.html").is_file():
         raise SystemExit("site/index.html: missing")
     if not (book / "index.html").is_file():
-        raise SystemExit(f"{book}: no book there; mdbook build first")
+        raise SystemExit(f"{book}: no book there; `npm run build` in docs-site first")
     if site.exists():
         shutil.rmtree(site)
     shutil.copytree(home, site)
@@ -108,10 +119,13 @@ def main(arguments):
         print(__doc__, file=sys.stderr)
         return 2
     root = (Path(arguments[0]) if arguments else Path(__file__).resolve().parent.parent).resolve()
-    subprocess.run(["mdbook", "build"], cwd=root, check=True)
+    builder = root / "docs-site"
+    if not (builder / "node_modules").is_dir():
+        raise SystemExit("docs-site/node_modules: missing; run `npm ci` in docs-site first")
+    subprocess.run(["npm", "run", "build"], cwd=builder, check=True)
     site = root / "target" / "site"
     redirected = assemble(root, root / "target" / "book", site)
-    problems = check_links(site / "index.html", site)
+    problems = check_links(site / "index.html", site) + check_book(site / "docs", site)
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:

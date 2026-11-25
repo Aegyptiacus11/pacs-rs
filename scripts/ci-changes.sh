@@ -32,7 +32,7 @@ else
         rust=true
         ui=true
         ;;
-      docs/* | site/* | *.md | book.toml | LICENSE-* | scripts/check-doc-links.py | \
+      docs/* | docs-site/* | site/* | *.md | LICENSE-* | scripts/check-doc-links.py | \
         scripts/test_check_doc_links.py | scripts/build-site.py | scripts/test_build_site.py | \
         .github/workflows/docs.yml | \
         .github/workflows/release.yml) ;;

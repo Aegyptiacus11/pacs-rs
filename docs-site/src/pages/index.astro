@@ -1,0 +1,47 @@
+---
+// The first page of the documentation: where each kind of reader starts.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const page = (name: string) => `${base}/${name}.html`;
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'pacs-rs documentation',
+		description: 'An open-source PACS written in Rust, for research and for the clinic.',
+		template: 'splash',
+		hero: {
+			tagline:
+				'pacs-rs stores medical images, finds them again, and hands them to viewers and programs. It speaks DICOM and DICOMweb, and it is free and open source.',
+			actions: [
+				{ text: 'Your first study, in five minutes', link: page('quickstart'), icon: 'right-arrow' },
+				{ text: 'What pacs-rs is', link: page('introduction'), variant: 'minimal' },
+			],
+		},
+	}}
+>
+	<CardGrid>
+		<LinkCard
+			title="New to DICOM"
+			description="What is inside a study and how machines exchange it, shown on real files."
+			href={page('dicom-files')}
+		/>
+		<LinkCard
+			title="A research archive"
+			description="Projects, de-identification on the way in, and scripts against the REST API."
+			href={page('two-ways')}
+		/>
+		<LinkCard
+			title="A clinic or a hospital"
+			description="Running it, the login, the audit trail, backups, and connecting scanners and viewers."
+			href={page('running')}
+		/>
+		<LinkCard
+			title="Building on pacs-rs"
+			description="The REST API and DICOMweb in full, the Conformance Statement, and how to build and test."
+			href={page('rest-api')}
+		/>
+	</CardGrid>
+</StarlightPage>

@@ -72,6 +72,36 @@ class BuildSite(unittest.TestCase):
                 ],
             )
 
+    def test_broken_links_between_pages_of_the_book_are_named(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, book, site = repository(directory)
+            (book / "settings.html").write_text(
+                '<a href="quickstart.html#send">a</a> <a href="quickstart.html#gone">b</a>'
+                ' <a href="login.html">c</a> <a href="/pacs-rs/docs/anything.html">d</a>'
+            )
+            build_site.assemble(root, book, site)
+            self.assertEqual(
+                build_site.check_book(site / "docs", site),
+                [
+                    "docs/settings.html: quickstart.html#gone: no id 'gone' on that page",
+                    "docs/settings.html: login.html: no such file",
+                ],
+            )
+            # a book with no page at all is not a book that has no broken link
+            for page in (site / "docs").glob("*.html"):
+                page.unlink()
+            with self.assertRaises(SystemExit) as stopped:
+                build_site.check_book(site / "docs", site)
+            self.assertIn("no page", str(stopped.exception))
+
+    def test_a_site_is_not_built_without_the_builder_s_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, _, _ = repository(directory)
+            (root / "docs-site").mkdir()
+            with self.assertRaises(SystemExit) as stopped:
+                build_site.main([str(root)])
+            self.assertIn("npm ci", str(stopped.exception))
+
     def test_what_is_missing_stops_the_build(self):
         with tempfile.TemporaryDirectory() as directory:
             root, book, site = repository(directory)

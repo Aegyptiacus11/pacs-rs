@@ -1,11 +1,15 @@
-# Quickstart
+# Quickstart: your first study
 
-A server, a first study in it, and that study on screen and over HTTP: about five minutes.
-You need Docker and `curl`.
+In about five minutes you will have a PACS running on your machine, a real CT study stored in
+it, and that study open in a viewer. You need Docker and `curl`, nothing else.
 
-The commands shown after a `$` on this page are run against a real server, with the answers
-shown, each time the documentation changes ([how](building.md#the-documentations-examples)).
-If one stops being true, the page cannot be published.
+Along the way you will see how a study gets into a PACS, how the PACS files it under a
+patient, and the two ways a program can ask for it back.
+
+> [!NOTE]
+> Every command shown after a `$` on this page is run against a real server each time the
+> documentation changes, and its answer compared with the one printed here
+> ([how](building.md#the-documentations-examples)). What you read is what you will get.
 
 ## 1. Start the server
 
@@ -14,14 +18,14 @@ curl -fsSLO https://raw.githubusercontent.com/Aegyptiacus11/pacs-rs/main/compose
 docker compose up -d --wait
 ```
 
-The server is at `http://127.0.0.1:8080`, reachable from this machine only. Its index and its
-files are in the `pacs-data` volume, so they survive a restart.
+pacs-rs is now listening at `http://127.0.0.1:8080`. Only your own machine can reach it. What
+you store is kept in a Docker volume named `pacs-data`, so it is still there after a restart.
 
-## 2. Get a study to try
+## 2. Download a study
 
-Any DICOM files you have will do. To follow this page to the letter, take the three slices of
-the sample study: three slices of an abdominal CT from a public research dataset
-([LiTS](sample-study.md), volume 0), about half a megabyte each:
+Any DICOM files you have will do. To get the same answers as this page, use the sample study:
+three slices of an abdominal CT from a public research dataset ([LiTS](sample-study.md),
+volume 0), about half a megabyte each.
 
 ```bash
 for n in 1 2 3; do
@@ -31,7 +35,7 @@ done
 
 ## 3. Send it
 
-One file a request, to `/instances`:
+Send each file to `/instances`, one request per file:
 
 ```console
 $ curl --data-binary @00001.dcm http://127.0.0.1:8080/instances
@@ -39,7 +43,7 @@ $ curl --data-binary @00002.dcm http://127.0.0.1:8080/instances
 $ curl --data-binary @00003.dcm http://127.0.0.1:8080/instances
 ```
 
-The answer to the last one:
+The server answers each file with where it filed it. For the last one:
 
 ```json
 {
@@ -52,25 +56,31 @@ The answer to the last one:
 }
 ```
 
-pacs-rs read the file, found its patient, study and series, and filed it under them. The
-three files say they belong to one series of one study, so the server now has one patient,
-one study, one series and three instances.
+Notice that you never said which patient or study these files belong to. Every DICOM file
+carries that itself, and pacs-rs read it: the three files name the same series of the same
+study, so the server now holds one patient, one study, one series and three instances.
 
-Dragging the files onto the web interface does the same thing: it sends each one to
-`/instances`.
+You can also drag the files onto the web interface. It does the same thing: it sends each one
+to `/instances`.
 
-## 4. See it
+## 4. Look at it
 
-Open <http://127.0.0.1:8080/ui/>. The study list has one line: the patient `LITS-0`,
-a CT study of one series and three images. Open it to get the
-[viewer](web-interface.md).
+Open <http://127.0.0.1:8080/ui/>. The study list has one line: the patient `LITS-0`, with a CT
+study of one series and three images. Click it to open the [viewer](web-interface.md).
 
 ![The study list of the web interface with the sample study](images/quickstart-studies.jpg)
 
-## 5. Ask for it over HTTP
+## 5. Ask for it from a program
 
-A program has two ways in. The [REST API](rest-guide.md) names things by identifiers the
-server computes:
+A program has two ways in.
+
+| | REST API | DICOMweb |
+|---|---|---|
+| Names things by | identifiers the server computes | the DICOM UIDs written in the files |
+| Answers in | plain JSON | DICOM JSON |
+| Made for | scripts and pipelines | viewers and other standard tools |
+
+The [REST API](rest-guide.md) first. Ask for the studies, and you get their identifiers:
 
 ```console
 $ curl http://127.0.0.1:8080/studies
@@ -80,8 +90,8 @@ $ curl http://127.0.0.1:8080/studies
 ["478cde9c-3f36815e-7253a722-f52d98c8-d15779eb"]
 ```
 
-[DICOMweb](dicomweb.md), the standard's own HTTP interface (PS3.18), names them by their
-DICOM UIDs and answers in DICOM JSON. It is the interface web viewers are written for:
+Then [DICOMweb](dicomweb.md), the DICOM standard's own HTTP interface (PS3.18). Ask for the
+series of the study by its UID, and each attribute comes back under its DICOM tag:
 
 ```console
 $ curl -H 'Accept: application/dicom+json' http://127.0.0.1:8080/dicom-web/studies/2.25.3100000/series
@@ -112,7 +122,7 @@ $ curl -H 'Accept: application/dicom+json' http://127.0.0.1:8080/dicom-web/studi
 ]
 ```
 
-`"..."` on these pages stands for a value that changes from one server to the next: here
+On these pages `"..."` stands for a value that changes from one server to the next. Here it is
 the address the series can be retrieved from.
 
 ## 6. Stop it
@@ -124,7 +134,15 @@ docker compose down -v     # the study is deleted with the volume
 
 ## Before real data
 
-**Anyone who can reach this server can read and delete everything on it.** The quickstart is
-safe because the port is published on this machine only. Before a real patient's study goes
-in, turn the [login](login.md) on, and read which of the [two ways to use
-pacs-rs](two-ways.md) is yours.
+> [!CAUTION]
+> Anyone who can reach this server can read and delete everything on it. The quickstart is
+> safe only because the port is published on this machine alone. Before a real patient's study
+> goes in, turn the [login](login.md) on.
+
+## Where next
+
+- New to DICOM? [DICOM: files and studies](dicom-files.md) opens the files you just sent and
+  shows what is inside.
+- Have a dataset for research, or setting up for a clinic? [Two ways to use
+  pacs-rs](two-ways.md) says what to read for each.
+- Writing a script? [REST API, task by task](rest-guide.md) continues from step 5.

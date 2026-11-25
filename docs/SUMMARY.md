@@ -1,39 +1,43 @@
 # Summary
 
-[Introduction](introduction.md)
+[What pacs-rs is](introduction.md)
 
-# Start
+# Start here
 
-- [Quickstart](quickstart.md)
+- [Quickstart: your first study](quickstart.md)
 - [The sample study](sample-study.md)
 - [Two ways to use pacs-rs](two-ways.md)
 
-# Learn
+# Learn DICOM
 
 - [DICOM: files and studies](dicom-files.md)
 - [DICOM: the network](dicom-network.md)
 
-# Guides
+# Use it
 
-- [REST API, task by task](rest-guide.md)
 - [Web interface](web-interface.md)
 - [Connecting another viewer](viewers.md)
+- [REST API, task by task](rest-guide.md)
+
+# For research
+
 - [De-identification](de-identification.md)
 
-# Operate
+# For a hospital
 
 - [Running](running.md)
 - [Deploying](deployment.md)
-- [Settings](settings.md)
 - [Login](login.md)
 - [Audit trail](audit.md)
 - [Behind a reverse proxy](reverse-proxy.md)
 - [Backing up and upgrading](backup.md)
 - [Checking stored files](integrity.md)
 - [Deleting and restoring](trash.md)
+- [Hospital interfaces: the plan](interop.md)
 
 # Reference
 
+- [Settings](settings.md)
 - [REST API](rest-api.md)
 - [REST API reference](api-reference.md)
 - [DICOMweb](dicomweb.md)
@@ -41,13 +45,9 @@
 - [Conformance Statement](conformance.md)
 - [Command-line tools](tools.md)
 
-# Where it is going
-
-- [Roadmap](roadmap.md)
-- [Hospital interfaces: the plan](interop.md)
-
-# Working on pacs-rs
+# For developers
 
 - [Building and testing](building.md)
 - [CI and releases](releases.md)
 - [Benchmarks](benchmarks.md)
+- [Roadmap](roadmap.md)

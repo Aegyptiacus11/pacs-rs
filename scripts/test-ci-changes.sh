@@ -14,7 +14,7 @@ expect() {
   fi
 }
 
-expect false false "documentation only" docs/roadmap.md README.md book.toml LICENSE-MIT \
+expect false false "documentation only" docs/roadmap.md README.md docs-site/astro.config.mjs LICENSE-MIT \
   scripts/check-doc-links.py scripts/test_check_doc_links.py .github/workflows/docs.yml
 expect false false "the homepage and the site build" site/index.html site/img/viewer.jpg \
   scripts/build-site.py scripts/test_build_site.py
