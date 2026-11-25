@@ -1736,8 +1736,9 @@ dependencies = [
 
 [[package]]
 name = "jwt-sessions"
-version = "0.1.0"
-source = "git+https://github.com/Aegyptiacus11/jwt-sessions-rs?rev=24aba3ee63c98dcfe3cb09f15498408ccf908e1e#24aba3ee63c98dcfe3cb09f15498408ccf908e1e"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4604fb8ac3aa11bb65b0933c7f5830395dc4b7c1ade98db593d5d5cdc8d70c75"
 dependencies = [
  "axum",
  "base64 0.23.1",
