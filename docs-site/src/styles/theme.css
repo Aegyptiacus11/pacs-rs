@@ -1,0 +1,74 @@
+/* The documentation in the colours and the type of the homepage (site/style.css) and of the
+   web interface: Inter, warm near-white, one blue. */
+
+@font-face {
+	font-family: 'Inter Variable';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 900;
+	src: url('./fonts/inter-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+:root {
+	--sl-font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--sl-content-width: 46rem;
+	--sl-text-h1: 2.125rem;
+	--sl-text-h2: 1.5rem;
+	--sl-text-h3: 1.1875rem;
+}
+
+:root[data-theme='light'] {
+	--sl-color-bg: oklch(0.985 0.002 75);
+	--sl-color-bg-nav: oklch(0.985 0.002 75);
+	--sl-color-bg-sidebar: oklch(0.985 0.002 75);
+	--sl-color-white: oklch(0.2 0.005 60);
+	--sl-color-gray-1: oklch(0.2 0.005 60);
+	--sl-color-gray-2: oklch(0.32 0.006 60);
+	--sl-color-gray-3: oklch(0.5 0.008 60);
+	--sl-color-gray-5: oklch(0.91 0.004 75);
+	--sl-color-gray-6: oklch(0.955 0.003 75);
+	--sl-color-gray-7: oklch(0.97 0.003 75);
+	--sl-color-hairline: oklch(0.91 0.004 75);
+	--sl-color-hairline-light: oklch(0.91 0.004 75);
+	--sl-color-accent: oklch(0.55 0.17 258);
+	--sl-color-accent-high: oklch(0.36 0.14 258);
+	--sl-color-accent-low: oklch(0.94 0.03 258);
+	--sl-color-text-accent: oklch(0.5 0.17 258);
+}
+
+:root[data-theme='dark'] {
+	--sl-color-bg: oklch(0.16 0.004 260);
+	--sl-color-bg-nav: oklch(0.16 0.004 260);
+	--sl-color-bg-sidebar: oklch(0.16 0.004 260);
+	--sl-color-hairline: oklch(0.27 0.006 260);
+	--sl-color-hairline-light: oklch(0.27 0.006 260);
+	--sl-color-accent: oklch(0.55 0.17 258);
+	--sl-color-accent-high: oklch(0.85 0.08 258);
+	--sl-color-accent-low: oklch(0.28 0.08 258);
+	--sl-color-text-accent: oklch(0.72 0.13 258);
+}
+
+h1,
+h2,
+h3 {
+	letter-spacing: -0.015em;
+}
+
+.sl-markdown-content :is(h1, h2, h3) {
+	font-weight: 600;
+}
+
+/* the page being read: marked by a rule and its colour, not by a filled block */
+nav.sidebar a[aria-current='page'],
+nav.sidebar a[aria-current='page']:hover,
+nav.sidebar a[aria-current='page']:focus {
+	background: transparent;
+	color: var(--sl-color-text-accent);
+	font-weight: 600;
+	box-shadow: inset 2px 0 0 var(--sl-color-text-accent);
+	border-radius: 0;
+}
+
+.sl-markdown-content table {
+	font-size: var(--sl-text-sm);
+}
