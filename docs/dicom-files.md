@@ -1,59 +1,77 @@
 # DICOM: files and studies
 
-What is in a DICOM file, how files add up to a study, and what pacs-rs does with each part.
-Enough to read the rest of this book; the standard's own sections are named for the details.
-Every example is the sample study of the [quickstart](quickstart.md).
+A CT scanner does not produce pictures the way a camera does. It produces DICOM files, and a
+PACS is the server that keeps them. This page opens one of those files and shows what is
+inside, then how hundreds of files add up to one examination.
 
-## One file, one image
+You need no background in medical imaging. Every example uses the three files of the
+[quickstart](quickstart.md), and [Lab 1](lab-file.md) lets you repeat all of it with your own
+hands.
 
-A DICOM file holds one object, most often one image, together with everything known about
-it: whose it is, when and how it was made, and the pixels. The standard calls the object a
-*SOP Instance*; this book says *instance*.
+## One file holds one image and its story
 
-The file `00001.dcm` of the sample has 525190 bytes, in three parts (PS3.10 Section 7.1):
+A DICOM file holds one object. Most often that object is one image, together with everything
+known about it: whose it is, when and on which machine it was made, how to read its pixels,
+and the pixels themselves. The standard calls such an object a *SOP Instance*. These pages
+say **instance**.
 
-| Bytes | What |
+A JPEG from a phone separates the picture from a few optional notes about it. In DICOM the
+notes are the larger half of the design: an image without its patient and its geometry is of
+no use to a radiologist, so the two travel in one file and cannot drift apart.
+
+The file `00001.dcm` of the sample study is 525190 bytes long and has four parts
+(PS3.10 Section 7.1):
+
+| Bytes | What is there |
 |---|---|
-| 0 to 127 | the preamble: 128 bytes with no meaning to DICOM, all zero here |
+| 0 to 127 | the preamble: 128 bytes that mean nothing to DICOM, all zero here |
 | 128 to 131 | the four letters `DICM` |
-| 132 to 297 | the File Meta Information: what kind of object follows and how it is encoded |
-| 298 to the end | the data set: the object itself, pixels last |
+| 132 to 297 | the File Meta Information: what kind of object follows and how it is written |
+| 298 to the end | the data set: the object itself, with the pixels last |
+
+You can check the second line yourself:
 
 ```bash
 xxd -s 128 -l 4 00001.dcm
 # 00000080: 4449 434d                                DICM
 ```
 
-A file without `DICM` at byte 128 is not a DICOM file, and pacs-rs refuses it
-(`Bad file format`).
+A file without `DICM` at byte 128 is not a DICOM file. pacs-rs refuses it with
+`Bad file format`.
 
-## Data elements
+## A file is a list of facts
 
-Everything after `DICM` is a list of *data elements*. Each is one fact, in four fields
-(PS3.5 Section 7.1):
+Everything after `DICM` is a list of **data elements**. One element is one fact, written in
+four fields (PS3.5 Section 7.1):
 
-| Field | Here | Meaning |
+| Field | In this example | Meaning |
 |---|---|---|
-| Tag | `(0008,0020)` | which fact: a group and an element number, both in hexadecimal. This one is Study Date |
-| Value Representation (VR) | `DA` | the type of the value: `DA` is a date, `PN` a person's name, `UI` a unique identifier, `US` an unsigned 16-bit number |
-| Length | `8` | bytes in the value |
+| Tag | `(0008,0020)` | which fact this is: a group number and an element number, in hexadecimal. This tag is the Study Date |
+| Value Representation (VR) | `DA` | the type of the value. `DA` is a date, `PN` a person's name, `UI` a unique identifier, `US` an unsigned 16-bit number |
+| Length | `8` | how many bytes the value takes |
 | Value | `20261117` | the fact itself |
 
-In the file those are sixteen bytes, the numbers with their low byte first:
+In the file, that element is sixteen bytes. Numbers are written with their low byte first:
 
 ```text
 08 00 20 00   44 41   08 00   32 30 32 36 31 31 31 37
 (0008,0020)   D  A    8       2  0  2  6  1  1  1  7
 ```
 
-Two rules make a data set easy to read and to check: the elements come in increasing order
-of tag, and a tag appears at most once (PS3.5 Section 7.1).
+Two rules make a data set easy to read and to check (PS3.5 Section 7.1):
 
-The tags are fixed by the standard's dictionary (PS3.6): `(0010,0010)` is the patient's name
-in every DICOM file ever written. A vendor's own facts go in *private* elements, in the odd
-groups (PS3.5 Section 7.8); pacs-rs keeps them as received.
+- The elements come in increasing order of tag.
+- A tag appears at most once.
 
-To see the elements of an instance without its pixels, ask DICOMweb for its metadata:
+What each tag means is fixed by the standard's dictionary (PS3.6). `(0010,0010)` is the
+patient's name in every DICOM file ever written, whichever company built the scanner. A
+vendor's own facts go in *private* elements, which live in the odd-numbered groups
+(PS3.5 Section 7.8). pacs-rs keeps private elements as it receives them.
+
+### Reading the elements of a stored instance
+
+Once a file is in pacs-rs, you can ask for its elements without its pixels. Send the file,
+then ask DICOMweb for the instance's metadata:
 
 ```console
 $ curl --data-binary @00001.dcm http://127.0.0.1:8080/instances
@@ -106,87 +124,112 @@ $ curl http://127.0.0.1:8080/dicom-web/studies/2.25.3100000/series/2.25.3200000/
 ]
 ```
 
-This is the same data set written as JSON (PS3.18 Annex F): the tag without its brackets,
-the VR, the values. Read down it and the file describes itself: a CT image (`00080060`),
-512 rows by 512 columns (`00280010`, `00280011`), one sample a pixel, shown as shades of grey
-(`00280002`, `00280004`), each pixel stored in 16 bits, all of them used, as a signed number
-(`00280100`, `00280101`, `00280103`). An element with a VR and no value, such as the
-Accession Number (`00080050`), is in the file and empty: the dataset the scan comes from
-does not give it.
+This is the data set of the file, written as JSON (PS3.18 Annex F). Each entry is one
+element: the tag without its brackets, the VR, and the values.
 
-## Pixels and transfer syntaxes
+Read down the list and the file describes itself:
 
-The last element, `(7FE0,0010)` Pixel Data, holds the image: here 512 × 512 pixels of two
-bytes, 524288 bytes of the file's 525190.
+| Element | Value | What it tells you |
+|---|---|---|
+| `00080060` Modality | `CT` | the image comes from a CT scanner |
+| `00280010`, `00280011` Rows, Columns | `512`, `512` | the image is 512 pixels high and 512 wide |
+| `00280002`, `00280004` | `1`, `MONOCHROME2` | one number per pixel, shown as shades of grey where higher is brighter |
+| `00280100`, `00280101` Bits Allocated, Bits Stored | `16`, `16` | each pixel takes 16 bits, and all of them are used |
+| `00280103` Pixel Representation | `1` | the numbers are signed, so a pixel can be negative |
+| `00280030` Pixel Spacing | `0.703125` | one pixel covers 0.703125 mm of the patient |
 
-How the elements and the pixels are written as bytes is the file's *transfer syntax*, named
-by a UID in the File Meta Information. Three things vary: whether the VR is written
-(explicit) or left to the dictionary (implicit), the byte order, and whether the pixels are
-compressed and how (PS3.5 Section 10).
+An element with a VR and no value, such as the Accession Number (`00080050`), is present in
+the file and empty. The dataset this scan comes from does not give it.
 
-| Transfer syntax | UID | |
+## The pixels, and how they are written
+
+The last element of the data set is `(7FE0,0010)` Pixel Data. In the sample file it holds
+512 × 512 pixels of two bytes each: 524288 bytes out of the file's 525190. Everything else in
+the file fits in under a kilobyte.
+
+How the elements and the pixels are turned into bytes is the file's **transfer syntax**. The
+File Meta Information names it with a UID. A transfer syntax settles three things
+(PS3.5 Section 10):
+
+- whether each element writes its VR (*explicit*) or leaves it to the dictionary (*implicit*);
+- the byte order of numbers;
+- whether the pixels are compressed, and with which method.
+
+| Transfer syntax | UID | Notes |
 |---|---|---|
 | Implicit VR Little Endian | `1.2.840.10008.1.2` | the default every DICOM system must support (PS3.5 Section 10.1) |
-| Explicit VR Little Endian | `1.2.840.10008.1.2.1` | how the sample files are written; uncompressed |
-| JPEG-LS Lossless | `1.2.840.10008.1.2.4.80` | compressed, every pixel value kept |
+| Explicit VR Little Endian | `1.2.840.10008.1.2.1` | how the sample files are written; not compressed |
+| JPEG-LS Lossless | `1.2.840.10008.1.2.4.80` | compressed, with every pixel value kept |
 
-**What pacs-rs does:** the File Meta Information is always Explicit VR Little Endian,
-whatever follows it (PS3.10 Section 7.1), so a file's transfer syntax can be read before
-anything else. An image that arrives uncompressed is stored as JPEG-LS Lossless, after a
-check that decoding gives back every pixel; an image that arrives compressed is kept as it
-came. A client that wants another transfer syntax asks for it and pacs-rs converts on the way
-out ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+The File Meta Information itself is always written in Explicit VR Little Endian, whatever
+follows it (PS3.10 Section 7.1). A program can therefore read the transfer syntax first and
+then know how to read the rest.
+
+> [!NOTE]
+> **What pacs-rs does.** An image that arrives uncompressed is stored as JPEG-LS Lossless,
+> after a check that decoding it gives back every pixel. An image that arrives compressed is
+> kept as it came. A client that wants another transfer syntax asks for it, and pacs-rs
+> converts on the way out ([compression and transcoding](dicomweb.md#compression-and-transcoding)).
+> [Lab 4](lab-pixels.md) measures this on the sample study.
 
 ## Patient, study, series, instance
 
-A CT scan is hundreds of files. What makes them one scan is inside them: every file repeats
-the facts about its patient, its study and its series, and files with the same identifiers
-belong together (PS3.3 Section A.1.2).
+One CT examination is hundreds of files. Nothing outside the files says they belong together.
+Each file repeats the facts about its patient, its study and its series, and files that carry
+the same identifiers are one examination (PS3.3 Section A.1.2).
 
 | Level | What it is | Identified by | In the sample |
 |---|---|---|---|
 | Patient | a person | `(0010,0020)` Patient ID | `LITS-0` |
 | Study | one examination of that person: one visit to the scanner | `(0020,000D)` Study Instance UID | `2.25.3100000` |
 | Series | one acquisition within the study, from one device | `(0020,000E)` Series Instance UID | `2.25.3200000` |
-| Instance | one object: an image, most often | `(0008,0018)` SOP Instance UID | `2.25.3300001` to `...3` |
+| Instance | one object, most often an image | `(0008,0018)` SOP Instance UID | `2.25.3300001` to `2.25.3300003` |
 
-A study belongs to exactly one patient and a series to exactly one study. So a server never
-needs to be told where a file goes: it reads the four identifiers and files it. That is
-what happened when the quickstart sent three files and got one study.
+A study belongs to exactly one patient, and a series to exactly one study. A server never
+has to be told where a file goes: it reads the four identifiers and files it. That is what
+happened in the quickstart, when three files sent one by one became one study.
 
-**What pacs-rs does:**
+> [!NOTE]
+> **What pacs-rs does.**
+>
+> - It keeps the attributes of each level once in its index, as the latest file to arrive
+>   gave them. They are the `MainDicomTags` of the
+>   [REST API](rest-guide.md#list-what-is-there).
+> - A file whose SOP Instance UID is already stored is a second copy of the same instance.
+>   The first copy is kept, unless `PACS_OVERWRITE_INSTANCES` says otherwise.
 
-- The index keeps the attributes of each level once (the `MainDicomTags` of the
-  [REST API](rest-guide.md#list-what-is-there)), as the latest file to arrive gave
-  them.
-- A file whose SOP Instance UID is already stored is a second copy of the same instance: the
-  first is kept, unless `PACS_OVERWRITE_INSTANCES` says otherwise.
-- **The Patient ID is only as unique as the hospital that gave it.** Two hospitals can both
-  have a patient `12345`. pacs-rs treats one Patient ID as one patient and does not merge
-  or split on names or birth dates.
+> [!CAUTION]
+> **A Patient ID is only as unique as the hospital that gave it.** Two hospitals can both
+> have a patient `12345`. pacs-rs treats one Patient ID as one patient. It does not merge or
+> split patients by their names or birth dates.
 
 ## UIDs
 
-Studies, series and instances are named by *unique identifiers*: numbers separated by dots,
-at most 64 characters, where no number starts with a zero unless it is the single digit `0`
-(PS3.5 Section 9.1). They are meant to be unique in the world, not only in one hospital,
-which is why a study can move between archives and keep its name.
+Studies, series and instances are named by **unique identifiers**: numbers separated by
+dots, 64 characters at most, where no number starts with a zero unless it is the single digit
+`0` (PS3.5 Section 9.1). A UID is meant to be unique in the world, not only inside one
+hospital. That is why a study can move from one archive to another and keep its name.
 
-A UID starts with the root of whoever made it. `1.2.840.10008` is DICOM's own: every UID
-under it names something the standard defines, such as the transfer syntaxes above or
-`1.2.840.10008.5.1.4.1.1.2`, CT Image Storage, the kind of object the sample files hold.
-`2.25.` followed by one large number is the root for UIDs made from a UUID, for those who
-have no root of their own (PS3.5 Annex B.2); the sample's UIDs use it with small numbers so
-that they can be read. The dataset the sample comes from has no UIDs of its own: these were
-given when its slices were written as DICOM.
+A UID begins with the root of whoever made it:
 
-**A UID carries no meaning.** Do not read a date or a hospital out of one, and never edit
-one by hand: two different objects with one UID is the error DICOM systems forgive least.
-[De-identification](de-identification.md) replaces UIDs for exactly this reason: they can
-point back to the hospital that made them.
+- `1.2.840.10008` is DICOM's own root. Every UID under it names something the standard
+  defines, such as the transfer syntaxes above, or `1.2.840.10008.5.1.4.1.1.2`, which is
+  CT Image Storage, the kind of object the sample files hold.
+- `2.25.` followed by one large number is the root for UIDs made from a UUID, for those who
+  have no root of their own (PS3.5 Annex B.2). The sample uses it with small numbers so that
+  its UIDs are easy to read. The dataset the sample comes from has no UIDs, so these were
+  given when its slices were written as DICOM.
+
+> [!CAUTION]
+> **A UID carries no meaning.** Do not read a date or a hospital out of one, and never edit
+> one by hand. Two different objects with one UID is the error DICOM systems forgive least.
+> [De-identification](de-identification.md) replaces UIDs for a related reason: they can
+> point back to the hospital that made them.
 
 ## Where next
 
-- How two DICOM systems exchange these files: [DICOM: the network](dicom-network.md).
-- The same data over HTTP: [DICOMweb](dicomweb.md) and the [REST API, task by task](rest-guide.md).
+- Open a file yourself and find these elements: [Lab 1: inside a DICOM file](lab-file.md).
+- How two DICOM systems send each other these files: [DICOM: the network](dicom-network.md).
+- The same data over HTTP: [DICOMweb](dicomweb.md) and the
+  [REST API, task by task](rest-guide.md).
 - Removing the patient from the elements: [De-identification](de-identification.md).

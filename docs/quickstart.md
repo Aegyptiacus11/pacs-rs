@@ -143,6 +143,7 @@ docker compose down -v     # the study is deleted with the volume
 
 - New to DICOM? [DICOM: files and studies](dicom-files.md) opens the files you just sent and
   shows what is inside.
+- Learn by doing? The [labs](labs.md) are four practical sessions on this same study.
 - Have a dataset for research, or setting up for a clinic? [Two ways to use
   pacs-rs](two-ways.md) says what to read for each.
 - Writing a script? [REST API, task by task](rest-guide.md) continues from step 5.

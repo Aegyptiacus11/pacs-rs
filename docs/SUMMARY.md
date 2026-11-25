@@ -12,6 +12,11 @@
 
 - [DICOM: files and studies](dicom-files.md)
 - [DICOM: the network](dicom-network.md)
+- [Labs: learn by doing](labs.md)
+- [Lab 1: inside a DICOM file](lab-file.md)
+- [Lab 2: store and search](lab-archive.md)
+- [Lab 3: DICOM on the network](lab-network.md)
+- [Lab 4: from numbers to a picture](lab-pixels.md)
 
 # Use it
 
