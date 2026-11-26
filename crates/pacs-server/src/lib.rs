@@ -116,6 +116,35 @@ pub struct Settings {
     #[arg(long, env = "PACS_CONFIG")]
     pub config: Option<std::path::PathBuf>,
 
+    /// Write the log to this directory, one file a day (`pacs-server.<date>.log`), rather
+    /// than to standard output; a Windows service has no console. RUST_LOG still filters it.
+    #[arg(long, env = "PACS_LOG_DIR")]
+    pub log_dir: Option<std::path::PathBuf>,
+
+    /// With PACS_LOG_DIR: how many daily files to keep, the oldest removed past it.
+    #[arg(long, env = "PACS_LOG_DAYS", default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+    pub log_days: u64,
+
+    /// Windows: install pacs-server as a service that starts with the machine, runs as
+    /// its own account (NT SERVICE\<name>) with the settings of --config, and starts again
+    /// after a failure; see docs/windows.md. Needs an administrator.
+    #[arg(long, requires = "config", conflicts_with_all = ["uninstall_service", "windows_service", "healthcheck", "check_files", "consistency"])]
+    pub install_service: bool,
+
+    /// Windows: stop and remove the service of --service-name. Needs an administrator.
+    #[arg(long, conflicts_with_all = ["windows_service", "healthcheck", "check_files", "consistency"])]
+    pub uninstall_service: bool,
+
+    /// Windows: run as the service, under the service manager. What --install-service
+    /// writes in the service's command line, not for a console.
+    #[arg(long, requires = "config", conflicts_with_all = ["healthcheck", "check_files", "consistency"])]
+    pub windows_service: bool,
+
+    /// Windows: the name of the service for --install-service, --uninstall-service and
+    /// --windows-service.
+    #[arg(long, default_value = "pacs-rs")]
+    pub service_name: String,
+
     /// Check every stored file against the index (its size and SHA-256), say what failed,
     /// exit 1 if anything did and 0 if not, and do nothing else: see `pacs_server::checks`.
     #[arg(long)]
@@ -626,6 +655,27 @@ where
     all.extend(from_file);
     let matches = Settings::command().try_get_matches_from(all)?;
     Ok(Settings::from_arg_matches(&matches)?)
+}
+
+/// The daily log files of PACS_LOG_DIR (`pacs-server.<date>.log`, PACS_LOG_DAYS of them
+/// kept), or `None` to log to standard output. The directory is made if it is missing; one
+/// that cannot be made or written stops the start.
+pub fn log_files(
+    settings: &Settings,
+) -> anyhow::Result<Option<tracing_appender::rolling::RollingFileAppender>> {
+    let Some(dir) = &settings.log_dir else {
+        return Ok(None);
+    };
+    let keep = usize::try_from(settings.log_days).context("PACS_LOG_DAYS: too large")?;
+    let files = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("pacs-server")
+        .filename_suffix("log")
+        .max_log_files(keep)
+        // opens today's file now: a directory that cannot be written to fails here
+        .build(dir)
+        .with_context(|| format!("PACS_LOG_DIR: {}", dir.display()))?;
+    Ok(Some(files))
 }
 
 pub fn process_env(name: &str) -> Option<String> {

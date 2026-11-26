@@ -165,3 +165,5 @@ De-identification on the way in: see [De-identification](de-identification.md).
 | Variable | Default | |
 |---|---|---|
 | `RUST_LOG` | `info` | log filter |
+| `PACS_LOG_DIR` | none | write the log to this directory, one file a day (`pacs-server.<date>.log`), rather than to standard output; a [Windows service](windows.md) uses `logs` beside its settings file without it |
+| `PACS_LOG_DAYS` | `30` | with `PACS_LOG_DIR`: how many daily files to keep, the oldest removed past it |

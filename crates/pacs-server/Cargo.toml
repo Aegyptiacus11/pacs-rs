@@ -54,10 +54,16 @@ tracing = "0.1.44"
 utoipa = "6.0.0"
 utoipa-axum = "0.3.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# PACS_LOG_DIR: the log in daily files, the oldest removed
+tracing-appender = "0.2.5"
 url = "2.5.8"
 # PACS_CONFIG: the settings in a file
 toml = "1.2.0"
 tempfile = "3.27.0"
+
+# --install-service, --uninstall-service and --windows-service: the service manager
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.1"
 
 [dev-dependencies]
 # certificates made in tests, for the TLS of DIMSE
