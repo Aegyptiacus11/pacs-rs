@@ -23,6 +23,8 @@ cargo run --release -p pacs-server            # files in data/files, index in da
 Every setting is a `PACS_*` environment variable, and a flag: they are all on
 [Settings](settings.md), by what they are about.
 
+On Windows it runs as a service: [On Windows](windows.md).
+
 The image is `ghcr.io/aegyptiacus11/pacs-rs` (linux/amd64 and linux/arm64; `:latest` or a
 version such as `:0.16.3`), or build it with `docker build -t pacs-rs .`: a static binary on an
 empty image, about 40 MB with the web interface, run as

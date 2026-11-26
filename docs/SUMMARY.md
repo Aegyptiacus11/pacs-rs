@@ -31,6 +31,7 @@
 # For a hospital
 
 - [Running](running.md)
+- [On Windows](windows.md)
 - [Deploying](deployment.md)
 - [Login](login.md)
 - [Audit trail](audit.md)
