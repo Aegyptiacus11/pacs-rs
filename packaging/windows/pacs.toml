@@ -1,0 +1,10 @@
+# The settings of the pacs-rs service, each by its name without PACS_ and in lower case:
+# https://github.com/Aegyptiacus11/pacs-rs/blob/main/docs/settings.md
+# After a change, in an administrator's PowerShell: Restart-Service pacs-rs
+#
+# The index and files are in data\ and the log in logs\, beside this file.
+#
+# This machine only: the login is off, and without it anyone who reaches the server can read
+# and delete. Turn it on (docs/login.md) before listening on the network:
+# listen = "0.0.0.0:8080"
+listen = "127.0.0.1:8080"
