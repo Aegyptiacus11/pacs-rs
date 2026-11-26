@@ -1,12 +1,32 @@
 # On Windows
 
 `pacs-server.exe` runs as a Windows service: it starts with the machine, with nobody logged in,
-runs under an account of its own, and starts again after a failure. The release's
-`pacs-rs-<version>-windows-amd64.zip` holds the program; it needs no runtime.
+runs under an account of its own, and starts again after a failure.
 
+## With the installer
+
+Each release has `pacs-rs-<version>-windows-amd64-setup.exe` (Windows 10 or Server 2016 and
+later, 64-bit). It puts the program in `C:\Program Files\pacs-rs` and the DICOM tools in its
+`tools` folder, writes `C:\ProgramData\pacs-rs\pacs.toml` on the first install, and installs and
+starts the service as below, listening on `127.0.0.1:8080`: this machine only, since the
+[login](login.md) is off until it is turned on. Settings go in `pacs.toml`, then
+`Restart-Service pacs-rs`.
+
+If the service does not start (a port already taken, a mistake in `pacs.toml`), the installer
+says so and the reason is in `C:\ProgramData\pacs-rs\logs`. Running a newer installer is the
+upgrade: it stops the service, replaces the program and starts it again, and leaves
+`pacs.toml` and the data as they are. Uninstalling (Settings, Apps) removes the service and the
+program and leaves `C:\ProgramData\pacs-rs` in place.
+
+The installer is not signed, so Windows SmartScreen warns of an unknown publisher; check the file
+against the release's `SHA256SUMS` (`Get-FileHash <file>`) before running it anyway. For an
+unattended install: `pacs-rs-<version>-windows-amd64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES`, which
+exits 0 when the service runs.
+
+## By hand
+
+The release's `pacs-rs-<version>-windows-amd64.zip` holds the same program; it needs no runtime.
 Every command below runs in an administrator's PowerShell.
-
-## Installing
 
 The program in Program Files, its settings, index, files and log in one directory under
 ProgramData:
@@ -67,7 +87,7 @@ when `dimse_listen = "0.0.0.0:11112"`:
 netsh advfirewall firewall add rule name="pacs-rs DIMSE" dir=in action=allow protocol=TCP localport=11112
 ```
 
-## Upgrading and removing
+## Upgrading and removing by hand
 
 Stop the service, replace `pacs-server.exe` at the same path, start it again: the service names
 the program by its path. [Backing up and upgrading](backup.md) says what to save first.
