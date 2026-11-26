@@ -1,6 +1,8 @@
 # Publishes a release when a tag v<version> is pushed (the workspace version in Cargo.toml):
 # - binaries: Linux amd64 and arm64 (static musl, the same ones as in the image) and
 #   Windows amd64 (static CRT, no runtime to install), each with the licences and README;
+# - the Windows installer (packaging/windows), installed, upgraded and removed on the runner
+#   first (scripts/windows-installer-test.ps1);
 # - the image ghcr.io/aegyptiacus11/pacs-rs:<version> for linux/amd64 and linux/arm64,
 #   and :latest when this is the highest release (pre-releases like v1.0.0-rc1 never get it);
 # - a GitHub release with those files, SHA256SUMS and generated notes.
@@ -184,6 +186,18 @@ jobs:
             cp "target/release/$tool.exe" "$name/"
           done
           7z a -tzip -bso0 "dist/$name.zip" "$name"
+      # packaging/windows/pacs-rs.iss, with the Inno Setup of the runner's image
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "no Inno Setup 6 at $iscc" }
+          $stage = Join-Path $PWD "pacs-rs-$env:VERSION-windows-amd64"
+          & $iscc /Q "/DVersion=$env:VERSION" "/DStage=$stage" "/O$PWD\dist" packaging\windows\pacs-rs.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exited $LASTEXITCODE" }
+      - name: Installer test
+        shell: pwsh
+        run: scripts/windows-installer-test.ps1 -Setup "dist/pacs-rs-$env:VERSION-windows-amd64-setup.exe"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-windows-amd64
@@ -247,7 +261,7 @@ jobs:
         working-directory: dist
         run: |
           n="$(find . -maxdepth 1 -type f | wc -l)"
-          [ "$n" -eq 3 ] || { echo "::error::expected 3 archives, got $n files"; ls -l; exit 1; }
+          [ "$n" -eq 4 ] || { echo "::error::expected 3 archives and the installer, got $n files"; ls -l; exit 1; }
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
           notes="Docker image: \`docker pull $IMAGE:$VERSION\` (linux/amd64, linux/arm64); with Docker Compose, \`compose.yaml\` in the repository."
