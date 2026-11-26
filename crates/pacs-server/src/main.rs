@@ -1,25 +1,74 @@
+use std::future::Future;
+
 use pacs_server::{
-    StorageLocation, app_with_audit, dimse_config, open_archive, serve_dimse_audited,
+    Settings, StorageLocation, app_with_audit, dimse_config, open_archive, serve_dimse_audited,
     shutdown_signal,
 };
 use tracing_subscriber::EnvFilter;
+
+#[cfg(windows)]
+mod windows_service;
 
 // musl's allocator is slow under many threads (frames ran 25% slower in the static image);
 // mimalloc keeps the static binary as fast as the glibc one.
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let settings = match pacs_server::load_settings(std::env::args_os()) {
         Ok(settings) => settings,
         // --help and --version are answers, not failures
-        Err(e) => match e.downcast::<clap::Error>() {
-            Ok(e) => e.exit(),
-            Err(e) => return Err(e),
-        },
+        Err(e) => e.downcast::<clap::Error>()?.exit(),
     };
+    if settings.install_service || settings.uninstall_service || settings.windows_service {
+        #[cfg(windows)]
+        return windows_service::main(settings);
+        #[cfg(not(windows))]
+        anyhow::bail!(
+            "--install-service, --uninstall-service and --windows-service are for Windows; \
+             elsewhere run pacs-server under systemd, Docker or another supervisor"
+        );
+    }
     init_logging(&settings)?;
+    runtime()?.block_on(console(settings))
+}
+
+fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?)
+}
+
+/// The log to standard output, or to the daily files of PACS_LOG_DIR.
+fn init_logging(settings: &Settings) -> anyhow::Result<()> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let (stdout, file) = match pacs_server::log_files(settings)? {
+        Some(files) => (
+            None,
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(files),
+            ),
+        ),
+        None => (Some(tracing_subscriber::fmt::layer()), None),
+    };
+    tracing_subscriber::registry()
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
+        )
+        .with(stdout)
+        .with(file)
+        // what is logged at ERROR, counted for the metrics
+        .with(pacs_server::metrics::CountErrors)
+        .try_init()?;
+    Ok(())
+}
+
+/// From a console or a container: the one-off checks, or the server until Ctrl-C or SIGTERM.
+async fn console(settings: Settings) -> anyhow::Result<()> {
     if settings.healthcheck {
         std::process::exit(if pacs_server::healthy(settings.listen).await {
             0
@@ -27,8 +76,8 @@ async fn main() -> anyhow::Result<()> {
             1
         });
     }
-    let archive = open_archive(&settings).await?;
     if settings.consistency {
+        let archive = open_archive(&settings).await?;
         pacs_server::consistency::check_quarantine(&settings)?;
         let audit = pacs_server::audit::open_audit(&settings)?;
         let agree = pacs_server::consistency::run(
@@ -42,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(if agree { 0 } else { 1 });
     }
     if settings.check_files {
+        let archive = open_archive(&settings).await?;
         let mut summary = pacs_server::checks::Summary::default();
         let result = pacs_server::checks::check_all(&archive, &mut summary).await;
         for failure in &summary.failures {
@@ -55,6 +105,17 @@ async fn main() -> anyhow::Result<()> {
         result?;
         std::process::exit(if summary.failures.is_empty() { 0 } else { 1 });
     }
+    serve(settings, shutdown_signal(), || Ok(())).await
+}
+
+/// The server, until `shutdown` completes. `ready` is called once both listeners are bound,
+/// before the first request is taken: when the service manager is told the service runs.
+async fn serve(
+    settings: Settings,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    ready: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let archive = open_archive(&settings).await?;
     let login =
         pacs_server::auth::open_login(&settings, archive.index(), pacs_server::process_env).await?;
     if login.is_none() {
@@ -83,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
     // one shutdown signal for both servers
     let (stop, stopped) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
-        shutdown_signal().await;
+        shutdown.await;
         let _ = stop.send(true);
     });
     let until_stopped = move || {
@@ -136,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => None,
     };
+    ready()?;
     audit.application(true, &ae_titles);
     let limits = pacs_server::limits::Limits::from_settings(&settings);
     let served = pacs_server::limits::serve(listener, app, limits, until_stopped()).await;
@@ -146,32 +208,4 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), forwarding).await;
     }
     served
-}
-
-/// The log to standard output, or to the daily files of PACS_LOG_DIR.
-fn init_logging(settings: &pacs_server::Settings) -> anyhow::Result<()> {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    let (stdout, file) = match pacs_server::log_files(settings)? {
-        Some(files) => (
-            None,
-            Some(
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .with_writer(files),
-            ),
-        ),
-        None => (Some(tracing_subscriber::fmt::layer()), None),
-    };
-    tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
-        )
-        .with(stdout)
-        .with(file)
-        // what is logged at ERROR, counted for the metrics
-        .with(pacs_server::metrics::CountErrors)
-        .try_init()?;
-    Ok(())
 }

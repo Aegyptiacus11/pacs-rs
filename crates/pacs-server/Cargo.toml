@@ -61,6 +61,10 @@ url = "2.5.8"
 toml = "1.2.0"
 tempfile = "3.27.0"
 
+# --install-service, --uninstall-service and --windows-service: the service manager
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.1"
+
 [dev-dependencies]
 # certificates made in tests, for the TLS of DIMSE
 rcgen = { version = "0.14.10", default-features = false, features = ["pem", "ring"] }

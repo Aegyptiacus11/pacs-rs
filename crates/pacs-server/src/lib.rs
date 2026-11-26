@@ -125,6 +125,26 @@ pub struct Settings {
     #[arg(long, env = "PACS_LOG_DAYS", default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
     pub log_days: u64,
 
+    /// Windows: install pacs-server as a service that starts with the machine, runs as
+    /// its own account (NT SERVICE\<name>) with the settings of --config, and starts again
+    /// after a failure; see docs/windows.md. Needs an administrator.
+    #[arg(long, requires = "config", conflicts_with_all = ["uninstall_service", "windows_service", "healthcheck", "check_files", "consistency"])]
+    pub install_service: bool,
+
+    /// Windows: stop and remove the service of --service-name. Needs an administrator.
+    #[arg(long, conflicts_with_all = ["windows_service", "healthcheck", "check_files", "consistency"])]
+    pub uninstall_service: bool,
+
+    /// Windows: run as the service, under the service manager. What --install-service
+    /// writes in the service's command line, not for a console.
+    #[arg(long, requires = "config", conflicts_with_all = ["healthcheck", "check_files", "consistency"])]
+    pub windows_service: bool,
+
+    /// Windows: the name of the service for --install-service, --uninstall-service and
+    /// --windows-service.
+    #[arg(long, default_value = "pacs-rs")]
+    pub service_name: String,
+
     /// Check every stored file against the index (its size and SHA-256), say what failed,
     /// exit 1 if anything did and 0 if not, and do nothing else: see `pacs_server::checks`.
     #[arg(long)]
