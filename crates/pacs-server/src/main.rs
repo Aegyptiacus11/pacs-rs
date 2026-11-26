@@ -11,20 +11,6 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    {
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
-        tracing_subscriber::registry()
-            .with(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
-            )
-            .with(tracing_subscriber::fmt::layer())
-            // what is logged at ERROR, counted for the metrics
-            .with(pacs_server::metrics::CountErrors)
-            .init();
-    }
-
     let settings = match pacs_server::load_settings(std::env::args_os()) {
         Ok(settings) => settings,
         // --help and --version are answers, not failures
@@ -33,6 +19,7 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => return Err(e),
         },
     };
+    init_logging(&settings)?;
     if settings.healthcheck {
         std::process::exit(if pacs_server::healthy(settings.listen).await {
             0
@@ -159,4 +146,32 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), forwarding).await;
     }
     served
+}
+
+/// The log to standard output, or to the daily files of PACS_LOG_DIR.
+fn init_logging(settings: &pacs_server::Settings) -> anyhow::Result<()> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let (stdout, file) = match pacs_server::log_files(settings)? {
+        Some(files) => (
+            None,
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(files),
+            ),
+        ),
+        None => (Some(tracing_subscriber::fmt::layer()), None),
+    };
+    tracing_subscriber::registry()
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
+        )
+        .with(stdout)
+        .with(file)
+        // what is logged at ERROR, counted for the metrics
+        .with(pacs_server::metrics::CountErrors)
+        .try_init()?;
+    Ok(())
 }
