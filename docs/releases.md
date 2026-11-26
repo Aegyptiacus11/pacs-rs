@@ -46,6 +46,9 @@ there if one fails. Then it publishes, once every build has passed:
   `pacs-server` binary, no dependencies, and the [command-line tools](tools.md) beside it;
 - `pacs-rs-<version>-windows-amd64.zip`: `pacs-server.exe` and the tools, needing no Visual
   C++ runtime;
+- `pacs-rs-<version>-windows-amd64-setup.exe`: the [Windows installer](windows.md#with-the-installer)
+  (`packaging/windows`), first installed, upgraded and removed on the runner
+  (`scripts/windows-installer-test.ps1`);
 - the image `ghcr.io/aegyptiacus11/pacs-rs:<version>` for linux/amd64 and linux/arm64, and
   `:latest` for the highest release (a pre-release such as `v1.0.0-rc1` never gets it);
 - a GitHub release with those files and `SHA256SUMS`.
