@@ -182,6 +182,25 @@ mod windows {
         service.grant();
         let query = service.query().expect("installed");
         assert!(query.contains("STOPPED"), "{query}");
+        // restarted 10 s after a failure, a failed start included: the access a restart action
+        // needs was once missing, and the install failed on it
+        let failure = Command::new("sc.exe")
+            .args(["qfailure", &service.name])
+            .output()
+            .unwrap();
+        assert!(failure.status.success());
+        let failure = String::from_utf8_lossy(&failure.stdout);
+        assert_eq!(
+            failure.matches("RESTART -- Delay = 10000").count(),
+            3,
+            "{failure}"
+        );
+        let flag = Command::new("sc.exe")
+            .args(["qfailureflag", &service.name])
+            .output()
+            .unwrap();
+        assert!(flag.status.success());
+        assert!(String::from_utf8_lossy(&flag.stdout).contains("TRUE"));
         service.start();
         let since = Instant::now();
         while !pacs_server::healthy(address).await {

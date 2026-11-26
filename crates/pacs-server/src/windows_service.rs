@@ -93,26 +93,35 @@ fn install(settings: &Settings) -> anyhow::Result<()> {
         account_password: None,
     };
     let service = manager
-        .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::DELETE)
+        // START: a restart among the failure actions needs it (ChangeServiceConfig2W)
+        .create_service(
+            &info,
+            ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::DELETE,
+        )
         .with_context(|| format!("installing the service {name}"))?;
     let configured = (|| -> anyhow::Result<()> {
         service.set_description(
             "pacs-rs: a PACS, with DICOMweb, a REST API and DIMSE (https://github.com/Aegyptiacus11/pacs-rs)",
-        )?;
-        service.update_failure_actions(ServiceFailureActions {
-            reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 60 * 60)),
-            reboot_msg: None,
-            command: None,
-            actions: Some(vec![
-                ServiceAction {
-                    action_type: ServiceActionType::Restart,
-                    delay: Duration::from_secs(10),
-                };
-                3
-            ]),
-        })?;
+        )
+        .context("its description")?;
+        service
+            .update_failure_actions(ServiceFailureActions {
+                reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 60 * 60)),
+                reboot_msg: None,
+                command: None,
+                actions: Some(vec![
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(10),
+                    };
+                    3
+                ]),
+            })
+            .context("its restarts after a failure")?;
         // a start that fails on its settings counts too, not only a crash
-        service.set_failure_actions_on_non_crash_failures(true)?;
+        service
+            .set_failure_actions_on_non_crash_failures(true)
+            .context("its restarts after a failed start")?;
         Ok(())
     })();
     if let Err(error) = configured {
