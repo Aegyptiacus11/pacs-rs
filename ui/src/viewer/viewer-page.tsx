@@ -220,6 +220,14 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   // on a narrow screen the series list lies over the images, so it starts closed
   const [browser, setBrowser] = useState(() => !matchMedia("(max-width: 767px)").matches);
   const [tags, setTags] = useState(false);
+  const [lastTool, setLastTool] = useState<ToolName>(() => {
+    try {
+      return (localStorage.getItem("pacs-rs.measure") as ToolName | null) ?? "length";
+    } catch {
+      // storage refused (a private window): length, as on a first visit
+      return "length";
+    }
+  });
   const [tagQuery, setTagQuery] = useState("");
   const [help, setHelp] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -389,6 +397,17 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   const study = data.data?.study;
   const mpr = s?.mode === "mpr";
   const measuring = MEASURE.find((m) => m.tool === s?.tool);
+  const lastMeasure = MEASURE.find((m) => m.tool === lastTool) ?? MEASURE[0];
+  // the measurement button takes up the one chosen last, by button, menu or key
+  useEffect(() => {
+    if (!measuring || measuring.tool === lastTool) return;
+    setLastTool(measuring.tool);
+    try {
+      localStorage.setItem("pacs-rs.measure", measuring.tool);
+    } catch {
+      // storage refused (a private window): the choice lasts for this page only
+    }
+  }, [measuring, lastTool]);
   const shown = useMemo(() => new Set((s?.cells ?? []).map((c) => c.seriesId).filter(Boolean) as string[]), [s?.cells]);
   const rows = useMemo(() => (s?.meta ? tagRows(s.meta, tagQuery.toLowerCase()) : []), [s?.meta, tagQuery]);
 
@@ -442,18 +461,32 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
               onClick={() => v.useTool("magnify")}
             />
             <Sep />
-            {MEASURE.map((m) => (
-              <ToolBtn key={m.tool} label={m.short} tip={`${m.label}: ${m.hint}`} Icon={m.Icon} shortcut={m.key} active={s.tool === m.tool} onClick={() => v.useTool(m.tool)} />
-            ))}
-            <ToolBtn
-              label="Delete"
-              tip={s.selected ? "Remove the selected measurement" : "Click or tap a measurement to select it, then remove it here"}
-              Icon={Trash2}
-              shortcut="Del"
-              disabled={!s.selected}
-              onClick={deleteSelected}
-            />
-            <ToolBtn label="Clear" tip="Remove all measurements (they are saved with the study)" Icon={Eraser} shortcut="⇧ Del" onClick={clearMeasurements} />
+            {/* the measurements in one button: it takes up the last one chosen, its menu has them
+                all; each keeps its key. Selected ones are removed from the bar over the images. */}
+            <ToolMenu
+              label={lastMeasure.short}
+              menuLabel="Measurements"
+              tip={`${lastMeasure.label}: ${lastMeasure.hint}`}
+              Icon={lastMeasure.Icon}
+              shortcut={lastMeasure.key}
+              active={!!measuring}
+              onClick={() => v.useTool(lastMeasure.tool)}
+            >
+              <DropdownMenuLabel>Measurements</DropdownMenuLabel>
+              {MEASURE.map((m) => (
+                <DropdownMenuItem key={m.tool} onSelect={() => v.useTool(m.tool)} className={cn(s.tool === m.tool && "bg-selection-soft")}>
+                  <m.Icon /> {m.label}
+                  <DropdownMenuShortcut>{m.key}</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={!s.selected} onSelect={deleteSelected}>
+                <Trash2 /> Remove the selected <DropdownMenuShortcut>Del</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={clearMeasurements}>
+                <Eraser /> Remove all <DropdownMenuShortcut>⇧ Del</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            </ToolMenu>
             <Sep />
             <ToolMenu label="Rotate" menuLabel="Rotate and flip" tip="Rotate right 90°" Icon={RotateCw} shortcut="R" onClick={() => v.rotate(90)}>
               <DropdownMenuItem onSelect={() => v.rotate(90)}>
