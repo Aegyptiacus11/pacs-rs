@@ -24,6 +24,7 @@ import {
   cornerstoneStreamingImageVolumeLoader,
   setVolumesForViewports,
   cache,
+  imageLoader,
   type Types,
 } from "@cornerstonejs/core";
 import { init as loaderInit, wadors } from "@cornerstonejs/dicom-image-loader";
@@ -48,13 +49,15 @@ import {
   EllipticalROITool,
   RectangleROITool,
   annotation,
+  segmentation,
   Enums as ToolEnums,
   utilities as toolUtilities,
 } from "@cornerstonejs/tools";
-import { api, formatDate, formatTime, personName, sexAge, WEB } from "@/lib/api";
+import { api, formatDate, formatTime, HttpError, personName, sexAge, WEB } from "@/lib/api";
 import { first, num, tag } from "@/lib/pixels";
 import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
+import { contourCut, OverlayError, readOverlay, segOnImages, type Plane as ImagePlane, type Rgb, type Roi } from "@/viewer/segmentation";
 
 /** Cornerstone holds a quick click for 400 ms, in case a second one makes it a double click,
  * before it acts on it; what a tap began is there to be dropped after that. */
@@ -309,6 +312,10 @@ type Cell = {
   bar: HTMLDivElement;
   dot: HTMLDivElement;
   scale: HTMLDivElement;
+  /** a SEG's segments on the image of a stack viewport, a pixel of it an image pixel */
+  masks: HTMLCanvasElement;
+  /** an RTSTRUCT's contours, drawn over the image */
+  contours: SVGSVGElement;
   presetSelect: HTMLSelectElement;
   slabSelect: HTMLSelectElement;
   planeSelect: HTMLSelectElement;
@@ -328,6 +335,26 @@ type Cell = {
   failed: Set<string>;
   playing: boolean;
 };
+
+/** A segmentation laid over the series it was drawn on: a SEG's segments or an RTSTRUCT's
+ * regions, each shown or hidden. */
+type Overlay = {
+  seriesId: string;
+  kind: "SEG" | "RTSTRUCT";
+  label: string;
+  /** the series it is drawn on */
+  target: string;
+  visible: boolean;
+  items: { index: number; label: string; color: Rgb; visible: boolean }[];
+  /** SEG frames on images that are not in the series as stored here */
+  missed: number;
+  rois: Roi[];
+  /** a SEG's segment numbers on each image of its series, in the series' order */
+  maps: (Uint8Array | null)[];
+  /** whether Cornerstone has it as a labelmap, for MPR */
+  labelmap: boolean;
+};
+export type OverlayState = Omit<Overlay, "rois" | "target" | "maps" | "labelmap"> & { targetShown: boolean };
 
 export type CellState = { seriesId: string | null; studyId: string | null; kind: Cell["kind"]; orientation: Orientation | null };
 const planeOf = (c: Cell): Plane => (c.kind === "3d" ? "3d" : (c.orientation ?? "original"));
@@ -355,6 +382,9 @@ export type ViewerState = {
   /** why MPR can't run here, when it can't */
   mprBlocked: string | null;
   loadingVolume: boolean;
+  /** the segmentations laid over the images, and how opaque their fill is */
+  segmentations: OverlayState[];
+  fill: number;
 };
 
 /** VOI LUT Function LINEAR, as a data set gives it, taken out: it is the default when absent
@@ -381,6 +411,8 @@ export class Viewer {
   private referenceSource = "";
   private syncing = false;
   private overlaysOn = true;
+  private segs: Overlay[] = [];
+  private fill = 0.35;
   // with a finger there is no wheel: going through the images is the tool one starts with
   private tool: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
   private loadingVolume = false;
@@ -611,6 +643,8 @@ export class Viewer {
     this.closed = true;
     this.resize.disconnect();
     for (const cell of this.cells) this.dropCell(cell, false);
+    // Cornerstone keeps them for the page, not the viewer
+    for (const o of this.segs) if (o.labelmap) segmentation.removeSegmentation(o.seriesId);
     for (const g of [STACK_GROUP, MPR_GROUP, VR_GROUP]) ToolGroupManager.destroyToolGroup(g);
     this.engine.destroy();
   }
@@ -726,6 +760,8 @@ export class Viewer {
           ? "MPR needs a series of at least 8 slices"
           : null,
       loadingVolume: this.loadingVolume,
+      segmentations: this.segs.map(({ seriesId, kind, label, visible, items, missed, target }) => ({ seriesId, kind, label, visible, items, missed, targetShown: this.cells.some((c) => c.data?.series.ID === target) })),
+      fill: this.fill,
     });
   }
 
@@ -803,7 +839,11 @@ export class Viewer {
     wrap.tabIndex = 0;
     if (orientation) wrap.dataset.plane = orientation;
     if (kind === "3d") wrap.dataset.kind = "3d";
-    wrap.append(element, bar, ...Object.values(ov), scale, note, menus);
+    const contours = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    contours.setAttribute("class", "cell-contours");
+    contours.setAttribute("aria-hidden", "true");
+    const masks = Object.assign(document.createElement("canvas"), { className: "cell-masks" });
+    wrap.append(element, masks, contours, bar, ...Object.values(ov), scale, note, menus);
     if (group !== "mpr") menus.append(remove);
     this.grid.insertBefore(wrap, before ?? null);
     const id = `vp${++this.cellIds}-${kind}${orientation ? `-${orientation}` : ""}`;
@@ -819,7 +859,7 @@ export class Viewer {
     });
     this.groupOf({ group }).addViewport(id, ENGINE);
     const cell: Cell = {
-      i, id, kind, orientation, group, element, wrap, ov, note, bar, dot: dotEl, scale, presetSelect, slabSelect, planeSelect,
+      i, id, kind, orientation, group, element, wrap, ov, note, bar, dot: dotEl, scale, masks, contours, presetSelect, slabSelect, planeSelect,
       viewport: this.engine.getViewport(id),
       seriesId: null, data: null, index: 0, count: 0, preset: 0, slab: 0, invert: false, rotation: 0, fitZoom: null, failed: new Set(), playing: false,
     };
@@ -977,6 +1017,8 @@ export class Viewer {
 
   private dropCell(cell: Cell, remove = true) {
     if (cell.playing) this.cine(false, cell);
+    // the segmentations laid on it (none taken away from a viewport that had none)
+    segmentation.removeSegmentationRepresentations(cell.id, {}, true);
     try {
       toolUtilities.stackPrefetch.disable(cell.element);
     } catch {}
@@ -1021,6 +1063,7 @@ export class Viewer {
     this.measureFit(cell);
     this.checkDrawn(cell);
     toolUtilities.stackPrefetch.enable(cell.element);
+    await this.attachSegmentations(cell);
     this.overlays(cell);
     this.emit();
   }
@@ -1081,6 +1124,8 @@ export class Viewer {
     if (cell.kind === "3d") cell.scale.innerHTML = "";
     else this.drawScale(cell);
     cell.note.textContent = cell.kind === "stack" && cell.failed.has(slot.imageId) ? "This image could not be decoded" : "";
+    this.drawMasks(cell);
+    this.drawContours(cell);
   }
 
   // a ruler along the right edge, as on film: the longest round length that fits in 40% of
@@ -1276,6 +1321,247 @@ export class Viewer {
     if (next) return this.show(cell, next);
   }
 
+  // ---- segmentations: SEG and RTSTRUCT laid over their series ----
+
+  /** The plane an image lies in, from its metadata; null when it does not say. */
+  private planeOf(meta: any): ImagePlane | null {
+    const origin = tag(meta, "00200032")?.map(Number), cosines = tag(meta, "00200037")?.map(Number), spacing = tag(meta, "00280030")?.map(Number);
+    if (origin?.length !== 3 || cosines?.length !== 6 || spacing?.length !== 2) return null;
+    const row = cosines.slice(0, 3), column = cosines.slice(3);
+    return { origin, row, column, spacing: [spacing[0], spacing[1]], normal: cross(row, column), rows: num(meta, "00280010", 0), columns: num(meta, "00280011", 0) };
+  }
+
+  /**
+   * Lays a SEG or RTSTRUCT series over the series it was drawn on: shown in the active
+   * viewport first if no viewport shows it. Resolves to null, or to why it could not.
+   */
+  async addSegmentation(id: string): Promise<string | null> {
+    const known = this.segs.find((o) => o.seriesId === id);
+    if (known) {
+      this.setSegmentationVisible(id, true);
+      return null;
+    }
+    try {
+      const { study, series } = await this.resolve(id);
+      const kind = series.MainDicomTags.Modality;
+      if (kind !== "SEG" && kind !== "RTSTRUCT") return `a ${kind || "series"} is not a segmentation`;
+      const [instance] = await api<any[]>(`series/${id}/instances`);
+      if (!instance) return "this series has no file";
+      const response: Response = await api(`instances/${instance.ID}/file`);
+      const overlay = readOverlay(await response.arrayBuffer());
+      // the series it names, as this archive has it
+      const list = await api<any[]>(`studies/${study.ID}/series`);
+      const target = list.find((s) => overlay.referencedSeries.includes(s.MainDicomTags.SeriesInstanceUID));
+      if (!target) return "the series it was drawn on is not in this study";
+      const data = await this.loadSeries(target.ID);
+      const entry: Overlay = {
+        seriesId: id,
+        kind: overlay.kind,
+        label: series.MainDicomTags.SeriesDescription || (overlay.kind === "SEG" ? "Segmentation" : overlay.label || "Structure set"),
+        target: target.ID,
+        visible: true,
+        items: [],
+        missed: 0,
+        rois: [],
+        maps: [],
+        labelmap: false,
+      };
+      if (overlay.kind === "SEG") {
+        const { maps, missed } = segOnImages(
+          overlay,
+          data.slots.map((s) => ({ sop: s.instance.MainDicomTags.SOPInstanceUID, frame: s.frame, plane: this.planeOf(s.meta) })),
+        );
+        if (maps.every((m) => !m)) return "none of its frames lies on an image of the series";
+        entry.maps = maps;
+        // a color for each segment number, transparent where there is none: for MPR
+        const lut: Types.ColorLUT = Array.from({ length: 256 }, () => [0, 0, 0, 0]);
+        for (const sg of overlay.segments) if (sg.number > 0 && sg.number < 256) lut[sg.number] = [...sg.color, 255];
+        this.luts.set(id, segmentation.config.color.addColorLUT(lut));
+        entry.items = overlay.segments.map((sg) => ({ index: sg.number, label: sg.label, color: sg.color, visible: true }));
+        entry.missed = missed;
+      } else {
+        entry.rois = overlay.rois.filter((r) => r.contours.length);
+        if (!entry.rois.length) return "it has no contour";
+        entry.items = entry.rois.map((r) => ({ index: r.number, label: r.name, color: r.color, visible: true }));
+      }
+      this.segs.push(entry);
+      if (!this.cells.some((c) => c.data?.series.ID === target.ID)) {
+        if (this.mode === "mpr") await this.exitMpr();
+        await this.show(this.active(), target.ID);
+      } else for (const cell of this.cells) await this.attachSegmentations(cell);
+      this.emit();
+      return null;
+    } catch (e) {
+      // what a person can act on: the file, or the server; anything else is a bug and goes on
+      if (e instanceof OverlayError || e instanceof HttpError) return e.message;
+      throw e;
+    }
+  }
+
+  private luts = new Map<string, number>();
+
+  /** A SEG as Cornerstone's labelmap, made once: what MPR views show it with. */
+  private labelmapOf(o: Overlay, data: Loaded) {
+    if (o.labelmap) return;
+    const images = imageLoader.createAndCacheDerivedLabelmapImages(data.slots.map((s) => s.imageId));
+    images.forEach((image, i) => {
+      const map = o.maps[i];
+      if (map) (image.voxelManager?.getScalarData() ?? image.getPixelData()).set(map);
+    });
+    segmentation.addSegmentations([
+      {
+        segmentationId: o.seriesId,
+        representation: { type: ToolEnums.SegmentationRepresentations.Labelmap, data: { imageIds: images.map((im) => im.imageId) } },
+        config: { label: o.label, segments: Object.fromEntries(o.items.map((it) => [it.index, { segmentIndex: it.index, label: it.label }])) },
+      },
+    ]);
+    o.labelmap = true;
+  }
+
+  /** The SEGs and RTSTRUCTs drawn on the series a viewport shows, laid on it: a stack
+   * viewport draws them itself (on the CPU as on the GPU), an MPR view through Cornerstone's
+   * labelmap. */
+  private async attachSegmentations(cell: Cell) {
+    const id = cell.data?.series.ID;
+    this.drawMasks(cell);
+    this.drawContours(cell);
+    if (!id || cell.kind !== "mpr") return;
+    for (const o of this.segs) {
+      if (o.kind !== "SEG" || o.target !== id) continue;
+      this.labelmapOf(o, cell.data!);
+      const type = ToolEnums.SegmentationRepresentations.Labelmap;
+      if (!segmentation.state.getSegmentationRepresentations(cell.id, { segmentationId: o.seriesId }).length)
+        await segmentation.addLabelmapRepresentationToViewport(cell.id, [{ segmentationId: o.seriesId, config: { colorLUTOrIndex: this.luts.get(o.seriesId) } }]);
+      segmentation.config.visibility.setSegmentationRepresentationVisibility(cell.id, { segmentationId: o.seriesId, type }, o.visible);
+      for (const item of o.items) segmentation.config.visibility.setSegmentIndexVisibility(cell.id, { segmentationId: o.seriesId, type }, item.index, item.visible);
+    }
+  }
+
+  /** The SEG masks on a stack viewport's image: filled, their edges solid, laid exactly over
+   * the image's pixels whatever the zoom, pan, rotation or flip (a CSS transform from three of
+   * its corners as the viewport places them). */
+  private drawMasks(cell: Cell) {
+    const canvas = cell.masks;
+    const data = cell.data;
+    const slot = data?.slots[cell.index];
+    const shown = cell.kind === "stack" && slot ? this.segs.filter((o) => o.kind === "SEG" && o.visible && o.target === data!.series.ID && o.maps[cell.index]) : [];
+    const plane = shown.length ? this.planeOf(slot!.meta) : null;
+    if (!plane) {
+      canvas.hidden = true;
+      return;
+    }
+    const { rows, columns } = plane;
+    if (canvas.width !== columns || canvas.height !== rows) Object.assign(canvas, { width: columns, height: rows });
+    const out = new ImageData(columns, rows);
+    const fill = Math.round(this.fill * 255);
+    for (const o of shown) {
+      const map = o.maps[cell.index]!;
+      const color = new Map(o.items.filter((it) => it.visible).map((it) => [it.index, it.color]));
+      for (let y = 0, p = 0; y < rows; y++)
+        for (let x = 0; x < columns; x++, p++) {
+          const v = map[p];
+          const c = v && color.get(v);
+          if (!c) continue;
+          // an edge: a neighbour outside the segment, or the image's border
+          const edge = x === 0 || y === 0 || x === columns - 1 || y === rows - 1 || map[p - 1] !== v || map[p + 1] !== v || map[p - columns] !== v || map[p + columns] !== v;
+          const q = p * 4;
+          out.data[q] = c[0];
+          out.data[q + 1] = c[1];
+          out.data[q + 2] = c[2];
+          out.data[q + 3] = edge ? 255 : fill;
+        }
+    }
+    canvas.getContext("2d")!.putImageData(out, 0, 0);
+    // image pixel (u, v), its corner, in the patient, then on the screen
+    const at = (u: number, v: number) => {
+      const w = [0, 1, 2].map((k) => plane.origin[k] + (u - 0.5) * plane.spacing[1] * plane.row[k] + (v - 0.5) * plane.spacing[0] * plane.column[k]);
+      return (cell.viewport as any).worldToCanvas(w) as number[];
+    };
+    const [a, b, c] = [at(0, 0), at(columns, 0), at(0, rows)];
+    canvas.style.transform = `matrix(${(b[0] - a[0]) / columns}, ${(b[1] - a[1]) / columns}, ${(c[0] - a[0]) / rows}, ${(c[1] - a[1]) / rows}, ${a[0]}, ${a[1]})`;
+    canvas.hidden = false;
+  }
+
+  /** The contours of the RTSTRUCTs drawn on the series a viewport shows, where its plane cuts
+   * them: whole on their own slice, as lines across them in another plane. */
+  private drawContours(cell: Cell) {
+    const svg = cell.contours;
+    const id = cell.data?.series.ID;
+    const shown = this.segs.filter((o) => o.kind === "RTSTRUCT" && o.visible && o.target === id);
+    if (!shown.length || cell.kind === "3d") {
+      if (svg.childElementCount) svg.replaceChildren();
+      return;
+    }
+    const viewport = cell.viewport as any;
+    const camera = viewport.getCamera();
+    const normal = camera.viewPlaneNormal as number[];
+    const slot = cell.data!.slots[cell.kind === "stack" ? cell.index : 0];
+    // a contour belongs to the slice it lies within: half the slice thickness either way
+    const thickness = cell.kind === "stack" ? num(slot?.meta, "00180050", 1) || 1 : Math.max(1, SLABS[cell.slab].mm || num(slot?.meta, "00180050", 1));
+    const point = cell.kind === "stack" ? (tag(slot.meta, "00200032")?.map(Number) ?? camera.focalPoint) : camera.focalPoint;
+    const at = (p: number[]) => viewport.worldToCanvas(p).map((v: number) => v.toFixed(1)).join(",");
+    const parts: string[] = [];
+    for (const o of shown)
+      for (const roi of o.rois) {
+        const item = o.items.find((it) => it.index === roi.number);
+        if (!item?.visible) continue;
+        const color = `rgb(${roi.color.join(",")})`;
+        for (const contour of roi.contours) {
+          const { polygon, segments } = contourCut(contour, point, normal, thickness);
+          if (polygon) parts.push(`<${contour.closed ? "polygon" : "polyline"} points="${polygon.map(at).join(" ")}" stroke="${color}" fill="${contour.closed ? color : "none"}" fill-opacity="${(this.fill / 3).toFixed(2)}"/>`);
+          for (const [a, b] of segments) parts.push(`<polyline points="${at(a)} ${at(b)}" stroke="${color}" fill="none"/>`);
+        }
+      }
+    svg.innerHTML = parts.join("");
+  }
+
+  setSegmentationVisible(id: string, visible: boolean, index?: number) {
+    const o = this.segs.find((x) => x.seriesId === id);
+    if (!o) return;
+    if (index === undefined) o.visible = visible;
+    else for (const item of o.items) if (item.index === index) item.visible = visible;
+    for (const cell of this.cells) {
+      if (cell.data?.series.ID !== o.target) continue;
+      if (o.kind === "SEG" && cell.kind === "mpr" && o.labelmap) {
+        const spec = { segmentationId: id, type: ToolEnums.SegmentationRepresentations.Labelmap };
+        if (index === undefined) segmentation.config.visibility.setSegmentationRepresentationVisibility(cell.id, spec, visible);
+        else segmentation.config.visibility.setSegmentIndexVisibility(cell.id, spec, index, visible);
+      }
+      this.drawMasks(cell);
+      this.drawContours(cell);
+    }
+    this.engine.render();
+    this.emit();
+  }
+
+  /** How opaque segments are filled, 0 to 1; outlines stay. */
+  setFill(fill: number) {
+    this.fill = Math.min(1, Math.max(0, fill));
+    segmentation.config.style.setStyle({ type: ToolEnums.SegmentationRepresentations.Labelmap }, { fillAlpha: this.fill, fillAlphaInactive: this.fill, renderOutline: true, outlineWidth: 1 });
+    for (const cell of this.cells) {
+      this.drawMasks(cell);
+      this.drawContours(cell);
+    }
+    this.engine.render();
+    this.emit();
+  }
+
+  removeSegmentation(id: string) {
+    const o = this.segs.find((x) => x.seriesId === id);
+    if (!o) return;
+    this.segs = this.segs.filter((x) => x !== o);
+    if (o.labelmap) {
+      for (const cell of this.cells) segmentation.removeSegmentationRepresentations(cell.id, { segmentationId: id }, true);
+      segmentation.removeSegmentation(id);
+    }
+    for (const cell of this.cells) {
+      this.drawMasks(cell);
+      this.drawContours(cell);
+    }
+    this.engine.render();
+    this.emit();
+  }
+
   // ---- MPR ----
 
   /** The series as a volume, made and loading once. */
@@ -1420,6 +1706,7 @@ export class Viewer {
     this.tool = "crosshairs";
     this.grid.dataset.tool = "crosshairs";
     this.loadingVolume = false;
+    for (const cell of this.cells) await this.attachSegmentations(cell);
     this.engine.render();
     this.refit();
     this.emit();
