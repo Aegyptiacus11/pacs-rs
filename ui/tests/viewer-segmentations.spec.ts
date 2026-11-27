@@ -121,3 +121,29 @@ test("a segmentation file the server refuses says so", async ({ page, pacs }) =>
   await expect(page.getByText("The segmentation could not be shown")).toBeVisible();
   await expect(page.getByText("the file is missing from storage")).toBeVisible();
 });
+
+test("a study's PDF is read from the series list, and never hung in a viewport", async ({ page, pacs }) => {
+  // "All series" hangs every series of the study, one a viewport: the document, the SEG and
+  // the RTSTRUCT were hung too, each a viewport saying it has no images
+  // the study's series as recorded, with a document numbered before them all
+  const STUDY = "9fe34720-0aef8f74-788ae8a7-74ce28b1-45495d68";
+  const har = JSON.parse(readFileSync(HAR, "utf8"));
+  const entry = har.log.entries.find((e: any) => e.request.url.endsWith(`/studies/${STUDY}/series`));
+  const doc = { ID: "doc-series", ParentStudy: STUDY, Instances: ["doc-instance"], MainDicomTags: { Modality: "DOC", SeriesNumber: "0", SeriesDescription: "KiTS19 data paper" } };
+  await page.route(`**/studies/${STUDY}/series`, (route) => route.fulfill({ json: [doc, ...JSON.parse(entry.response.content.text)] }));
+  const pdf = readFileSync(path.resolve(import.meta.dirname, "../../crates/pacs-core/tests/data/documents/kits19.pdf"));
+  pacs.on("GET", "/instances/doc-instance/pdf", () => ({ body: pdf as any, headers: { "content-type": "application/pdf" } }));
+  await page.goto(`#/view/${STUDY}`);
+  // the CT is hung, not the document numbered first
+  await expect(page.locator(".ov-tl").first()).toContainText("Recon 2: +C");
+  await page.getByRole("button", { name: /KiTS19 data paper/ }).click();
+  await expect(page.getByRole("dialog", { name: "KiTS19 data paper" }).locator("iframe")).toHaveAttribute("src", "http://pacs.test/instances/doc-instance/pdf");
+  // the viewport still shows the CT
+  await expect(page.locator(".ov-tl").first()).toContainText("Recon 2: +C");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Hanging protocols" }).click();
+  await page.getByRole("menuitem", { name: /All series/ }).click();
+  await expect(page.locator(".ov-tl").first()).toContainText("Recon 2: +C");
+  await expect(page.locator(".cell")).toHaveCount(1);
+  await expect(page.getByText("This series has no images")).toHaveCount(0);
+});
