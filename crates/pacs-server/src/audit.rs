@@ -808,6 +808,8 @@ impl Observer {
                 )
             }
             Subject::Deleted(..) => (Action::Delete, asked.doomed.clone()),
+            // the account saw the patient whole, or the request was refused
+            Subject::Modified(..) => (Action::Update, asked.doomed.clone()),
             // nothing here names a study of this archive
             Subject::Search
             | Subject::Stores
@@ -1002,6 +1004,27 @@ impl Observer {
                     ));
                 }
             }
+            Subject::Modified(..) => {
+                // the studies as they were, under the patient before, and as they are now,
+                // under the patient after: both identities are in the trail
+                let before: Vec<_> = asked.doomed.iter().map(|s| described(s, false)).collect();
+                let mut after = Vec::new();
+                for study in &asked.doomed {
+                    if let Some(now) = self.index.audited_study(&study.study_instance_uid).await? {
+                        after.push(described(&now, false));
+                    }
+                }
+                for group in by_patient(before).into_iter().chain(by_patient(after)) {
+                    self.audit.record(events::instances_accessed(
+                        &trail.source,
+                        now,
+                        Action::Update,
+                        ok,
+                        vec![who.clone()],
+                        &group,
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -1054,10 +1077,15 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
         request
     };
 
-    // A deletion takes what it deletes with it: whose it was is read first.
+    // A deletion takes what it deletes with it, a modification changes whose it is: whose it
+    // was is read first.
     let doomed = match &subject {
-        Some(Subject::Deleted(level, id)) => {
-            match observer.index.audited_by_public_id(*level, id).await {
+        Some(Subject::Deleted(_, id) | Subject::Modified(id)) => {
+            let level = match &subject {
+                Some(Subject::Deleted(level, _)) => *level,
+                _ => Level::Patient,
+            };
+            match observer.index.audited_by_public_id(level, id).await {
                 Ok(studies) => studies,
                 Err(error) => {
                     tracing::error!(%error, "the audit trail could not read what is being deleted");
