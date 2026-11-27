@@ -91,7 +91,8 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Viewer**: full screen and dark, laid out like a reading workstation. A toolbar of labelled
   tools: window/level with presets and invert, scroll (a drag through the images; the wheel always does), pan, zoom, a magnifying glass (held over a spot, 1.5 to 8 times with the wheel), measurements
   in one button that takes up the last one chosen, its menu holding them all (length, angle,
-  Cobb angle, bidirectional, elliptical and rectangle ROI, pixel value, each with its key) and
+  Cobb angle, bidirectional, elliptical and rectangle ROI, pixel value, an arrow with a label
+  asked as it is drawn, each with its key) and
   the removal of the selected ones or all, rotate
   and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
   series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), reference
@@ -110,7 +111,7 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   also renders without it ("Software rendering" under Views, turned on by itself when a
   browser's WebGL draws blank). Keys follow the names: W window, P pan, Z zoom, M magnifier,
   L length, A angle, C Cobb, B bidirectional, E ellipse, ⇧E rectangle, D pixel value (density),
-  R rotate (⇧R left), H and V flip, I invert, 0 reset, N new view, X 3 planes, S sync; `?`
+  ⇧A arrow, K key image, R rotate (⇧R left), H and V flip, I invert, 0 reset, N new view, X 3 planes, S sync; `?`
   lists them all.
 - **Hanging protocols**: a study opens as the best protocol that fits it lays it out: the
   current study beside its latest prior (the prior's most similar series, scrolling linked),
@@ -120,6 +121,14 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   it serves every matching study. Saved protocols are kept by the server, in the index, so
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
+- **Key images**: K (or Key) marks the image shown as a key image, and K again takes a mark
+  off until it is saved; a star says so in the corner. The Key images panel lists the study's,
+  each shown with a click, and Save (a role with `write`) makes the new ones a Key Object
+  Selection of the study, with what they show if it is typed: the standard object other PACS
+  and viewers read as key images ([REST API](rest-api.md)). Those of the study's Key Object
+  Selections, from pacs-rs or not, are read when it opens; its key image series opens the
+  panel. A saved key image is taken off by deleting its series. Arrows are kept with the
+  measurements, not in the Key Object Selection: as such they are the viewer's own.
 - **PDF documents**: a report, a scanned request or any PDF joins a study from its ⋯ menu,
   Attach PDF… (a role with `write`): the server makes it an Encapsulated PDF instance of the
   study, in a series of its own titled by the file's name ([REST API](rest-api.md)). A file
