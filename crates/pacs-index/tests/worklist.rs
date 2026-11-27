@@ -4,7 +4,9 @@ use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
 use pacs_core::Instance;
 use pacs_core::public_ids;
 use pacs_core::real::RealSeries;
-use pacs_index::{Index, NewInstance, PatientQuery, PatientSort, WorklistQuery, WorklistSort};
+use pacs_index::{
+    Index, Level, NewInstance, PatientQuery, PatientSort, WorklistQuery, WorklistSort,
+};
 
 /// A one-slice study of its own patient: this date, description, sex and modality.
 async fn study(index: &Index, seed: u32, date: &str, description: &str, sex: &str, modality: &str) {
@@ -283,5 +285,85 @@ async fn patients_come_a_page_at_a_time_with_their_totals() {
         };
         let (found, total) = index.worklist_patients(&q).await.unwrap();
         assert_eq!((found.len(), total), (1, 1));
+    }
+}
+
+#[tokio::test]
+async fn labels_show_on_their_studies_filter_the_list_and_are_counted() {
+    for index in common::indexes().await {
+        study(&index, 95, "20260110", "CT CHEST", "F", "CT").await;
+        study(&index, 96, "20260220", "MR LIVER", "M", "MR").await;
+        study(&index, 97, "20260305", "XR HAND", "F", "CR").await;
+        let (page, _) = index.worklist(&all()).await.unwrap();
+        let id = |d: &str| {
+            page.iter()
+                .find(|s| s.main_tags["StudyDescription"] == d)
+                .unwrap()
+                .public_id
+                .clone()
+        };
+        let (liver, chest) = (id("MR LIVER"), id("CT CHEST"));
+        for (study, label) in [
+            (&liver, "teaching"),
+            (&liver, "follow-up"),
+            (&chest, "teaching"),
+        ] {
+            index.add_label(Level::Study, study, label).await.unwrap();
+        }
+        // a patient's label is not a study's
+        index
+            .add_label(Level::Patient, &page[0].patient_public_id, "vip")
+            .await
+            .unwrap();
+
+        let (page, _) = index.worklist(&all()).await.unwrap();
+        let labels: Vec<_> = page.iter().map(|s| s.labels.clone()).collect();
+        assert_eq!(
+            labels,
+            [
+                vec![],
+                vec!["follow-up".to_owned(), "teaching".to_owned()],
+                vec!["teaching".to_owned()]
+            ]
+        );
+        // any of the labels asked
+        let q = |labels: &[&str]| WorklistQuery {
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+            ..all()
+        };
+        assert_eq!(
+            descriptions(&index.worklist(&q(&["teaching"])).await.unwrap().0),
+            ["MR LIVER", "CT CHEST"]
+        );
+        assert_eq!(
+            descriptions(
+                &index
+                    .worklist(&q(&["follow-up", "nothing"]))
+                    .await
+                    .unwrap()
+                    .0
+            ),
+            ["MR LIVER"]
+        );
+        assert_eq!(index.worklist(&q(&["vip"])).await.unwrap().1, 0);
+        assert_eq!(
+            index
+                .worklist_summary(&q(&["teaching"]))
+                .await
+                .unwrap()
+                .studies,
+            2
+        );
+
+        let facets = index.worklist_facets(None).await.unwrap();
+        assert_eq!(
+            facets.labels,
+            [("follow-up".to_owned(), 1), ("teaching".to_owned(), 2)]
+        );
+        let facets = index
+            .worklist_facets(Some(&page[2].patient_public_id))
+            .await
+            .unwrap();
+        assert_eq!(facets.labels, [("teaching".to_owned(), 1)]);
     }
 }

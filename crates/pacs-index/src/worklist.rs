@@ -26,6 +26,8 @@ pub struct WorklistQuery {
     /// The patient's age at the study, in whole years: any of these ranges, both ends
     /// included, either open; empty for any. Studies without both dates match none.
     pub ages: Vec<(Option<i64>, Option<i64>)>,
+    /// Studies with any of these labels; empty for any.
+    pub labels: Vec<String>,
     /// One patient's studies, by the patient's public ID.
     pub patient: Option<String>,
     pub sort: WorklistSort,
@@ -60,6 +62,8 @@ pub struct WorklistStudy {
     pub instances: i64,
     /// When its latest instance arrived, epoch ms.
     pub last_ms: Option<i64>,
+    /// Its labels, sorted.
+    pub labels: Vec<String>,
 }
 
 /// What the whole filtered list holds.
@@ -75,13 +79,14 @@ pub struct WorklistSummary {
 
 /// The choices the filters offer, with how many studies each has, over every study (or one
 /// patient's): modalities, sexes (as in [`WorklistQuery::sexes`]), study dates and the
-/// patients' ages at the study (whole years, as text).
+/// patients' ages at the study (whole years, as text) and the studies' labels.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WorklistFacets {
     pub modalities: Vec<(String, i64)>,
     pub sexes: Vec<(String, i64)>,
     pub dates: Vec<(String, i64)>,
     pub ages: Vec<(String, i64)>,
+    pub labels: Vec<(String, i64)>,
 }
 
 pub(crate) enum Arg {
@@ -220,6 +225,14 @@ impl Index {
                 list.join(", ")
             ));
         }
+        if !query.labels.is_empty() {
+            let list: Vec<String> = query.labels.iter().map(|l| sql.text(l)).collect();
+            and.push(format!(
+                "EXISTS (SELECT 1 FROM labels l WHERE l.public_id = st.public_id
+                           AND l.label IN ({}))",
+                list.join(", ")
+            ));
+        }
         if !query.sexes.is_empty() {
             let list: Vec<String> = query.sexes.iter().map(|s| sql.text(s)).collect();
             let known = "('F', 'M')";
@@ -325,13 +338,18 @@ impl Index {
               LIMIT {limit} OFFSET {offset}",
             modalities = self.modalities_of_study(),
         );
-        let studies = sql
+        let mut studies: Vec<WorklistStudy> = sql
             .query()
             .fetch_all(&self.pool)
             .await?
             .into_iter()
             .map(worklist_study)
             .collect::<Result<_, _>>()?;
+        let ids: Vec<String> = studies.iter().map(|s| s.public_id.clone()).collect();
+        let mut labels = self.labels_of(&ids).await?;
+        for study in &mut studies {
+            study.labels = labels.remove(&study.public_id).unwrap_or_default();
+        }
         Ok((studies, total))
     }
 
@@ -414,7 +432,15 @@ impl Index {
               WHERE a.age IS NOT NULL GROUP BY a.age ORDER BY a.age",
             age = self.age()
         );
+        let mut labels = Sql::default();
+        let filter = scope(&mut labels);
+        labels.text = format!(
+            "SELECT l.label AS value, count(*) AS n
+               FROM labels l JOIN studies st ON st.public_id = l.public_id
+              WHERE {filter} GROUP BY l.label ORDER BY l.label"
+        );
         Ok(WorklistFacets {
+            labels: counts(labels.query().fetch_all(&self.pool).await?)?,
             modalities: counts(modalities.query().fetch_all(&self.pool).await?)?,
             sexes: counts(sexes.query().fetch_all(&self.pool).await?)?,
             dates: counts(dates.query().fetch_all(&self.pool).await?)?,
@@ -443,6 +469,7 @@ fn worklist_study(row: AnyRow) -> Result<WorklistStudy, Error> {
         series: row.try_get("series_count")?,
         instances: row.try_get("instance_count")?,
         last_ms: row.try_get("last_ms")?,
+        labels: Vec::new(),
     })
 }
 
