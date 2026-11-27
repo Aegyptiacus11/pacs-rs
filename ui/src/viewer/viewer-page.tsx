@@ -47,6 +47,7 @@ import {
   Trash2,
   ScanLine,
   Shapes,
+  Star,
   MoveUpRight,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -78,6 +79,7 @@ import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, renderingMode, setRenderingMode, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
 import { isSegmentation, StudyBrowser, type Registry } from "@/viewer/study-browser";
 import { SegmentsPanel } from "@/viewer/segments-panel";
+import { KeyImagesPanel } from "@/viewer/key-images-panel";
 import { PdfDialog, type OpenDocument } from "@/components/pdf-dialog";
 import { isDocument } from "@/lib/documents";
 import { autoApply, fetchUserProtocols, plans, studyContext, type Plan, type Protocol, type StudyContext } from "@/viewer/hanging";
@@ -117,6 +119,7 @@ const SHORTCUTS: [string, string][] = [
   ["X", "3 planes (axial, sagittal, coronal) on or off"],
   ["S", "Sync: scroll the viewports together"],
   ["G", "Reference lines: where the active image cuts the other viewports"],
+  ["K", "Mark the image as a key image, or unmark one not saved yet"],
   ["Space", "Play or stop"],
   ["O", "Show or hide the text on the images"],
   ["T", "DICOM tags"],
@@ -227,6 +230,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   const [browser, setBrowser] = useState(() => !matchMedia("(max-width: 767px)").matches);
   const [tags, setTags] = useState(false);
   const [segments, setSegments] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
   // the arrow's label being asked: what it was, and where the answer goes
   const [asking, setAsking] = useState<{ text: string; done: (text: string | null) => void } | null>(null);
   const [reading, setReading] = useState<OpenDocument | null>(null);
@@ -266,6 +270,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
     const v = new Viewer(grid.current, setState, resolve);
     viewer.current = v;
     v.onSaveFailed = (message) => toast.error("Measurements are not being saved", { description: message });
+    v.onKeysFailed = (message) => toast.error("The study's key images could not be read", { description: message });
     v.askText = (text) => new Promise((done) => setAsking({ text, done }));
     v.onBlank = (message) => {
       toast(message, { duration: 6000 });
@@ -364,6 +369,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         v.cine();
       } else if (e.key === "s") v.setLinked(!state?.linked);
       else if (e.key === "g") v.setReferenceLines(!state?.referenceLines);
+      else if (e.key === "k") markKey();
       else if (e.key === "o") v.setOverlays(!state?.overlays);
       else if (e.key === "t") setTags((x) => !x);
       else if (e.key === "f") toggleFullscreen();
@@ -394,6 +400,12 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         duration: 8000,
       });
   }
+  function markKey() {
+    const why = viewer.current?.toggleKey();
+    if (why) toast(why);
+    else setKeysOpen(true);
+  }
+
   function deleteSelected() {
     const removed = viewer.current?.removeSelected() ?? [];
     if (removed.length)
@@ -619,6 +631,10 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
                 onClick={() => v.setReferenceLines(!s.referenceLines)}
               />
             )}
+            <ToolBtn label="Key" tip="Mark this image as a key image" Icon={Star} shortcut="K" active={!!s.key} onClick={markKey} />
+            {s.keys.length > 0 && (
+              <ToolBtn label={`${s.keys.length} key`} tip="The study's key images" Icon={Star} active={keysOpen} onClick={() => setKeysOpen(!keysOpen)} />
+            )}
             {s.segmentations.length > 0 && (
               <ToolBtn label="Segments" tip="The segmentations laid over the images" Icon={Shapes} active={segments} onClick={() => setSegments(!segments)} />
             )}
@@ -681,6 +697,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
             active={activeCell?.seriesId ?? null}
             onPick={(id) => {
               const known = registry.get(id);
+              if (known?.series.MainDicomTags.Modality === "KO") return setKeysOpen(true);
               if (isDocument(known?.series)) {
                 const first = known!.series.Instances?.[0];
                 if (first) setReading({ instance: first, title: known!.series.MainDicomTags.SeriesDescription || "PDF document" });
@@ -700,6 +717,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         )}
         <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
         <PdfDialog document={reading} onClose={() => setReading(null)} />
+        {keysOpen && v && !!s?.keys.length && <KeyImagesPanel viewer={v} keys={s.keys} onClose={() => setKeysOpen(false)} />}
         <ArrowLabel asking={asking} onDone={(text) => {
           asking?.done(text);
           setAsking(null);
