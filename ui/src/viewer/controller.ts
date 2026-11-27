@@ -354,6 +354,15 @@ export type ViewerState = {
   loadingVolume: boolean;
 };
 
+/** VOI LUT Function LINEAR, as a data set gives it, taken out: it is the default when absent
+ * (PS3.3 C.11.2.1.3.2), and dicom-image-loader 5.14 reads the value as a list and keeps its
+ * first character, "L", which no window then applies to (fixed upstream in 5.22). An image
+ * that names LINEAR, as Philips MR images do, was drawn with no window at all. */
+export function linearByDefault(meta: any) {
+  const fn = meta?.["00281056"]?.Value;
+  if (Array.isArray(fn) && fn.length === 1 && String(fn[0]).trim() === "LINEAR") delete meta["00281056"];
+}
+
 export class Viewer {
   private engine: RenderingEngine;
   private stackGroup: NonNullable<ReturnType<typeof ToolGroupManager.createToolGroup>>;
@@ -701,6 +710,7 @@ export class Viewer {
           this.loadAnnotations(study.MainDicomTags.StudyInstanceUID);
           const base = new URL(`studies/${study.MainDicomTags.StudyInstanceUID}/series/${series.MainDicomTags.SeriesInstanceUID}/`, WEB);
           const [instances, metadata] = await Promise.all([api<any[]>(`series/${id}/instances`), api<any[]>("metadata", {}, base)]);
+          metadata.forEach(linearByDefault);
           const byUid = new Map(metadata.map((m) => [first(m, "00080018"), m]));
           const slots: Slot[] = [];
           for (const instance of instances) {
