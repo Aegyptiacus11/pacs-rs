@@ -102,6 +102,28 @@ Archive of IHE Scheduled Workflow.b ([the plan](interop.md#the-clinical-archive)
 | Retention | a study is kept for a set time by rule, and cannot be deleted before it |
 | Both modes in one server | one installation stores a department's studies as received and serves a project's de-identified copy, each under its own AE title and its own rights |
 
+## The web interface
+
+What the [web interface](web-interface.md) still lacks for reading and for working with other
+archives. It is built beside the milestones, in this order. Each item is done when the browser
+tests of `ui/` that CI runs do what its row says.
+
+| Item | Done when |
+|---|---|
+| Browser tests | `npm test` in `ui/` runs Playwright on the built interface in Chromium, with the REST API's answers (successes and failures) given by each test, and CI runs it on every change to `ui/` |
+| Remote archives | a Remote page lists the AEs of `PACS_DIMSE_REMOTES` with an echo for each, searches one (name, ID, accession, date, modality), pulls the ticked studies into the archive or a project, and sends studies from the study list to a destination; every call is one the REST API already has |
+| Jobs | the Server page links to a Jobs page that lists every move and send with its remote AE, state, progress and counts, refreshes while one runs, and cancels a running one |
+| Reference lines | in stack mode, with two or more viewports, each shows the line where the active viewport's image cuts it, for any series of the same frame of reference |
+| Measurements in one menu | the toolbar shows one Measure button that keeps the last tool chosen (length, angle, Cobb, bidirectional, ellipse, rectangle, value), and the keys of each tool still work |
+| Filters that read | the study list shows Date and Modality, and Sex and Age under a More filters button |
+| Remote AEs in the interface | an administrator adds, changes and removes remote AEs on the Remote page; they are kept in the index, `PACS_DIMSE_REMOTES` still seeds them, and each change is in the audit trail |
+| Correcting a patient | an account with the right changes a patient's name, ID, birth date or sex, or merges two patients, from the patient's record; what is served afterwards has the new values, the old ones are in the audit trail (the same change as the HL7 one of the clinical archive) |
+| Labels | labels are added and removed on a study from its pane, shown on its row, and filter the list |
+| Segmentations over the images | a DICOM SEG or RTSTRUCT of a study is drawn over its series in the viewer, each segment with its colour, shown or hidden one by one |
+| Encapsulated PDF | an Encapsulated PDF instance opens in the viewer as its pages |
+| Key images | images marked in the viewer, with arrows on them, are stored as a Key Object Selection and its presentation state, and open as a set from the study's pane |
+| Languages | every text of the interface comes from one catalogue, and French is complete |
+
 ## 7. Proven
 
 | Item | Done when |
