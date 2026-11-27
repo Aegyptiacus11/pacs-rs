@@ -85,7 +85,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   tools: window/level with presets and invert, scroll (a drag through the images; the wheel always does), pan, zoom, a magnifying glass (held over a spot, 1.5 to 8 times with the wheel), measurements
   (length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate
   and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
-  series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), cine, DICOM
+  series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), reference
+  lines (with two viewports or more, where the active one's image cuts the others of the same
+  frame of reference; on by default, `G` or Lines turns them off), cine, DICOM
   tags, export (PNG of the view, or the DICOM file), full screen. Each viewport has a plane menu
   (as acquired, axial, sagittal, coronal, 3D) and can be removed. A 3D view renders the
   series' volume (CT: bone, muscle and bone, vessels, lung, skin, MIP; MR: default, angio, T2
