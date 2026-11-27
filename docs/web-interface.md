@@ -21,15 +21,16 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   there is no wheel, so a touch screen starts on the Scroll tool: a drag up or down goes
   through the images. In a 3D view one finger turns it and two zoom.
 - **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:
-  a filter box (`/`), the date, the modality (every DICOM imaging modality), and under More
+  a filter box (`/`), the date, the modality (every DICOM imaging modality), the label (once a
+  study has one: the studies with any of those picked), and under More
   filters the sex and the age at the study (0–17, 18–39, 40–64, 65+), each with how many
   studies it holds; More filters stays open while one of them is used. The date opens
   a small panel: today, yesterday, this week, this month and this year, each with its studies
   (clicked again, it lets go), and From
   and To fields, typed (in the browser's day, month, year order, or year first) or picked on a
   small calendar under each (the days with studies dotted). Sortable columns (date first, then patient, study,
-  modality, series, images). A click on a row shows the
-  study in the pane: the patient, its series as thumbnails (a click opens one), the patient's
+  modality, series, images); a study's labels show beside its description. A click on a row
+  shows the study in the pane: the patient, its labels, its series as thumbnails (a click opens one), the patient's
   other studies (prior or later), its details, and the actions: open, download (ZIP), and under
   ⋯ copy the Study UID, the patient's studies, download everything of the patient, delete the
   study or the patient. A double click or Enter opens it; ↑ ↓
@@ -39,8 +40,13 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   last received). The footer says how much of the list is shown (1–50
   of 1,234 studies), takes 25, 50 (the default), 100 or 200 rows a page, and goes to the
   first, previous, next or last page, a numbered one, or one typed in; ↑ ↓ go on to the next or previous page. The server filters, sorts, counts and pages the list
-  (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download or delete several
+  (`/ui/api/studies`), so the browser only ever holds one page, however large the archive. Checkboxes download, label or delete several
   studies at once (one ZIP from `/tools/create-archive`).
+- **Labels**: free words on a study to group and find it again (a teaching file, a cohort, a
+  follow-up), 1 to 64 letters, digits, `-` and `_`, as the [REST API](rest-api.md) keeps them.
+  A role with `write` puts one on from the pane's Add label (the labels in use are offered, or
+  a new one typed) or on every study ticked, and takes one off with its ×; anyone who may read
+  sees them.
 - **Server** (an administrator, or anyone without a login): how the server is doing, asked
   again every two seconds. Its figures (studies, images, bytes stored, deletions in the
   [trash](trash.md), [file checks](integrity.md)); the DIMSE associations open now, each with
