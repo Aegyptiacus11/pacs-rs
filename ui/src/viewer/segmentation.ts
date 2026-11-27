@@ -25,8 +25,11 @@ export type Rgb = [number, number, number];
 
 export type Segment = { number: number; label: string; color: Rgb };
 
-/** One frame: which segment, on which image (and frame of it), where. */
-export type SegFrame = { segment: number; sop: string | null; frame: number; position: number[] | null };
+/** One frame: which segment, on which image (and frame of it), where its first pixel is, how
+ * its rows and columns run (row direction, then column direction) and how far apart its
+ * pixels are (between rows, between columns, mm). A SEG has a geometry of its own, which
+ * need not be its source image's: rows may run the other way. */
+export type SegFrame = { segment: number; sop: string | null; frame: number; position: number[] | null; orientation: number[] | null; spacing: number[] | null };
 
 export type Seg = {
   kind: "SEG";
@@ -130,6 +133,14 @@ function readSeg(ds: any): Seg {
   const perFrame = items(ds, "x52009230");
   if (perFrame.length !== count) throw new OverlayError(`${count} frames, but ${perFrame.length} described`);
   const segmentOf = (g: any) => items(g, "x0062000a")[0]?.uint16("x0062000b");
+  // in the frame's own functional groups, else in the shared ones
+  const inGroups = (g: any, sequence: string, tag: string, n: number) => {
+    for (const group of [g, shared]) {
+      const v = group ? numbers(items(group, sequence)[0] ?? { string: () => undefined }, tag) : [];
+      if (v.length === n && v.every(Number.isFinite)) return v;
+    }
+    return null;
+  };
   const frames: SegFrame[] = perFrame.map((g) => {
     const source = items(items(g, "x00089124")[0] ?? { elements: {} }, "x00082112")[0];
     const position = numbers(items(g, "x00209113")[0] ?? { string: () => undefined }, "x00200032");
@@ -138,6 +149,8 @@ function readSeg(ds: any): Seg {
       sop: source ? text(source, "x00081155") || null : null,
       frame: source ? Number(text(source, "x00081160") || 1) : 1,
       position: position.length === 3 ? position : null,
+      orientation: inGroups(g, "x00209116", "x00200037", 6),
+      spacing: inGroups(g, "x00289110", "x00280030", 2),
     };
   });
   const bytes = new Uint8Array(ds.byteArray.buffer, ds.byteArray.byteOffset + pixels.dataOffset, pixels.length);
@@ -199,11 +212,13 @@ export type Plane = { origin: number[]; row: number[]; column: number[]; spacing
 const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
-/** The masks of a SEG laid on the images of its series, as Cornerstone's labelmap wants them:
- * one array a referenced image, each pixel the number of the segment there (where segments
- * overlap, the higher number). Images are found by SOP Instance UID and frame, or, for frames
- * that name none, by position (within half a slice). Frames on no image of the series are
- * counted, not drawn. */
+/** The masks of a SEG laid on the images of its series, as the viewer draws them: one array
+ * a referenced image, in that image's pixels, each pixel the number of the segment there
+ * (where segments overlap, the higher number). Images are found by SOP Instance UID and
+ * frame, or, for frames that name none, by the plane they lie in. A frame whose geometry is
+ * known is carried through it into the image's pixels (nearest pixel); one without is taken
+ * as lying pixel for pixel on its image. Frames on no image of the series are counted, not
+ * drawn. */
 export function segOnImages(seg: Seg, images: { sop: string; frame: number; plane: Plane | null }[]) {
   const bySop = new Map(images.map((im, i) => [`${im.sop}/${im.frame}`, i]));
   const out: (Uint8Array | null)[] = images.map(() => null);
@@ -212,34 +227,57 @@ export function segOnImages(seg: Seg, images: { sop: string; frame: number; plan
   const order = seg.frames.map((f, i) => [f, i] as const).sort((a, b) => a[0].segment - b[0].segment);
   for (const [f, i] of order) {
     let at = f.sop ? bySop.get(`${f.sop}/${f.frame}`) : undefined;
-    if (at === undefined && f.position) at = nearest(images, f.position);
+    if (at === undefined && f.position) at = onPlane(images, f.position);
     if (at === undefined) {
       missed++;
       continue;
     }
-    const im = images[at];
-    if (im.plane && (im.plane.rows !== seg.rows || im.plane.columns !== seg.columns)) {
-      missed++;
+    const plane = images[at].plane;
+    const rows = plane?.rows ?? seg.rows, columns = plane?.columns ?? seg.columns;
+    const mask = seg.mask(i);
+    const target = (out[at] ??= new Uint8Array(rows * columns));
+    const map = plane && f.position && f.orientation && f.spacing ? carry(f, plane) : null;
+    if (!map) {
+      if (rows !== seg.rows || columns !== seg.columns) {
+        missed++;
+        continue;
+      }
+      for (let p = 0; p < mask.length; p++) if (mask[p]) target[p] = f.segment;
       continue;
     }
-    const mask = seg.mask(i);
-    const target = (out[at] ??= new Uint8Array(seg.rows * seg.columns));
-    for (let p = 0; p < mask.length; p++) if (mask[p]) target[p] = f.segment;
+    // SEG pixel (c, r) -> image pixel (x, y) = base + c * dc + r * dr
+    const [bx, by, cx, cy, rx, ry] = map;
+    for (let r = 0, p = 0; r < seg.rows; r++)
+      for (let c = 0; c < seg.columns; c++, p++) {
+        if (!mask[p]) continue;
+        const x = Math.round(bx + c * cx + r * rx), y = Math.round(by + c * cy + r * ry);
+        if (x >= 0 && y >= 0 && x < columns && y < rows) target[y * columns + x] = f.segment;
+      }
   }
   return { maps: out, missed };
 }
 
-function nearest(images: { plane: Plane | null }[], position: number[]) {
+/** How a SEG frame's pixel indices become an image's: [x0, y0, dx/dc, dy/dc, dx/dr, dy/dr]. */
+function carry(f: SegFrame, plane: Plane) {
+  const o = f.orientation!, sp = f.spacing!, pos = f.position!;
+  const world = (c: number, r: number) => [0, 1, 2].map((k) => pos[k] + c * sp[1] * o[k] + r * sp[0] * o[k + 3]);
+  const toImage = (w: number[]) => {
+    const d = sub(w, plane.origin);
+    return [dot(d, plane.row) / plane.spacing[1], dot(d, plane.column) / plane.spacing[0]];
+  };
+  const [b, c, r] = [toImage(world(0, 0)), toImage(world(1, 0)), toImage(world(0, 1))];
+  return [b[0], b[1], c[0] - b[0], c[1] - b[1], r[0] - b[0], r[1] - b[1]];
+}
+
+/** The image whose plane a position lies in (a tenth of a millimetre either way). */
+function onPlane(images: { plane: Plane | null }[], position: number[]) {
   let best: number | undefined, distance = Infinity;
   images.forEach((im, i) => {
     if (!im.plane) return;
     const d = Math.abs(dot(sub(position, im.plane.origin), im.plane.normal));
-    const inPlane = sub(position, im.plane.origin);
-    // the same plane and the same first pixel, give or take a tenth of a pixel
-    const along = Math.hypot(dot(inPlane, im.plane.row), dot(inPlane, im.plane.column));
-    if (d < distance && along < 0.1 * Math.max(...im.plane.spacing)) [best, distance] = [i, d];
+    if (d < distance) [best, distance] = [i, d];
   });
-  return best !== undefined && distance < 0.01 ? best : undefined;
+  return distance < 0.1 ? best : undefined;
 }
 
 /** What of a contour a plane shows (a point on it, its unit normal, and how thick a slice it

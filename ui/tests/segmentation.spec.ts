@@ -42,6 +42,40 @@ test("a SEG on the images it names: 24 frames on the 8 slices kept, the rest cou
   expect([...values].sort()).toEqual([0, 1, 2, 3]);
 });
 
+test("a SEG whose rows run the other way lands on the anatomy, not mirrored", () => {
+  // This SEG's frames go bottom to top (Image Orientation 1\\0\\0\\0\\-1\\0) while the CT's go top to
+  // bottom: laid pixel for pixel, its kidney fell on fat (-10 HU on average); carried through
+  // its own geometry, on enhancing kidney (135 HU, as pydicom finds with the mask flipped).
+  const seg = readOverlay(bytes("seg.dcm")) as Seg;
+  expect(seg.frames[0].orientation).toEqual([1, 0, 0, 0, -1, 0]);
+  const ct = dicomParser.parseDicom(new Uint8Array(bytes("ct/069.dcm")));
+  const n = (t: string) => ct.string(t)!.split("\\").map(Number);
+  const [rows, columns] = [ct.uint16("x00280010")!, ct.uint16("x00280011")!];
+  const iop = n("x00200037");
+  const plane = {
+    origin: n("x00200032"),
+    row: iop.slice(0, 3),
+    column: iop.slice(3),
+    spacing: n("x00280030") as [number, number],
+    normal: [0, 0, 1],
+    rows,
+    columns,
+  };
+  const pixel = ct.elements.x7fe00010;
+  const raw = new Int16Array(ct.byteArray.buffer.slice(ct.byteArray.byteOffset + pixel.dataOffset, ct.byteArray.byteOffset + pixel.dataOffset + pixel.length));
+  const [slope, intercept] = [Number(ct.string("x00281053")), Number(ct.string("x00281052"))];
+  const meanHu = (map: Uint8Array, segment: number) => {
+    let total = 0, count = 0;
+    map.forEach((v, p) => v === segment && ((total += raw[p] * slope + intercept), count++));
+    return Math.round(total / count);
+  };
+  const sop = ct.string("x00080018")!;
+  const placed = segOnImages(seg, [{ sop, frame: 1, plane }]).maps[0]!;
+  const asStored = segOnImages(seg, [{ sop, frame: 1, plane: null }]).maps[0]!;
+  expect(meanHu(asStored, 1)).toBe(-10);
+  expect(meanHu(placed, 1)).toBe(135);
+});
+
 test("an RTSTRUCT: its region, color and contours", () => {
   const rt = readOverlay(bytes("rtstruct.dcm")) as RtStruct;
   expect(rt.kind).toBe("RTSTRUCT");
