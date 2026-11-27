@@ -47,6 +47,7 @@ import {
   Trash2,
   ScanLine,
   Shapes,
+  MoveUpRight,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -91,6 +92,7 @@ const MEASURE: { tool: ToolName; label: string; short: string; key: string; Icon
   { tool: "ellipse", label: "Ellipse ROI", short: "Ellipse", key: "E", Icon: Circle, hint: "area, mean, std" },
   { tool: "rectangle", label: "Rectangle ROI", short: "Rectangle", key: "⇧ E", Icon: Square, hint: "area, mean, std" },
   { tool: "probe", label: "Pixel value", short: "Value", key: "D", Icon: Pipette, hint: "the HU (density) at a point" },
+  { tool: "arrow", label: "Arrow", short: "Arrow", key: "⇧ A", Icon: MoveUpRight, hint: "pointing at something, with a label" },
 ];
 
 const SHORTCUTS: [string, string][] = [
@@ -225,6 +227,8 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   const [browser, setBrowser] = useState(() => !matchMedia("(max-width: 767px)").matches);
   const [tags, setTags] = useState(false);
   const [segments, setSegments] = useState(false);
+  // the arrow's label being asked: what it was, and where the answer goes
+  const [asking, setAsking] = useState<{ text: string; done: (text: string | null) => void } | null>(null);
   const [reading, setReading] = useState<OpenDocument | null>(null);
   const [lastTool, setLastTool] = useState<ToolName>(() => {
     try {
@@ -262,6 +266,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
     const v = new Viewer(grid.current, setState, resolve);
     viewer.current = v;
     v.onSaveFailed = (message) => toast.error("Measurements are not being saved", { description: message });
+    v.askText = (text) => new Promise((done) => setAsking({ text, done }));
     v.onBlank = (message) => {
       toast(message, { duration: 6000 });
       setTimeout(() => location.reload(), 1500);
@@ -334,7 +339,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
       // shifted letters arrive in capitals: E is the rectangle, R rotates left
       const tool: Record<string, ToolName> = {
         w: "windowLevel", p: "pan", z: "zoom", m: "magnify",
-        l: "length", a: "angle", c: "cobb", b: "bidirectional", e: "ellipse", E: "rectangle", d: "probe",
+        l: "length", a: "angle", A: "arrow", c: "cobb", b: "bidirectional", e: "ellipse", E: "rectangle", d: "probe",
       };
       const step: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1, PageDown: 10, PageUp: -10 };
       if (step[e.key]) {
@@ -695,6 +700,10 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         )}
         <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
         <PdfDialog document={reading} onClose={() => setReading(null)} />
+        <ArrowLabel asking={asking} onDone={(text) => {
+          asking?.done(text);
+          setAsking(null);
+        }} />
         {segments && v && !!s?.segmentations.length && <SegmentsPanel viewer={v} list={s.segmentations} fill={s.fill} onClose={() => setSegments(false)} />}
         {/* with a finger there is no Delete key, and the toolbar's button may be scrolled out of
             sight: what can be done with the selected measurement comes to it */}
@@ -757,5 +766,36 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// the words an arrow points out: asked when it is drawn, and again on a double click
+function ArrowLabel({ asking, onDone }: { asking: { text: string } | null; onDone: (text: string | null) => void }) {
+  const [text, setText] = useState("");
+  useEffect(() => setText(asking?.text ?? ""), [asking]);
+  return (
+    <Dialog open={!!asking} onOpenChange={(open) => !open && onDone(null)}>
+      <DialogContent className="sm:max-w-sm">
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onDone(text.trim());
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Arrow label</DialogTitle>
+            <DialogDescription>What the arrow points at. Leave it empty for an arrow alone.</DialogDescription>
+          </DialogHeader>
+          <Input value={text} onChange={(e) => setText(e.target.value)} aria-label="Arrow label" autoFocus maxLength={200} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => onDone(null)}>
+              Cancel
+            </Button>
+            <Button type="submit">Done</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

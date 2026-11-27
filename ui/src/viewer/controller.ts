@@ -48,6 +48,7 @@ import {
   BidirectionalTool,
   EllipticalROITool,
   RectangleROITool,
+  ArrowAnnotateTool,
   annotation,
   segmentation,
   Enums as ToolEnums,
@@ -95,6 +96,7 @@ export const TOOLS = {
   bidirectional: BidirectionalTool,
   ellipse: EllipticalROITool,
   rectangle: RectangleROITool,
+  arrow: ArrowAnnotateTool,
 } as const;
 export type ToolName = keyof typeof TOOLS;
 
@@ -412,6 +414,8 @@ export class Viewer {
   private syncing = false;
   private overlaysOn = true;
   private segs: Overlay[] = [];
+  /** Asks for an arrow's words; resolves to null when cancelled. The page sets it. */
+  askText: (initial: string) => Promise<string | null> = async (initial) => prompt("The arrow's label", initial);
   private fill = 0.35;
   // with a finger there is no wheel: going through the images is the tool one starts with
   private tool: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
@@ -584,6 +588,14 @@ export class Viewer {
             getReferenceLineControllable: () => true,
             getReferenceLineDraggableRotatable: () => true,
             getReferenceLineSlabThicknessControlsOn: () => false,
+          });
+        else if (tool === ArrowAnnotateTool)
+          group.addTool(tool.toolName, {
+            // the label is asked in the page, not with the browser's prompt; an arrow given no
+            // words keeps a blank one, Cancel drops it
+            getTextCallback: (done: (text: string | null) => void) => this.askText("").then((t) => done(t === null ? null : t || " ")),
+            changeTextCallback: (a: any, _: unknown, done: (text: string | null) => void) =>
+              this.askText(a?.data?.label?.trim() ?? "").then((t) => t !== null && done(t || " ")),
           });
         else group.addTool(tool.toolName);
       }
