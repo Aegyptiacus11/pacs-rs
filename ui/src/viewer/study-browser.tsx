@@ -4,13 +4,16 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Layers } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers, Shapes } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SeriesThumb } from "@/components/series-thumb";
 import { api, formatDate, personName, sexAge } from "@/lib/api";
 import { sortSeries } from "@/lib/studies";
 import { cn } from "@/lib/utils";
+
+/** A SEG or an RTSTRUCT: drawn over another series. */
+export const isSegmentation = (s: any) => ["SEG", "RTSTRUCT"].includes(s?.MainDicomTags?.Modality);
 
 export type Registry = Map<string, { study: any; series: any }>;
 
@@ -29,16 +32,18 @@ function StudySeries({ study, registry, shown, active, onPick }: { study: any; r
       {series.data!.map((s) => {
         const t = s.MainDicomTags;
         const isActive = s.ID === active;
+        // a segmentation is laid over the images it was drawn on, not shown on its own
+        const overlay = isSegmentation(s);
         return (
           <button
             key={s.ID}
-            draggable
+            draggable={!overlay}
             onDragStart={(e) => {
               e.dataTransfer.setData("application/x-pacs-series", s.ID);
               e.dataTransfer.effectAllowed = "copy";
             }}
             onClick={() => onPick(s.ID)}
-            title="Click to show in the active viewport, or drag onto a viewport"
+            title={overlay ? "Click to lay it over the images it was drawn on" : "Click to show in the active viewport, or drag onto a viewport"}
             className={cn(
               "group flex w-full items-start gap-2.5 border-l-2 border-transparent px-2.5 py-1.5 text-left hover:bg-accent",
               shown.has(s.ID) && "border-selection/40",
@@ -46,7 +51,13 @@ function StudySeries({ study, registry, shown, active, onPick }: { study: any; r
             )}
           >
             <div className="relative w-16 shrink-0">
-              <SeriesThumb series={s} studyUid={study.MainDicomTags.StudyInstanceUID} className="rounded-sm" />
+              {overlay ? (
+                <div className="grid aspect-square place-items-center rounded-sm bg-muted text-muted-foreground">
+                  <Shapes className="size-6" strokeWidth={1.4} />
+                </div>
+              ) : (
+                <SeriesThumb series={s} studyUid={study.MainDicomTags.StudyInstanceUID} className="rounded-sm" />
+              )}
               <span className="absolute top-0.5 left-0.5 flex items-center gap-0.5 rounded-sm bg-black/70 px-1 text-[10px] leading-4 text-white tabular">
                 <Layers className="size-2.5" />
                 {s.Instances.length}
