@@ -886,7 +886,14 @@ export class Viewer {
   private checkDrawn(cell: Cell) {
     if (this.checkedDrawing || getShouldUseCPURendering()) return;
     this.checkedDrawing = true;
-    setTimeout(() => {
+    // read once the image has been drawn, however long that took, not after a fixed wait: a
+    // slow or busy machine is not one whose WebGL draws blank
+    const rendered = () => {
+      cell.element.removeEventListener(Enums.Events.IMAGE_RENDERED, rendered);
+      requestAnimationFrame(check);
+    };
+    cell.element.addEventListener(Enums.Events.IMAGE_RENDERED, rendered);
+    const check = () => {
       const canvas = cell.element.querySelector("canvas");
       const image = (cell.viewport as any).getImageData?.();
       if (!canvas || !image) return;
@@ -908,7 +915,7 @@ export class Viewer {
           this.onBlank?.("This browser's WebGL draws blank images, so the viewer now draws on the CPU. 3 planes and other planes need WebGL and are off.");
         }
       }
-    }, 600);
+    };
   }
 
   // the magnifying glass: while the left button is held, a round lens over the pointer shows
