@@ -1,0 +1,23 @@
+{
+  "version": "0.16.3",
+  "archive": {
+    "studies": 3,
+    "instances": 5,
+    "bytes": 462862,
+    "files_failed": 0,
+    "files_never_checked": 0,
+    "trash": 0
+  },
+  "associations": [],
+  "jobs": [],
+  "quarantine": null,
+  "log": [
+    {
+      "time_ms": 1795802282941,
+      "level": "WARN",
+      "target": "pacs_server",
+      "message": "no login (PACS_AUTH is off): anyone who reaches this server can read and delete",
+      "fields": ""
+    }
+  ]
+}

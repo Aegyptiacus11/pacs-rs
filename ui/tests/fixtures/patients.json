@@ -1,0 +1,53 @@
+{
+  "Total": 3,
+  "Patients": [
+    {
+      "ID": "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055",
+      "MainDicomTags": {
+        "PatientName": "VOLUME 0^LITS",
+        "PatientID": "LITS-0",
+        "PatientBirthDate": "",
+        "PatientSex": ""
+      },
+      "Studies": 1,
+      "Instances": 3,
+      "Modalities": [
+        "CT"
+      ],
+      "FirstStudy": "20261117",
+      "LastStudy": "20261117"
+    },
+    {
+      "ID": "23755877-c2ffb60d-d0df4093-e1f071a3-68b19506",
+      "MainDicomTags": {
+        "PatientName": "CompressedSamples^MR1",
+        "PatientID": "4MR1",
+        "PatientBirthDate": "",
+        "PatientSex": "F"
+      },
+      "Studies": 1,
+      "Instances": 1,
+      "Modalities": [
+        "MR"
+      ],
+      "FirstStudy": "20040826",
+      "LastStudy": "20040826"
+    },
+    {
+      "ID": "fa558bce-587a86d3-ad0da9b3-9d043d9d-4f5c5718",
+      "MainDicomTags": {
+        "PatientName": "CompressedSamples^CT1",
+        "PatientID": "1CT1",
+        "PatientBirthDate": "",
+        "PatientSex": "O"
+      },
+      "Studies": 1,
+      "Instances": 1,
+      "Modalities": [
+        "CT"
+      ],
+      "FirstStudy": "20040119",
+      "LastStudy": "20040119"
+    }
+  ]
+}
