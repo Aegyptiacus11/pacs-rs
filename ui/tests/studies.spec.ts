@@ -26,3 +26,21 @@ test("a server that does not answer is shown in the top bar", async ({ page, pac
   await page.goto("#/studies");
   await expect(page.getByRole("banner")).toContainText("Offline");
 });
+
+test("sex and age are behind More filters, which stays open while one is used", async ({ page, pacs }) => {
+  await page.goto("#/studies");
+  await expect(page.getByRole("button", { name: "Modality", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sex", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Age", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "More filters" }).click();
+  await page.getByRole("button", { name: "Sex", exact: true }).click();
+  await page.getByRole("option", { name: /Female/ }).click();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => pacs.asked.some((a) => a.startsWith("GET /ui/api/studies?") && a.includes("sex=F"))).toBe(true);
+  await expect(page.getByRole("button", { name: "More filters" })).toHaveCount(0);
+
+  // Reset clears them and puts them away again
+  await page.getByRole("button", { name: "Reset" }).click();
+  await expect(page.getByRole("button", { name: "More filters" })).toBeVisible();
+});

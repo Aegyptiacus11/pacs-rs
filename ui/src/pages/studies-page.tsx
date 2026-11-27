@@ -13,7 +13,7 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, TriangleAlert, Search, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, TriangleAlert, Search, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -127,6 +127,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
   const [sexes, setSexes] = useState<string[]>([]);
   const [ages, setAges] = useState<string[]>([]);
+  const [moreFilters, setMoreFilters] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
@@ -375,8 +376,17 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-full min-w-0 sm:w-72" />
           <DateFilter span={span} dates={facets.dates} count={facets.count} total={facets.all} onApply={setSpan} />
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
-          <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
-          <FacetedFilter title="Age" options={facets.ages} selected={ages} onChange={setAges} searchable={false} />
+          {/* who the patients are: research more than reading, so behind a button, open while used */}
+          {moreFilters || sexes.length || ages.length ? (
+            <>
+              <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
+              <FacetedFilter title="Age" options={facets.ages} selected={ages} onChange={setAges} searchable={false} />
+            </>
+          ) : (
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground" onClick={() => setMoreFilters(true)}>
+              <SlidersHorizontal /> More filters
+            </Button>
+          )}
           {owner && (
             <Badge variant="secondary" className="h-8 gap-1.5 rounded-md pr-1 pl-2.5 text-sm font-normal">
               <User className="size-3.5" />
@@ -398,6 +408,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                 setModalities([]);
                 setSexes([]);
                 setAges([]);
+                setMoreFilters(false);
                 setSpan({ from: "", to: "" });
               }}
             >
