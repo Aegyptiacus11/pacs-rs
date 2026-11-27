@@ -13,21 +13,14 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, TriangleAlert, Search, Tag, Trash2, Upload, User, X, FilePlus, FileText } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, FilePlus, FileText, Loader2, MousePointerClick, Send, SlidersHorizontal, TriangleAlert, Search, Tag, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { send, useRemotes } from "@/lib/remote";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -941,6 +934,7 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
           <FilePlus /> Attach PDF…
         </Item>
       )}
+      {may("remote") && <SendTo study={s} kind={kind} />}
       <Separator />
       <Item onSelect={() => go(href.studies(s.patient))}>
         <User /> All studies of this patient
@@ -998,6 +992,44 @@ function StudyLabels({ study: s }: { study: Study }) {
   }
   const write = may("write");
   return <LabelEditor labels={labels} onAdd={write ? (l) => change(l, true) : undefined} onRemove={write ? (l) => change(l, false) : undefined} />;
+}
+
+/** "Send to" a remote archive, as a job; the archive must be one studies may be sent to. */
+function SendTo({ study: s, kind }: { study: Study; kind: "dropdown" | "context" }) {
+  const [Sub, Trigger, Content, Item] =
+    kind === "dropdown"
+      ? [DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuItem]
+      : [ContextMenuSub, ContextMenuSubTrigger, ContextMenuSubContent, ContextMenuItem];
+  const remotes = useRemotes();
+  async function start(id: string) {
+    try {
+      const job = await send(id, [s.uid]);
+      toast.success(`Sending to ${id}`, {
+        description: s.description || personName(s.name),
+        action: { label: "Jobs", onClick: () => go(href.jobs(job.ID)) },
+      });
+    } catch (e) {
+      toast.error(`Not sent to ${id}`, { description: (e as Error).message });
+    }
+  }
+  return (
+    <Sub>
+      <Trigger>
+        <Send /> Send to
+      </Trigger>
+      <Content className="w-48">
+        {remotes.isPending && <Item disabled>Loading…</Item>}
+        {remotes.isError && <Item disabled>{remotes.error.message}</Item>}
+        {remotes.data?.length === 0 && <Item disabled>No remote archive</Item>}
+        {remotes.data?.map((r) => (
+          <Item key={r.id} onSelect={() => start(r.id)}>
+            <span className="truncate">{r.id}</span>
+            <span className="ml-auto font-mono text-[11px] text-muted-foreground">{r.aet}</span>
+          </Item>
+        ))}
+      </Content>
+    </Sub>
+  );
 }
 
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {

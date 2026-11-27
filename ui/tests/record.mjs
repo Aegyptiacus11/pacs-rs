@@ -6,8 +6,11 @@
 //     curl -fsS --data-binary @$f http://127.0.0.1:18090/instances; done
 //   PACS_URL=http://127.0.0.1:18090 node tests/record.mjs
 //
-// It first puts labels on two studies (below), then records. Stops with exit 1 on the first
-// request that fails.
+// It first puts labels on two studies (below), then records. roles.json and me-admin.json
+// need the login on: with PACS_TOKEN set to an administrator's access token (POST
+// /auth/login) of a server started with PACS_AUTH=true, they are recorded from it too.
+//
+// Stops with exit 1 on the first request that fails.
 import { writeFile } from "node:fs/promises";
 
 const base = process.env.PACS_URL;
@@ -16,8 +19,12 @@ if (!base) {
   process.exit(1);
 }
 
-async function ask(path, init) {
-  const response = await fetch(new URL(path, base), init);
+// with a login, every request carries the administrator's token
+const token = process.env.PACS_TOKEN;
+
+async function ask(path, init = {}) {
+  const headers = { ...init.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  const response = await fetch(new URL(path, base), { ...init, headers });
   if (!response.ok) {
     console.error(`${path}: ${response.status} ${response.statusText}`);
     process.exit(1);
@@ -47,6 +54,8 @@ const answers = {
   "patients.json": "ui/api/patients?sort=last&order=desc&limit=50",
   "server.json": "ui/api/server",
 };
+
+if (token) Object.assign(answers, { "roles.json": "roles", "me-admin.json": "auth/me" });
 
 for (const [file, path] of Object.entries(answers)) {
   const response = await ask(path);

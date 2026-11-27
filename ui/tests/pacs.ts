@@ -44,6 +44,19 @@ export class Pacs {
     this.on("GET", "/ui/api/studies/facets", () => ({ json: fixture("studies-facets.json") }));
     this.on("GET", "/ui/api/patients", () => ({ json: fixture("patients.json") }));
     this.on("GET", "/ui/api/server", () => ({ json: fixture("server.json") }));
+    // the remote archives, which a study's Send to asks for when its menu opens
+    this.on("GET", "/modalities", () => ({ json: fixture("remote-modalities.json") }));
+  }
+
+  /** The login on, and this user signed in (a session restored from its refresh cookie). */
+  signedIn(user: { login: string; role: string; permissions: string[] }) {
+    // a token whose payload says it runs for an hour
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+    this.on("GET", "/ui/config.json", () => ({ json: { ...fixture("config.json"), auth: true } }));
+    this.on("POST", "/auth/refresh", () => ({ json: { access_token: `e30.${payload}.sig`, token_type: "Bearer" } }));
+    this.on("GET", "/auth/me", () => ({ json: { ...fixture("me-admin.json"), ...user } }));
+    this.on("GET", "/roles", () => ({ json: fixture("roles.json") }));
+    return this;
   }
 
   /** Answers `method path` this way from now on; the latest one given wins. */
@@ -103,3 +116,4 @@ export const test = base.extend<{ pacs: Pacs }>({
 export const FIRST_IMAGE = { timeout: 20_000 };
 
 export { expect };
+export type { Pacs as PacsType };
