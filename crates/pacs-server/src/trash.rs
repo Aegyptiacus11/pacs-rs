@@ -35,13 +35,15 @@ pub struct TrashEntry {
     pub deleted_ms: i64,
     /// When the server empties it, in milliseconds since the Unix epoch.
     pub emptied_ms: i64,
-    /// What the deletion named: `Patient`, `Study`, `Series` or `Instance`.
+    /// What the deletion named: `Patient`, `Study`, `Series` or `Instance`; `Modification`
+    /// for a patient modified or merged, whose restore undoes the change.
     pub level: String,
     /// Its public ID.
     #[serde(rename = "PublicID")]
     pub public_id: String,
     /// The studies it took from, a part or all: `StudyInstanceUID`, `PatientID`,
-    /// `PatientName`, and the `project` the study was in.
+    /// `PatientName`, and the `project` the study was in; for a modification, the values
+    /// before it, and in `changed` the ones it gave.
     #[schema(value_type = Vec<Object>)]
     pub studies: Value,
     /// Files waiting.
@@ -125,6 +127,8 @@ async fn list(
                             .map(|mut s| {
                                 if let Some(s) = s.as_object_mut() {
                                     s.remove("annotations");
+                                    // what an undone modification needs, not for people
+                                    s.remove("rekeyed");
                                 }
                                 s
                             })

@@ -108,7 +108,7 @@ impl Archive {
 
     /// Move a file the trash lists to where it waits. One that cannot be moved stays where
     /// it was, still the trash's: restoring or emptying its entry finds it there.
-    async fn move_to_trash(&self, file: &TrashFile) {
+    pub(crate) async fn move_to_trash(&self, file: &TrashFile) {
         match self.store.rename(&file.object_key, &file.trash_key).await {
             // not there: moved already
             Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
@@ -144,6 +144,7 @@ impl Archive {
         let Some(entry) = self.index.trash_entry(id).await? else {
             return Ok(None);
         };
+        let modification = entry.level == "Modification";
         let studies = entry.studies.as_array().cloned().unwrap_or_default();
         let project_of = |study: &str| -> Option<String> {
             studies
@@ -166,6 +167,12 @@ impl Archive {
             let archive = match project_of(&study) {
                 Some(project) => self.clone().for_project(&project),
                 None => self.clone(),
+            };
+            // undoing a modification: the file replaces the modified one, which is removed
+            let archive = if modification {
+                archive.with_overwrite(true)
+            } else {
+                archive
             };
             match archive.ingest(bytes).await {
                 Ok(ingested) if ingested.outcome == Outcome::AlreadyStored => {
@@ -195,6 +202,18 @@ impl Archive {
             if self.index.annotations(uid).await?.is_none() {
                 self.index.put_annotations(uid, Some(body)).await?;
             }
+        }
+        if modification {
+            // labels and metadata back to the IDs the old files give
+            let back: Vec<(String, String)> = studies
+                .iter()
+                .filter_map(|s| s["rekeyed"].as_array())
+                .flatten()
+                .filter_map(|pair| {
+                    Some((pair[1].as_str()?.to_owned(), pair[0].as_str()?.to_owned()))
+                })
+                .collect();
+            self.index.rekey(&back).await?;
         }
         if self.index.trash_files(id).await?.is_empty() {
             self.index.remove_trash(id).await?;
