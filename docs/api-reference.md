@@ -346,6 +346,33 @@ Permission, when the login is on: `read`.
 | 200 | `application/zip` | The ZIP. |
 | 404 | nothing | No study has this identifier; the body is empty. |
 
+### `POST /studies/{id}/documents`
+
+Adds a PDF document to a study.
+
+The body is the PDF itself. It becomes an Encapsulated PDF instance (PS3.3 A.45.1) of the
+study, in a series of its own (modality DOC, described by the title), with the study's
+patient and study attributes; Content Date and Time are when it was added, in UTC. The
+answer is that of `POST /instances`, and so are the refusals: an account limited to projects
+adds nothing, nor does anyone to a study that came in through a project.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The study's identifier. |
+| `title` | query, optional | string | The document's title, and its series' description (64 characters of it); "PDF document" if none. |
+| the body | | `application/pdf` | The PDF. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Stored](#stored) | Stored: the new instance. |
+| 400 | [Error](#error) | The body is not a PDF. |
+| 403 | [Error](#error) | The account is limited to some projects. |
+| 404 | nothing | No study has this identifier; the body is empty. |
+| 409 | [Error](#error) | The study came in through a project. |
+| 413 | [Error](#error) | The PDF is larger than `PACS_MAX_UPLOAD_BYTES`. |
+
 ### `GET /studies/{id}/instances`
 
 A study's instances, of every series.
@@ -981,6 +1008,23 @@ Permission, when the login is on: `read`.
 |---|---|---|
 | 200 | [Patient](#patient) | The patient. |
 | 404 | nothing | No instance has this identifier; the body is empty. |
+
+### `GET /instances/{id}/pdf`
+
+An Encapsulated PDF instance's document.
+
+The PDF as it was put in, without the padding DICOM adds to an odd length.
+
+Permission, when the login is on: `read`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The instance's identifier. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | `application/pdf` | The PDF. |
+| 404 | nothing | No instance has this identifier, or it holds no PDF; the body is empty. |
 
 ### `GET /instances/{id}/series`
 

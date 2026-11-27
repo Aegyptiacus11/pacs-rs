@@ -3,7 +3,9 @@
 
 use dicom_dictionary_std::tags;
 use pacs_core::Instance;
-use pacs_core::document::{ENCAPSULATED_PDF, NewDocument, encapsulated_pdf, not_a_pdf, pdf_of};
+use pacs_core::document::{
+    ENCAPSULATED_PDF, NewDocument, encapsulated_pdf, not_a_pdf, pdf_of, utc,
+};
 use serde_json::{Map, Value, json};
 
 const PDF: &[u8] = include_bytes!("data/documents/kits19.pdf");
@@ -141,4 +143,20 @@ fn what_is_not_a_pdf_or_has_no_study_is_refused() {
     assert!(error.to_string().contains("StudyInstanceUID"), "{error}");
     // an instance that is no document has no PDF to give
     assert_eq!(pdf_of(&Instance::from_bytes(&dicom).unwrap().object), None);
+}
+
+#[test]
+fn the_moment_is_written_as_a_dicom_date_and_time_in_utc() {
+    use std::time::{Duration, UNIX_EPOCH};
+    assert_eq!(utc(UNIX_EPOCH), ("19700101".into(), "000000".into()));
+    // 2000-02-29T23:59:59Z, a leap day of a century leap year
+    assert_eq!(
+        utc(UNIX_EPOCH + Duration::from_secs(951_868_799)),
+        ("20000229".into(), "235959".into())
+    );
+    // 2026-11-27T22:40:00Z
+    assert_eq!(
+        utc(UNIX_EPOCH + Duration::from_secs(1_795_819_200)),
+        ("20261127".into(), "224000".into())
+    );
 }
