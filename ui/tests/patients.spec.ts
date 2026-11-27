@@ -4,6 +4,11 @@ const LITS = "64c94bda-110c6fa1-720a3d46-248247e2-bdf1f055";
 const MR1 = "23755877-c2ffb60d-d0df4093-e1f071a3-68b19506";
 const ADMIN = { login: "admin", role: "admin", permissions: ["read", "write", "remote", "delete", "modify", "users"] };
 
+// the record's thumbnails are not what these tests are about: no image, "No preview"
+test.beforeEach(({ pacs }) => {
+  pacs.on("GET", /^\/series\/[\w-]+\/instances$/, () => ({ json: [] }));
+});
+
 /** The record of patient LITS-0 open, its actions menu open. */
 async function actions(page: import("@playwright/test").Page) {
   await page.goto(`#/patients?open=${LITS}`);
@@ -76,7 +81,7 @@ test("a patient is merged into one found by name", async ({ page, pacs }) => {
   await dialog.getByLabel("The patient to keep").fill("compressed");
   // the patient merged is not offered as their own target
   await expect(dialog.getByRole("list", { name: "Patients" }).getByRole("button")).toHaveCount(1);
-  await dialog.getByRole("button", { name: /Compressedsamples Mr1/i }).click();
+  await dialog.getByRole("button", { name: /Mr1 Compressedsamples/ }).click();
   await dialog.getByRole("button", { name: /^Merge into/ }).click();
   expect(body).toEqual({ Into: MR1 });
   await expect(page.getByText(/Merged into/)).toBeVisible();
