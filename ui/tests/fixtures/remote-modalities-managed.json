@@ -1,0 +1,18 @@
+{
+    "hospital": {
+        "AET": "HOSP_PACS",
+        "Host": "10.0.0.5",
+        "Port": 104,
+        "TLS": false,
+        "MayReceive": false,
+        "Fixed": true
+    },
+    "self": {
+        "AET": "PACSRS",
+        "Host": "127.0.0.1",
+        "Port": 11193,
+        "TLS": false,
+        "MayReceive": false,
+        "Fixed": false
+    }
+}

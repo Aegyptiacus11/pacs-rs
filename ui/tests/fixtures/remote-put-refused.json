@@ -1,0 +1,6 @@
+{
+    "HttpError": "Bad Request",
+    "HttpStatus": 400,
+    "Message": "Bad request",
+    "Details": "this server has no DIMSE TLS to call it with: set PACS_DIMSE_TLS_CA_FILE"
+}

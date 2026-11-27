@@ -74,7 +74,9 @@ test("without remote archives the page says how to add one", async ({ page, pacs
   pacs.on("GET", "/modalities", () => ({ json: {} }));
   await page.goto("#/remote");
   await expect(page.getByText("No remote archive yet")).toBeVisible();
-  await expect(page.getByText("PACS_DIMSE_REMOTES")).toBeVisible();
+  // added in the settings, by whoever manages them (without a login, anyone)
+  await page.getByRole("link", { name: "Add a remote archive" }).click();
+  await expect(page).toHaveURL(/#\/settings\/remotes$/);
 });
 
 test("a remote list that fails says why", async ({ page, pacs }) => {
