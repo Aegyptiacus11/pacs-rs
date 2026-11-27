@@ -96,7 +96,7 @@ pub(super) async fn send(
         return RestError::bad_request("Bad request", format!("{bad:?} is not a UID"))
             .into_response();
     }
-    if !config.move_destinations.contains(&remote.id) {
+    if !config.directory.may_receive(&remote.id) {
         return RestError::Status {
             status: StatusCode::CONFLICT,
             message: format!("{id} is not an AE instances are sent to"),
@@ -142,7 +142,7 @@ pub(super) async fn send(
     let started = Instant::now();
     let result = remotes
         .retriever
-        .send(remote, &index, &studies, |_| {
+        .send(&remote, &index, &studies, |_| {
             std::ops::ControlFlow::Continue(())
         })
         .await;

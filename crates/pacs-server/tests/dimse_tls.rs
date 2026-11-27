@@ -118,7 +118,7 @@ async fn echo(
     args.extend(extra);
     let config = dimse_config(&settings(dir, &args)).map_err(|e| format!("{e:#}"))?;
     let remote = config.remote("there").unwrap();
-    match pacs_dimse::echo(remote, &AeTitle::new("CALLER").unwrap(), WAIT).await {
+    match pacs_dimse::echo(&remote, &AeTitle::new("CALLER").unwrap(), WAIT).await {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("{e:#}")),
     }
@@ -426,7 +426,11 @@ fn settings_that_do_not_add_up_stop_the_start() {
         &["--dimse-remotes=there=PACS@pacs.test:104"],
     ))
     .unwrap();
-    assert!(config.tls.is_none() && !config.remotes[0].secure && config.remotes[0].tls.is_none());
+    assert!(
+        config.tls.is_none()
+            && !config.directory.remotes()[0].secure
+            && config.directory.remotes()[0].tls.is_none()
+    );
     let config = dimse_config(&settings(
         dir.path(),
         &[
@@ -445,7 +449,11 @@ fn settings_that_do_not_add_up_stop_the_start() {
         &[tls_remote, "--dimse-tls-ca-file", &ca_file],
     ))
     .unwrap();
-    assert!(config.tls.is_none() && config.remotes[0].secure && config.remotes[0].tls.is_some());
+    assert!(
+        config.tls.is_none()
+            && config.directory.remotes()[0].secure
+            && config.directory.remotes()[0].tls.is_some()
+    );
     // a plain remote beside a TLS one stays plain
     let config = dimse_config(&settings(
         dir.path(),

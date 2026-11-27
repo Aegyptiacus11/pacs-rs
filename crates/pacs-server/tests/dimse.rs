@@ -76,7 +76,7 @@ fn dimse_is_off_unless_a_port_is_given() {
     assert_eq!(config.ae_title.as_str(), "PACSRS");
     assert_eq!(config.max_associations, 16);
     assert_eq!(config.timeout, std::time::Duration::from_secs(30));
-    assert!(config.remotes.is_empty() && config.extra_ae_titles.is_empty());
+    assert!(config.directory.is_empty() && config.extra_ae_titles.is_empty());
     assert_eq!(config.max_data_set_bytes, settings.max_upload_bytes);
 }
 
@@ -170,7 +170,7 @@ async fn modalities_lists_the_remote_aes() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         expanded["hospital"],
-        json!({"AET": "HOSP_PACS", "Host": "10.0.0.5", "Port": 104})
+        json!({"AET": "HOSP_PACS", "Host": "10.0.0.5", "Port": 104, "TLS": false, "MayReceive": false, "Fixed": true})
     );
 }
 

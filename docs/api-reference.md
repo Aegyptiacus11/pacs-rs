@@ -1487,7 +1487,8 @@ Other DICOM systems, reached over the DICOM network protocol: testing the link, 
 
 Lists the remote AEs.
 
-The AEs of `PACS_DIMSE_REMOTES`: those pacs-rs can test, search and pull studies from.
+Those of `PACS_DIMSE_REMOTES`, then those added with `PUT /modalities/{id}`: the AEs pacs-rs
+can test, search and pull studies from, and send studies to when they may receive them.
 
 Permission, when the login is on: `remote`.
 
@@ -1498,6 +1499,48 @@ Permission, when the login is on: `remote`.
 | Status | Answer | |
 |---|---|---|
 | 200 | [RemoteAes](#remoteaes) | The ids, or the AEs by id. |
+
+### `PUT /modalities/{id}`
+
+Adds a remote AE, or changes one added before.
+
+Kept by the server, and used at once: by the next C-ECHO, search, move or send, and by the
+DIMSE server, which answers and sends to the remote AEs it knows. One of
+`PACS_DIMSE_REMOTES` is changed there, not here. Two remote AEs that may receive studies
+cannot share an AE title: a C-MOVE names its destination by it.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id: 1 to 64 ASCII letters, digits, _ and -. |
+| the body | | [NewRemoteAe](#newremoteae) | Its AE title, host, port, TLS, and whether studies may be sent to it. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [RemoteAe](#remoteae) | Added or changed: the remote AE as it is now. |
+| 400 | [Error](#error) | Not a remote AE: a bad id, AE title, host or port, or TLS this server has no DIMSE TLS for. |
+| 409 | [Error](#error) | One of `PACS_DIMSE_REMOTES`, or another that may receive studies has its AE title. |
+
+### `DELETE /modalities/{id}`
+
+Removes a remote AE added through the API.
+
+The searches, moves and sends asked of it from then on are refused as for an unknown one.
+One of `PACS_DIMSE_REMOTES` is removed there; one that forwarding or a project's write-back
+sends to is not removed while they do.
+
+Permission, when the login is on: `users`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The remote AE's id. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | nothing | Removed; the body is empty. |
+| 404 | nothing | No remote AE has this id; the body is empty. |
+| 409 | [Error](#error) | One of `PACS_DIMSE_REMOTES`, or one the settings send to. |
 
 ### `POST /modalities/{id}/echo`
 
@@ -2335,6 +2378,18 @@ A tool to add.
 | `projects` | list of string or null, optional | The projects to limit the client to; absent or `null`: every study. |
 | `role` | string |  |
 
+### NewRemoteAe
+
+A remote AE to add, or what one added becomes (`PUT /modalities/{id}`).
+
+| Field | Type | |
+|---|---|---|
+| `AET` | string | Its AE title: 1 to 16 characters, no backslash or control character. |
+| `Host` | string | Its host name or IP address. |
+| `MayReceive` | boolean, optional | Whether studies may be sent to it. `false` if not given: an archive only read from is not written to because someone asked. |
+| `Port` | integer |  |
+| `TLS` | boolean, optional | Reached over TLS only; needs this server's DIMSE TLS (`PACS_DIMSE_TLS_CA_FILE`). `false` if not given. |
+
 ### NewRole
 
 A role to add.
@@ -2403,13 +2458,16 @@ A request refused by the login: why.
 
 ### RemoteAe
 
-A remote AE as configured in `PACS_DIMSE_REMOTES`.
+A remote AE: from `PACS_DIMSE_REMOTES`, or added with `PUT /modalities/{id}`.
 
 | Field | Type | |
 |---|---|---|
 | `AET` | string | Its AE title. |
+| `Fixed` | boolean | Set in `PACS_DIMSE_REMOTES`: changed there, not through the API. |
 | `Host` | string |  |
+| `MayReceive` | boolean | Whether studies may be sent to it: by `POST /modalities/{id}/store`, or as the destination of a C-MOVE asked of this server. |
 | `Port` | integer |  |
+| `TLS` | boolean | Reached over TLS only. |
 
 ### RemoteAes
 

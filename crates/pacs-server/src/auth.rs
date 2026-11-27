@@ -15,7 +15,7 @@
 //! | `write` | uploads, measurements, hanging protocols |
 //! | `remote` | everything about remote AEs (`/modalities`, `/jobs`), which reaches the hospital's PACS |
 //! | `delete` | deleting patients, studies, series and instances |
-//! | `users` | managing users and roles (`/users`, `/roles`) |
+//! | `users` | managing users and roles (`/users`, `/roles`), and the remote AEs (`PUT` and `DELETE /modalities/{id}`) |
 //!
 //! Roles are in the index and can be changed (`/roles`). A server starts with four: `reader`
 //! (read), `editor` (read, write, remote), `manager` (also delete) and `admin` (everything).
@@ -128,7 +128,7 @@ pub enum Right {
     /// Remote AEs: a search there lists the hospital's patients, identified.
     Remote,
     Delete,
-    /// Users and roles.
+    /// Users and roles, and the remote AEs.
     Admin,
 }
 
@@ -197,6 +197,13 @@ pub fn right_for(method: &Method, path: &str) -> Right {
     }
     // Remote AEs: a search there lists the hospital's patients, identified, and a move brings
     // their studies in. Not for someone who may only read this archive.
+    // adding, changing or removing one is the server's network configuration: administrators
+    if under("/modalities")
+        && path.matches('/').count() == 2
+        && matches!(*method, Method::PUT | Method::DELETE)
+    {
+        return Right::Admin;
+    }
     if under("/modalities") || under("/jobs") {
         return Right::Remote;
     }
@@ -2446,6 +2453,8 @@ mod tests {
             (Method::GET, "/modalities/hospital/studies", Remote),
             (Method::POST, "/modalities/hospital/move", Remote),
             (Method::POST, "/modalities/hospital/store", Remote),
+            (Method::PUT, "/modalities/hospital", Admin),
+            (Method::DELETE, "/modalities/hospital", Admin),
             (Method::GET, "/jobs/1", Remote),
             (Method::GET, "/roles", SignedIn),
             (Method::POST, "/roles", Admin),

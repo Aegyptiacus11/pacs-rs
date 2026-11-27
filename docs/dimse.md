@@ -7,8 +7,16 @@ Off unless `PACS_DIMSE_LISTEN` names an address. What works now is steps 1 to 4 
 hospital's PACS and de-identifies them on ingest, and step 8: other applications can search
 pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
 
-- **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the AEs of
-  `PACS_DIMSE_REMOTES`, through `POST /modalities/{id}/echo`, to test a hospital link.
+- **Remote AEs** are those of `PACS_DIMSE_REMOTES` and those an administrator adds, changes
+  or removes while the server runs, in the web interface or with `PUT` and `DELETE
+  /modalities/{id}` (`{"AET", "Host", "Port", "TLS", "MayReceive"}`). The ones added are kept
+  in the index and used at once by everything below, the known-callers check and C-MOVE
+  destinations included; those of the settings are changed there only, and one that
+  forwarding or a project's write-back sends to is not removed. Each change is audited as a
+  Security Alert, Network Configuration (DCM 110128). An id in both the settings and the index
+  stops the server at start, with which one to remove.
+- **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the remote AEs, through
+  `POST /modalities/{id}/echo`, to test a hospital link.
 - **C-FIND SCU** at study level, through `GET /modalities/{id}/studies`: by Patient
   ID, Patient's Name and Accession Number (exact, or with `*` and `?`), Study Date (a date,
   `20260101-20260131`, `-20260131` or `20260101-`) and one modality; Specific Character Set

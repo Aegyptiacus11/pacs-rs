@@ -162,7 +162,7 @@ async fn serve(
         tracing::info!(
             dimse = %dimse.local_addr()?,
             ae_title = %config.ae_title,
-            remotes = config.remotes.len(),
+            remotes = config.directory.len(),
             projects = projects.len(),
             "DIMSE ready",
         );

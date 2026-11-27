@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 pub use pacs_rest::schema::Error;
 
-/// A remote AE as configured in `PACS_DIMSE_REMOTES`.
+/// A remote AE: from `PACS_DIMSE_REMOTES`, or added with `PUT /modalities/{id}`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteAe {
@@ -20,6 +20,38 @@ pub struct RemoteAe {
     pub host: String,
     #[serde(rename = "Port")]
     pub port: u16,
+    /// Reached over TLS only.
+    #[serde(rename = "TLS")]
+    pub tls: bool,
+    /// Whether studies may be sent to it: by `POST /modalities/{id}/store`, or as the
+    /// destination of a C-MOVE asked of this server.
+    #[serde(rename = "MayReceive")]
+    pub may_receive: bool,
+    /// Set in `PACS_DIMSE_REMOTES`: changed there, not through the API.
+    #[serde(rename = "Fixed")]
+    pub fixed: bool,
+}
+
+/// A remote AE to add, or what one added becomes (`PUT /modalities/{id}`).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewRemoteAe {
+    /// Its AE title: 1 to 16 characters, no backslash or control character.
+    #[serde(rename = "AET")]
+    pub aet: String,
+    /// Its host name or IP address.
+    #[serde(rename = "Host")]
+    pub host: String,
+    #[serde(rename = "Port")]
+    pub port: u16,
+    /// Reached over TLS only; needs this server's DIMSE TLS (`PACS_DIMSE_TLS_CA_FILE`).
+    /// `false` if not given.
+    #[serde(rename = "TLS", default)]
+    pub tls: bool,
+    /// Whether studies may be sent to it. `false` if not given: an archive only read from
+    /// is not written to because someone asked.
+    #[serde(rename = "MayReceive", default)]
+    pub may_receive: bool,
 }
 
 /// The remote AEs: their ids, or with `expand` each id's AE.

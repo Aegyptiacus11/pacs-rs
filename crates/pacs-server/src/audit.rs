@@ -590,6 +590,22 @@ fn account_change(method: &Method, path: &str) -> Option<(Code, String)> {
         ))
     } else if under("/roles") {
         Some((kind::SECURITY_ROLES_CHANGED, format!("a role was {done}")))
+    } else if path.starts_with("/modalities/")
+        && path.matches('/').count() == 2
+        && *method != Method::POST
+    {
+        // a remote AE this server calls, sends to or answers: its network configuration
+        Some((
+            kind::NETWORK_CONFIGURATION,
+            format!(
+                "a remote AE was {}",
+                if *method == Method::PUT {
+                    "added or changed"
+                } else {
+                    "removed"
+                }
+            ),
+        ))
     } else if path == "/auth/password" && *method == Method::POST {
         Some((
             kind::USER_SECURITY_ATTRIBUTES_CHANGED,
@@ -1331,8 +1347,20 @@ mod tests {
             change(Method::POST, "/auth/password"),
             Some(("110137", "a user changed their own password".into()))
         );
+        // a remote AE added, changed or removed: the network's configuration (DCM 110128)
+        assert_eq!(
+            change(Method::PUT, "/modalities/ws"),
+            Some(("110128", "a remote AE was added or changed".into()))
+        );
+        assert_eq!(
+            change(Method::DELETE, "/modalities/ws"),
+            Some(("110128", "a remote AE was removed".into()))
+        );
         // reading changes nothing, and neither does a route that only looks like one
         for (method, path) in [
+            (Method::POST, "/modalities/ws/echo"),
+            (Method::POST, "/modalities/ws/store"),
+            (Method::GET, "/modalities/ws"),
             (Method::GET, "/users"),
             (Method::GET, "/roles"),
             (Method::POST, "/usersx"),
