@@ -13,7 +13,7 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, Search, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, TriangleAlert, Search, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -501,7 +501,20 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
             </TableBody>
           </Table>
 
-          {!page.isPending && !page.isPlaceholderData && rows.length === 0 && (
+          {page.isError && !page.data && (
+            <div role="alert" className="flex flex-col items-center px-6 py-20 text-center">
+              <div className="mb-4 grid size-11 place-items-center rounded-full border border-destructive/30 bg-destructive/10">
+                <TriangleAlert className="size-5 text-destructive" strokeWidth={1.75} />
+              </div>
+              <div className="font-medium">The studies could not be listed</div>
+              <p className="mt-1 max-w-sm text-sm text-muted-foreground">{page.error.message}</p>
+              <Button variant="outline" className="mt-5" onClick={() => page.refetch()}>
+                Try again
+              </Button>
+            </div>
+          )}
+
+          {!page.isPending && !page.isError && !page.isPlaceholderData && rows.length === 0 && (
             <div className="flex flex-col items-center px-6 py-20 text-center">
               <div className="mb-4 grid size-11 place-items-center rounded-full border bg-card">
                 <FileStack className="size-5 text-muted-foreground" strokeWidth={1.75} />
