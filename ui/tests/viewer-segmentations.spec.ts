@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { test, expect } from "./pacs";
+import { test, expect, FIRST_IMAGE } from "./pacs";
 
 // tests/data/kidney-seg, as the viewer asked a pacs-server for it (record-viewer.mjs kidney-seg):
 // the CT, then the SEG and RTSTRUCT, whose files are served here from tests/data
@@ -22,7 +22,7 @@ type Page = import("@playwright/test").Page;
 
 async function open(page: Page) {
   await page.goto(VIEW);
-  await expect(page.locator(".ov-bl").first()).toContainText(/W \d+ {2}L \d+/);
+  await expect(page.locator(".ov-bl").first()).toContainText(/W \d+ {2}L \d+/, FIRST_IMAGE);
 }
 const lay = (page: Page, name: RegExp) => page.getByRole("button", { name }).click();
 
@@ -135,7 +135,7 @@ test("a study's PDF is read from the series list, and never hung in a viewport",
   pacs.on("GET", "/instances/doc-instance/pdf", () => ({ body: pdf as any, headers: { "content-type": "application/pdf" } }));
   await page.goto(`#/view/${STUDY}`);
   // the CT is hung, not the document numbered first
-  await expect(page.locator(".ov-tl").first()).toContainText("Recon 2: +C");
+  await expect(page.locator(".ov-tl").first()).toContainText("Recon 2: +C", FIRST_IMAGE);
   await page.getByRole("button", { name: /KiTS19 data paper/ }).click();
   await expect(page.getByRole("dialog", { name: "KiTS19 data paper" }).locator("iframe")).toHaveAttribute("src", "http://pacs.test/instances/doc-instance/pdf");
   // the viewport still shows the CT

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { test, expect, fixture } from "./pacs";
+import { test, expect, fixture, FIRST_IMAGE } from "./pacs";
 
 // tests/data/kidney-seg as recorded (record-viewer.mjs kidney-seg); the Key Object Selection
 // pacs-rs made of its images 5 and 7, as a pacs-server gave it back (kidney-ko-*.json)
@@ -25,7 +25,7 @@ async function withSavedKeys(page: Page) {
 
 async function open(page: Page) {
   await page.goto(VIEW);
-  await expect(page.locator(".ov-bl").first()).toContainText(/W \d+ {2}L \d+/);
+  await expect(page.locator(".ov-bl").first()).toContainText(/W \d+ {2}L \d+/, FIRST_IMAGE);
   await page.locator(".cell").first().focus();
 }
 const corner = (page: Page) => page.locator(".ov-tl").first();
