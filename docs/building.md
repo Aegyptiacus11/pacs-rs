@@ -21,6 +21,12 @@ For work on the interface, `npm run dev` in `ui/` serves it with hot reload and 
 requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`);
 `npm run check` type-checks it. Components from shadcn/ui live in `ui/src/components/ui`.
 
+`npm test` builds it and runs the browser tests (`ui/tests`, Playwright in Chromium; once:
+`npx playwright install chromium`). No server is needed: `ui/tests/pacs.ts` answers every
+request, from the answers a test gives, by default the ones in `ui/tests/fixtures`. Those were
+recorded by `ui/tests/record.mjs` from a pacs-server holding only the DICOM files of this
+repository. A request no test answers fails the test.
+
 On Windows, a static build (no Visual C++ runtime needed) is what CI and the release do:
 
 ```powershell
