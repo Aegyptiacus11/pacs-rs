@@ -38,6 +38,7 @@ import {
   StackScrollTool,
   MagnifyTool,
   CrosshairsTool,
+  ReferenceLinesTool,
   TrackballRotateTool,
   LengthTool,
   ProbeTool,
@@ -258,7 +259,7 @@ export function initCornerstone() {
         textBoxBackground: "rgba(0, 0, 0, 0.65)",
       },
     });
-    for (const tool of [StackScrollTool, TrackballRotateTool, ...Object.values(TOOLS)]) addTool(tool);
+    for (const tool of [StackScrollTool, TrackballRotateTool, ReferenceLinesTool, ...Object.values(TOOLS)]) addTool(tool);
   })();
   return ready;
 }
@@ -337,6 +338,8 @@ export type ViewerState = {
   cells: CellState[];
   tool: ToolName;
   linked: boolean;
+  /** where the active viewport's image cuts the others, in stack mode with two or more */
+  referenceLines: boolean;
   overlays: boolean;
   preset: number;
   invert: boolean;
@@ -373,6 +376,9 @@ export class Viewer {
   private layout = 0;
   private mode: "stack" | "mpr" = "stack";
   private linked = false;
+  private referenceLinesOn = true;
+  /** the source the reference lines were last drawn from, "" when they are off */
+  private referenceSource = "";
   private syncing = false;
   private overlaysOn = true;
   // with a finger there is no wheel: going through the images is the tool one starts with
@@ -553,6 +559,9 @@ export class Viewer {
     // a 3D view has its own mouse, whatever tool is chosen: left turns it, middle or
     // shift-left pans, right or the wheel zooms
     const { MouseBindings, KeyboardBindings } = ToolEnums;
+    // reference lines: the active viewport's image plane, drawn on every other stack viewport
+    // of the same frame of reference (the tool leaves the others alone)
+    this.stackGroup.addTool(ReferenceLinesTool.toolName, { sourceViewportId: "", enforceSameFrameOfReference: true, showFullDimension: false });
     this.vrGroup = ToolGroupManager.createToolGroup(VR_GROUP)!;
     for (const tool of [TrackballRotateTool, PanTool, ZoomTool]) this.vrGroup.addTool(tool.toolName);
     // on a touch screen: one finger turns it (one touch is the left button), two pinch to zoom
@@ -669,7 +678,27 @@ export class Viewer {
 
   // ---- state for the toolbar ----
 
+  /** Draws the reference lines from the active viewport, or takes them away, when that changed. */
+  private updateReferenceLines() {
+    const source = this.active();
+    const want = this.referenceLinesOn && this.mode === "stack" && this.cells.length > 1 && !!source?.data ? source.id : "";
+    if (want === this.referenceSource) return;
+    this.referenceSource = want;
+    if (want) {
+      this.stackGroup.setToolConfiguration(ReferenceLinesTool.toolName, { sourceViewportId: want });
+      this.stackGroup.setToolEnabled(ReferenceLinesTool.toolName);
+    } else this.stackGroup.setToolDisabled(ReferenceLinesTool.toolName);
+    this.engine.render();
+  }
+
+  setReferenceLines(on: boolean) {
+    this.referenceLinesOn = on;
+    this.updateReferenceLines();
+    this.emit();
+  }
+
   private emit() {
+    this.updateReferenceLines();
     const cell = this.cells[this.current];
     const slot = cell?.kind === "stack" ? cell.data?.slots[cell.index] : cell?.data?.slots[Math.floor((cell?.data?.slots.length ?? 1) / 2)];
     this.onChange({
@@ -679,6 +708,7 @@ export class Viewer {
       cells: this.cells.map((c) => ({ seriesId: c.seriesId, studyId: c.data?.study.ID ?? null, kind: c.kind, orientation: c.orientation })),
       tool: this.tool,
       linked: this.linked,
+      referenceLines: this.referenceLinesOn,
       overlays: this.overlaysOn,
       preset: cell?.preset ?? 0,
       invert: cell?.invert ?? false,

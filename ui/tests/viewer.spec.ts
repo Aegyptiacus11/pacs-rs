@@ -12,6 +12,9 @@ test.beforeEach(async ({ page, pacs }) => {
   await page.routeFromHAR(HAR, { url: /^http:\/\/pacs\.test\/(?!ui\/(?!config\.json|api\/))/, notFound: "fallback" });
 });
 
+/** The lines drawn on each viewport's annotation layer. */
+const lines = (page: import("@playwright/test").Page) =>
+  page.locator(".cs").evaluateAll((cells) => cells.map((c) => c.querySelectorAll("svg line").length));
 
 test("an image that names VOI LUT Function LINEAR is drawn with its own window", async ({ page }) => {
   await page.goto(VIEW);
@@ -21,4 +24,27 @@ test("an image that names VOI LUT Function LINEAR is drawn with its own window",
   await expect(corner).toContainText("W 1860  L 1070");
 });
 
+test("the active viewport's plane is drawn on the others, and G takes it away", async ({ page }) => {
+  await page.goto(VIEW);
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  // a sagittal plane beside the axial images; the new view is the active one
+  await page.keyboard.press("n");
+  await expect(page.locator(".ov-tl", { hasText: "Sagittal" })).toBeVisible();
+  const toggle = page.getByRole("button", { name: "Lines" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  // the sagittal plane cuts the axial image along one line
+  await expect.poll(async () => (await lines(page))[0]).toBeGreaterThan(0);
 
+  await page.keyboard.press("g");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(async () => (await lines(page))[0]).toBe(0);
+
+  await toggle.click();
+  await expect.poll(async () => (await lines(page))[0]).toBeGreaterThan(0);
+});
+
+test("one viewport has no reference lines to show, and no Lines button", async ({ page }) => {
+  await page.goto(VIEW);
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  await expect(page.getByRole("button", { name: "Lines" })).toHaveCount(0);
+});
