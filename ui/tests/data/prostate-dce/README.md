@@ -11,5 +11,5 @@ doi:10.7937/K9/TCIA.2016.6046GUDV, licensed CC BY 3.0.
   with the `idc-index` Python package
 
 The viewer's browser tests use it (through `../../fixtures/viewer-dce.har`, recorded by
-`../../record-viewer.mjs`): a series of at least 8 slices for a reformatted plane, and the
+`../../record-viewer.mjs prostate-dce`): a series of at least 8 slices for a reformatted plane, and the
 images that showed the VOI LUT Function bug.
