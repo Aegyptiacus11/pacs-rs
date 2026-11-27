@@ -12,6 +12,7 @@ use dicom_object::file::ReadPreamble;
 use dicom_object::{DefaultDicomObject, OpenFileOptions};
 
 pub mod codec;
+pub mod document;
 pub mod frames;
 pub mod json;
 pub mod levels;
