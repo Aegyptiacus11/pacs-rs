@@ -48,3 +48,37 @@ test("one viewport has no reference lines to show, and no Lines button", async (
   await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
   await expect(page.getByRole("button", { name: "Lines" })).toHaveCount(0);
 });
+
+test("a slow machine is not taken for one whose WebGL draws blank", async ({ page }) => {
+  // On a loaded machine the first image was drawn later than the check's fixed wait of 600 ms:
+  // the viewer judged WebGL blank, switched to reading it back and reloaded, mid-test (the
+  // parallel suite, 27 November 2026). Rendering a second late stands for that: Cornerstone
+  // renders on animation frames.
+  await page.addInitScript(() => {
+    const frame = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => frame(() => setTimeout(() => frame(callback), 1000)) as any;
+  });
+  await page.goto(VIEW);
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860", { timeout: 20_000 });
+  await page.waitForTimeout(3000);
+  expect(await page.evaluate(() => localStorage.getItem("pacs-rs-rendering-mode"))).toBeNull();
+  await expect(page.getByText(/didn't show the WebGL image|draws blank images/)).toHaveCount(0);
+});
+
+test("a browser whose WebGL image never reaches the page is noticed, and read back from then on", async ({ page }) => {
+  // as Chrome with ANGLE on Vulkan and Mesa RADV did: WebGL draws, the copy to the page shows nothing
+  await page.addInitScript(() => {
+    const draw = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function (this: CanvasRenderingContext2D, image: any, ...rest: any[]) {
+      if (image instanceof HTMLCanvasElement && (image as any).__webgl) return;
+      return (draw as any).call(this, image, ...rest);
+    } as any;
+    const get = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, ...rest: any[]) {
+      if (type.startsWith("webgl")) (this as any).__webgl = true;
+      return (get as any).call(this, type, ...rest);
+    } as any;
+  });
+  await page.goto(VIEW);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("pacs-rs-rendering-mode")), { timeout: 15_000 }).toBe("readback");
+});
