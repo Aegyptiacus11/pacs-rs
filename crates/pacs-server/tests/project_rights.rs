@@ -313,8 +313,12 @@ async fn sees_only_liver(s: &Server, token: &str, who: &str) {
             );
         }
     }
-    // what is seen: the same routes answer
+    // what is seen: the same routes answer; an image's /pdf answers 404, as it holds no
+    // document (hidden, it is 404 as above all the same)
     for path in rest_routes(&liver) {
+        if path.ends_with("/pdf") {
+            continue;
+        }
         let reply = get(app, &path, token).await;
         assert_eq!(reply.status, StatusCode::OK, "{who}: {path}");
         assert!(!reply.bytes.is_empty(), "{who}: {path}");
