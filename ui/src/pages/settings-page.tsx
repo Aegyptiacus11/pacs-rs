@@ -4,7 +4,7 @@
 
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleUser, Copy, Info, KeyRound, LogOut, ShieldCheck, Users, Waypoints } from "lucide-react";
+import { CircleUser, Copy, Info, KeyRound, LogOut, Network, ShieldCheck, Users, Waypoints } from "lucide-react";
 import { toast } from "sonner";
 import { PasswordDialog } from "@/components/user-menu";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,7 @@ import { authOn, may, signOut, throughProvider, useSession } from "@/lib/session
 import { cn } from "@/lib/utils";
 import { RolesSection } from "@/pages/roles-section";
 import { ToolsSection } from "@/pages/tools-section";
+import { RemoteArchivesSection } from "@/pages/remote-archives-section";
 import { UsersSection } from "@/pages/users-page";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -122,6 +123,8 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
     { id: "users" as const, label: "Users", Icon: Users, shown: authOn && may("admin", user) },
     { id: "roles" as const, label: "Roles and permissions", Icon: ShieldCheck, shown: authOn && !!user },
     { id: "tools" as const, label: "Tools", Icon: Waypoints, shown: authOn && may("admin", user) },
+    // without a login anyone does everything; with one, an administrator
+    { id: "remotes" as const, label: "Remote archives", Icon: Network, shown: !authOn || may("admin", user) },
     { id: "account" as const, label: "Your account", Icon: CircleUser, shown: authOn && !!user },
     { id: "about" as const, label: "About this server", Icon: Info, shown: true },
   ].filter((s) => s.shown);
@@ -156,6 +159,8 @@ export function SettingsPage({ section }: { section: SettingsSection | null }) {
             <RolesSection />
           ) : current.id === "tools" ? (
             <ToolsSection />
+          ) : current.id === "remotes" ? (
+            <RemoteArchivesSection />
           ) : current.id === "account" ? (
             <AccountSection />
           ) : (
