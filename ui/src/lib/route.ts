@@ -5,7 +5,7 @@
 
 import { useSyncExternalStore } from "react";
 
-export type SettingsSection = "users" | "roles" | "tools" | "account" | "about";
+export type SettingsSection = "users" | "roles" | "tools" | "remotes" | "account" | "about";
 
 export type Route =
   | { page: "studies"; patient: string | null; open: string | null }
@@ -21,7 +21,7 @@ function parse(): Route {
   const params = new URLSearchParams(query);
   const view = /^\/view\/([\w-]+)(?:\/([\w-]+))?$/.exec(path);
   if (view) return { page: "view", study: view[1], series: view[2] ?? null, compare: params.get("compare") };
-  const settings = /^\/settings(?:\/(users|roles|tools|account|about))?$/.exec(path);
+  const settings = /^\/settings(?:\/(users|roles|tools|remotes|account|about))?$/.exec(path);
   if (settings) return { page: "settings", section: (settings[1] as SettingsSection) ?? null };
   if (path === "/patients") return { page: "patients", open: params.get("open") };
   if (path === "/server") return { page: "server" };
