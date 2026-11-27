@@ -23,7 +23,7 @@ pub(crate) struct DocumentParams {
 }
 
 /// A new UID under the `2.25` root: a random 122-bit UUID as one decimal number (PS3.5 B.2).
-fn new_uid() -> Result<String, RestError> {
+pub(crate) fn new_uid() -> Result<String, RestError> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)
         .map_err(|e| RestError::internal(format!("no random bytes: {e}")))?;
@@ -31,6 +31,21 @@ fn new_uid() -> Result<String, RestError> {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Ok(format!("2.25.{}", u128::from_be_bytes(bytes)))
+}
+
+/// The highest Series Number of a study's series, 0 for none: a new series comes after it.
+pub(crate) async fn last_series_number(
+    state: &crate::AppState,
+    study: &pacs_index::RestStudy,
+) -> Result<u32, RestError> {
+    let mut last = 0u32;
+    for series in &study.series {
+        if let Some(s) = state.archive.index().rest_series(series).await? {
+            let number = s.main_tags.get("SeriesNumber").and_then(Value::as_str);
+            last = last.max(number.and_then(|n| n.trim().parse().ok()).unwrap_or(0));
+        }
+    }
+    Ok(last)
 }
 
 /// Adds a PDF document to a study.
@@ -67,16 +82,13 @@ pub(crate) async fn add(
     if let Some(why) = not_a_pdf(&body) {
         return Err(RestError::bad_request("Not a PDF", why));
     }
-    let index = state.archive.index();
-    let study = index.rest_study(&id).await?.ok_or(RestError::NotFound)?;
-    // after the study's last series
-    let mut last = 0u32;
-    for series in &study.series {
-        if let Some(s) = index.rest_series(series).await? {
-            let number = s.main_tags.get("SeriesNumber").and_then(Value::as_str);
-            last = last.max(number.and_then(|n| n.trim().parse().ok()).unwrap_or(0));
-        }
-    }
+    let study = state
+        .archive
+        .index()
+        .rest_study(&id)
+        .await?
+        .ok_or(RestError::NotFound)?;
+    let last = last_series_number(&state, &study).await?;
     let empty = Map::new();
     let title = match params.title.trim() {
         "" => "PDF document",

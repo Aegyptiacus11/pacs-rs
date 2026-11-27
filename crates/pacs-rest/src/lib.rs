@@ -19,6 +19,7 @@ mod delete;
 mod documents;
 mod error;
 mod find;
+mod key_images;
 mod labels;
 mod metadata;
 mod resources;
@@ -60,6 +61,7 @@ fn described() -> OpenApiRouter<scope::Whole> {
         .routes(routes!(resources::instance_file))
         .routes(routes!(documents::pdf))
         .routes(routes!(documents::add))
+        .routes(routes!(key_images::add))
         .routes(routes!(parents::instance_series))
         .routes(routes!(parents::instance_study))
         .routes(routes!(parents::instance_patient))

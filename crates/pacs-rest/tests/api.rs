@@ -401,8 +401,8 @@ async fn every_operation_is_described_in_full() {
     // the routes of `router_with_api`: 26 paths, four of them with DELETE too, one with
     // POST; the labels and the metadata: a list and one at each of four levels (GET, PUT,
     // DELETE on the one), and /tools/labels; the PDF documents: POST on a study, GET on an
-    // instance
-    assert_eq!((paths.len(), operations), (45, 66));
+    // instance; the key images: POST on a study
+    assert_eq!((paths.len(), operations), (46, 67));
     let schemas = api["components"]["schemas"].as_object().unwrap();
     for name in [
         "Patient",
