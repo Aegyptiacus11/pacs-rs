@@ -48,7 +48,10 @@ async fn hospital() -> (RemoteAe, [RealSeries; 3]) {
     let mut config = config();
     config.ae_title = AeTitle::new("HOSPITAL").unwrap();
     // the hospital answers the retrievals of the AEs it knows
-    config.remotes = vec!["pacsrs=PACSRS@127.0.0.1:11112".parse().unwrap()];
+    config.directory = pacs_dimse::Directory::new(
+        vec!["pacsrs=PACSRS@127.0.0.1:11112".parse().unwrap()],
+        vec![],
+    );
     let addr = start(config, archive).await;
     let remote = format!("hospital=HOSPITAL@127.0.0.1:{}", addr.port())
         .parse()

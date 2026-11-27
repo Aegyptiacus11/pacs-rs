@@ -439,15 +439,15 @@ async fn selected(
 
 /// What a C-MOVE needs before its first sub-operation, or why it has none: the instances
 /// to send and where.
-async fn prepare<'c>(
+async fn prepare(
     request: &Request<'_>,
     command: &Command,
     data: DataSet,
     index: &Index,
-    config: &'c Config,
+    config: &Config,
     authorized: bool,
     retrieved: &mut Retrieved,
-) -> Result<(Vec<InstanceEntry>, &'c RemoteAe), Refusal> {
+) -> Result<(Vec<InstanceEntry>, RemoteAe), Refusal> {
     let selection = selection(request, data, authorized, "C-MOVE")?;
     retrieved.destination = command
         .text(tag::MOVE_DESTINATION)
@@ -563,7 +563,7 @@ where
     // the AE that was asked is the one that sends: a project under its own title
     let calling = AeTitle::new(request.called).unwrap_or_else(|_| config.ae_title.clone());
     let opened = Sender::open(
-        destination,
+        &destination,
         &calling,
         &stored,
         config.timeout,

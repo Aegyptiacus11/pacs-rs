@@ -151,7 +151,8 @@ async fn extra_ae_titles_are_accepted_on_the_same_port() {
 async fn known_callers_only_refuses_strangers() {
     let mut config = config();
     config.known_callers_only = true;
-    config.remotes = vec!["h=HOSPITAL@10.0.0.5:104".parse().unwrap()];
+    config.directory =
+        pacs_dimse::Directory::new(vec!["h=HOSPITAL@10.0.0.5:104".parse().unwrap()], vec![]);
     let addr = start(config, archive().await).await;
     let rj = rejection(
         Client::connect(
