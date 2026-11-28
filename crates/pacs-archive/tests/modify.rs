@@ -310,3 +310,158 @@ async fn without_a_trash_the_old_files_are_gone_at_once() {
         ["H-0042"; 2]
     );
 }
+
+#[tokio::test]
+async fn undoing_a_merge_gives_each_patient_their_own_labels() {
+    let archive = archive(30).await;
+    let kept = RealSeries::new(75, 1).for_patient(75);
+    let merged = RealSeries::new(76, 2).for_patient(76);
+    store(&archive, &kept).await;
+    store(&archive, &merged).await;
+    let into = public_ids::patient(&kept.patient_id());
+    let from = public_ids::patient(&merged.patient_id());
+    let index = archive.index();
+    index
+        .add_label(Level::Patient, &into, "teaching")
+        .await
+        .unwrap();
+    index
+        .add_label(Level::Patient, &into, "both")
+        .await
+        .unwrap();
+    index
+        .add_label(Level::Patient, &from, "follow-up")
+        .await
+        .unwrap();
+    index
+        .add_label(Level::Patient, &from, "both")
+        .await
+        .unwrap();
+
+    let done = archive.merge_patients(&from, &into).await.unwrap().unwrap();
+    assert_eq!(
+        index.labels(&into).await.unwrap(),
+        ["both", "follow-up", "teaching"]
+    );
+    // the moves are in the entry from the transaction that made it
+    let entry = index
+        .trash_entry(done.trash.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pacs_index::Moved::list_from_json(&entry.studies[0]["rekeyed"]).unwrap(),
+        done.rekeyed
+    );
+
+    archive.restore(done.trash.unwrap()).await.unwrap().unwrap();
+
+    // the patient merged into keeps theirs, "both" included; the other gets theirs back
+    assert_eq!(index.labels(&into).await.unwrap(), ["both", "teaching"]);
+    assert_eq!(index.labels(&from).await.unwrap(), ["both", "follow-up"]);
+}
+
+#[tokio::test]
+async fn an_undo_that_cannot_be_whole_changes_nothing() {
+    let archive = archive(30).await;
+    let series = RealSeries::new(77, 3).for_patient(77);
+    store(&archive, &series).await;
+    let old = public_ids::patient(&series.patient_id());
+    archive
+        .index()
+        .add_label(Level::Patient, &old, "teaching")
+        .await
+        .unwrap();
+    let done = archive
+        .modify_patient(&old, &corrected())
+        .await
+        .unwrap()
+        .unwrap();
+    // one modified instance deleted since: it can no longer be put back
+    let gone = public_ids::instance(
+        "H-0042",
+        &series.study_uid(),
+        &series.series_uid(),
+        &series.instance_uid(1),
+    );
+    archive
+        .delete(Level::Instance, &gone)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let refused = archive.restore(done.trash.unwrap()).await;
+
+    assert!(
+        matches!(
+            refused,
+            Err(pacs_archive::CheckError::Index(
+                pacs_index::Error::Conflict(_)
+            ))
+        ),
+        "{refused:?}"
+    );
+    // every instance left is still the modified one, and the labels stayed with it
+    for i in [0, 2] {
+        let entry = archive
+            .index()
+            .instance(
+                &series.study_uid(),
+                &series.series_uid(),
+                &series.instance_uid(i),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let file = archive.file(&entry).await.unwrap();
+        assert_eq!(
+            Instance::from_bytes(&file)
+                .unwrap()
+                .string(tags::PATIENT_ID)
+                .unwrap(),
+            "H-0042"
+        );
+    }
+    assert_eq!(
+        archive.index().labels(&done.patient).await.unwrap(),
+        ["teaching"]
+    );
+    assert!(archive.index().labels(&old).await.unwrap().is_empty());
+    let entry = archive
+        .index()
+        .trash_entry(done.trash.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.files, 3, "the entry keeps every old file");
+}
+
+#[tokio::test]
+async fn the_entry_keeps_the_birth_date_and_sex_before() {
+    let archive = archive(30).await;
+    let series = RealSeries::new(78, 1).for_patient(78).born("19650303");
+    store(&archive, &series).await;
+    let old = public_ids::patient(&series.patient_id());
+    let before = archive
+        .index()
+        .patient_main_tags(&old)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let done = archive
+        .modify_patient(&old, &corrected())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let entry = archive
+        .index()
+        .trash_entry(done.trash.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.studies[0]["PatientBirthDate"], "19650303");
+    assert_eq!(entry.studies[0]["PatientSex"], before["PatientSex"]);
+    assert_eq!(entry.studies[0]["changed"]["PatientBirthDate"], "19800102");
+}

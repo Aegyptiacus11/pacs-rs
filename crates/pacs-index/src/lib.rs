@@ -65,7 +65,7 @@ pub use clients::StoredClient;
 pub use delete::{Deleted, IntoTrash, Level};
 pub use jobs::{KEPT_FINISHED, StoredJob};
 pub use matching::{Kind, Match};
-pub use modify::Rekey;
+pub use modify::{Moved, Rekey};
 pub use originals::OriginalStudy;
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};

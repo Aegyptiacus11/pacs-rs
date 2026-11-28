@@ -9,7 +9,7 @@ use serde_json::json;
 
 use pacs_core::Instance;
 use pacs_core::patient::PatientChange;
-use pacs_index::{IntoTrash, Level, NewInstance, Rekey};
+use pacs_index::{IntoTrash, Level, Moved, NewInstance};
 
 use crate::{Archive, sha256_hex};
 
@@ -44,8 +44,8 @@ pub struct Modified {
     /// The trash entry holding the files replaced: restoring it undoes the change. `None`
     /// when the archive keeps no trash, and the old files are gone.
     pub trash: Option<i64>,
-    /// Public IDs that changed, old and new.
-    pub rekeyed: Vec<Rekey>,
+    /// Public IDs that changed, with the labels and metadata moved from each.
+    pub rekeyed: Vec<Moved>,
 }
 
 impl Archive {
@@ -67,6 +67,14 @@ impl Archive {
         if studies.is_empty() {
             return Ok(None);
         }
+        // the values before, kept in the trash entry for the trail and an undo: name and ID
+        // are on each study already
+        let before = self
+            .index
+            .patient_main_tags(public_id)
+            .await?
+            .unwrap_or_default();
+        let was = |key: &str| before.get(key).cloned().unwrap_or(json!(null));
         let mut files = Vec::new();
         for study in &studies {
             let uid = &study.study_instance_uid;
@@ -126,6 +134,8 @@ impl Archive {
                         "PatientID": s.patient_id,
                         "PatientName": s.patient_name,
                         "project": null,
+                        "PatientBirthDate": was("PatientBirthDate"),
+                        "PatientSex": was("PatientSex"),
                         "changed": changed,
                     })
                 })
@@ -148,10 +158,6 @@ impl Archive {
             }
         };
         let trash_id = trash.id.expect("replace_instances keeps a trash entry");
-        // what an undo needs to move labels and metadata back
-        let mut kept = studies_json.clone();
-        kept[0]["rekeyed"] = json!(rekeyed);
-        self.index.set_trash_studies(trash_id, &kept).await?;
         // the old files to where the entry says they wait, or gone at once without a trash
         for file in self.index.trash_files(trash_id).await? {
             self.move_to_trash(&file).await;
@@ -204,14 +210,15 @@ impl Archive {
         self.modify_patient(from, &change).await
     }
 
-    /// New files that will not be named: removed again, or left for the consistency check.
-    async fn forget(&self, keys: &[String]) {
+    /// Files the index does not name: removed, or left for the consistency check. Not an
+    /// error: the index is right either way, and the check reports and removes what is left.
+    pub(crate) async fn forget(&self, keys: &[String]) {
         let failed = self.store.delete_many(keys.to_vec()).await;
         if !failed.is_empty() {
             tracing::warn!(
                 left = failed.len(),
                 first = %failed[0],
-                "a patient modification that failed left files the index does not name"
+                "a patient modification or its undo left files the index does not name"
             );
         }
     }
