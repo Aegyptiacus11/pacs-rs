@@ -75,6 +75,32 @@ test("saved key images are read from the study's Key Object Selection, and shown
   await expect(list).toHaveCount(2);
 });
 
+test("a mark made before the saved key images arrive is not saved again", async ({ page, pacs }) => {
+  const har = JSON.parse(readFileSync(HAR, "utf8"));
+  const recorded = JSON.parse(har.log.entries.find((e: any) => e.request.url.endsWith(`/studies/${STUDY}/series`)).response.content.text);
+  const ko = fixture("kidney-ko-series.json");
+  await page.route(`**/studies/${STUDY}/series`, (route) => route.fulfill({ json: [...recorded, ko] }));
+  // the Key Object Selection's metadata held back until image 5 is marked
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`**/series/${ko.MainDicomTags.SeriesInstanceUID}/metadata`, async (route) => {
+    await held;
+    await route.fulfill({ json: fixture("kidney-ko-metadata.json") });
+  });
+  let posts = 0;
+  pacs.on("POST", `/studies/${STUDY}/key-images`, () => (posts++, { json: { ID: "ko", Status: "Success" } }));
+  await open(page);
+  await page.keyboard.press("k");
+  await expect(corner(page)).toContainText("★ Key image, not saved");
+  await page.getByRole("button", { name: "Save 1 key image" }).click();
+  // Save waits for the saved ones; they hold image 5 already
+  release();
+  await expect(page.getByText("Already saved")).toBeVisible();
+  await expect(corner(page)).not.toContainText("not saved");
+  await expect(panel(page).getByRole("listitem")).toHaveCount(2);
+  expect(posts).toBe(0);
+});
+
 test("the key image series in the series list opens the key images", async ({ page }) => {
   await withSavedKeys(page);
   await open(page);

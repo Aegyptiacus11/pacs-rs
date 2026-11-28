@@ -434,6 +434,7 @@ export class Viewer {
   private segs: Overlay[] = [];
   private keyMarks = new Map<string, KeyMark>();
   private keysOf = new Map<string, Promise<void>>();
+  private savingKeys = false;
   /** Called when a study's key images could not be read. */
   onKeysFailed: ((message: string) => void) | null = null;
   /** Asks for an arrow's words; resolves to null when cancelled. The page sets it. */
@@ -1634,7 +1635,10 @@ export class Viewer {
               const frame = num(ref, "00081160", 0);
               const seriesUid = seriesOf.get(sop) ?? "";
               const id = `${sop}/${frame}`;
-              if (!this.keyMarks.has(id))
+              const known = this.keyMarks.get(id);
+              // marked here before the saved ones arrived: it is saved already, not saved again
+              if (known) known.saved = true;
+              else
                 this.keyMarks.set(id, {
                   id, study: study.ID, sop, frame, instance: null, seriesUid, label: label(seriesUid), saved: true,
                   seriesId: list.find((x) => x.MainDicomTags.SeriesInstanceUID === seriesUid)?.ID ?? null,
@@ -1687,10 +1691,25 @@ export class Viewer {
   }
 
   /** The marks not saved yet, saved as one Key Object Selection a study, with this
-   * description. Resolves to null, or to why not (the marks then stay, not saved). */
-  async saveKeys(description: string): Promise<string | null> {
+   * description. Resolves to how many were saved, or to why not (the marks then stay, not
+   * saved). A mark the study's saved ones already hold is not saved again. */
+  async saveKeys(description: string): Promise<{ saved: number } | { why: string }> {
+    if (this.savingKeys) return { why: "The key images are being saved" };
+    this.savingKeys = true;
+    try {
+      return await this.saveKeysNow(description);
+    } finally {
+      this.savingKeys = false;
+    }
+  }
+
+  private async saveKeysNow(description: string): Promise<{ saved: number } | { why: string }> {
+    // the saved ones read first: a mark made before they arrived may be one of them
+    const marked = new Set([...this.keyMarks.values()].filter((k) => !k.saved).map((k) => k.study));
+    await Promise.all([...marked].map((study) => this.keysOf.get(study)));
     const pending = [...this.keyMarks.values()].filter((k) => !k.saved);
     const studies = [...new Set(pending.map((k) => k.study))];
+    let saved = 0;
     for (const study of studies) {
       const mine = pending.filter((k) => k.study === study);
       try {
@@ -1700,14 +1719,15 @@ export class Viewer {
           body: JSON.stringify({ Images: mine.map((k) => (k.frame ? { ID: k.instance, Frame: k.frame } : k.instance)), Description: description.trim() }),
         });
       } catch (e) {
-        if (e instanceof HttpError) return e.message;
+        if (e instanceof HttpError) return { why: e.message };
         throw e;
       }
       for (const k of mine) k.saved = true;
+      saved += mine.length;
     }
     this.cells.forEach((c) => this.overlays(c));
     this.emit();
-    return null;
+    return { saved };
   }
 
   /** Shows a key image in the active viewport. */
