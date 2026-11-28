@@ -58,7 +58,7 @@ import { api, formatDate, formatTime, HttpError, personName, sexAge, WEB } from 
 import { first, num, tag } from "@/lib/pixels";
 import { authHeaders } from "@/lib/session";
 import { fetchAnnotations, saveAnnotations } from "@/viewer/annotations";
-import { contourCut, OverlayError, readOverlay, segOnImages, type Plane as ImagePlane, type Rgb, type Roi } from "@/viewer/segmentation";
+import { contourCut, OverlayError, readOverlay, segOnImages, topSegments, type Layer, type Plane as ImagePlane, type Rgb, type Roi } from "@/viewer/segmentation";
 
 /** Cornerstone holds a quick click for 400 ms, in case a second one makes it a double click,
  * before it acts on it; what a tap began is there to be dropped after that. */
@@ -316,6 +316,8 @@ type Cell = {
   scale: HTMLDivElement;
   /** a SEG's segments on the image of a stack viewport, a pixel of it an image pixel */
   masks: HTMLCanvasElement;
+  /** what the masks canvas holds now: a camera change that keeps it only moves the canvas */
+  masksDrawn?: string;
   /** an RTSTRUCT's contours, drawn over the image */
   contours: SVGSVGElement;
   presetSelect: HTMLSelectElement;
@@ -351,8 +353,8 @@ type Overlay = {
   /** SEG frames on images that are not in the series as stored here */
   missed: number;
   rois: Roi[];
-  /** a SEG's segment numbers on each image of its series, in the series' order */
-  maps: (Uint8Array | null)[];
+  /** a SEG's segment masks on each image of its series, in the series' order */
+  layers: (Layer[] | null)[];
   /** whether Cornerstone has it as a labelmap, for MPR */
   labelmap: boolean;
 };
@@ -371,7 +373,7 @@ type KeyMark = {
 };
 export type KeyState = Pick<KeyMark, "id" | "label" | "saved">;
 
-export type OverlayState = Omit<Overlay, "rois" | "target" | "maps" | "labelmap"> & { targetShown: boolean };
+export type OverlayState = Omit<Overlay, "rois" | "target" | "layers" | "labelmap"> & { targetShown: boolean };
 
 export type CellState = { seriesId: string | null; studyId: string | null; kind: Cell["kind"]; orientation: Orientation | null };
 const planeOf = (c: Cell): Plane => (c.kind === "3d" ? "3d" : (c.orientation ?? "original"));
@@ -1403,19 +1405,20 @@ export class Viewer {
         items: [],
         missed: 0,
         rois: [],
-        maps: [],
+        layers: [],
         labelmap: false,
       };
       if (overlay.kind === "SEG") {
-        const { maps, missed } = segOnImages(
+        const { layers, missed } = segOnImages(
           overlay,
           data.slots.map((s) => ({ sop: s.instance.MainDicomTags.SOPInstanceUID, frame: s.frame, plane: this.planeOf(s.meta) })),
         );
-        if (maps.every((m) => !m)) return "none of its frames lies on an image of the series";
-        entry.maps = maps;
-        // a color for each segment number, transparent where there is none: for MPR
-        const lut: Types.ColorLUT = Array.from({ length: 256 }, () => [0, 0, 0, 0]);
-        for (const sg of overlay.segments) if (sg.number > 0 && sg.number < 256) lut[sg.number] = [...sg.color, 255];
+        if (layers.every((m) => !m)) return "none of its frames lies on an image of the series";
+        entry.layers = layers;
+        // a color for each segment number (up to 65535), transparent where there is none: for MPR
+        const top = Math.max(255, ...overlay.segments.map((sg) => sg.number));
+        const lut: Types.ColorLUT = Array.from({ length: top + 1 }, () => [0, 0, 0, 0]);
+        for (const sg of overlay.segments) if (sg.number > 0) lut[sg.number] = [...sg.color, 255];
         this.luts.set(id, segmentation.config.color.addColorLUT(lut));
         entry.items = overlay.segments.map((sg) => ({ index: sg.number, label: sg.label, color: sg.color, visible: true }));
         entry.missed = missed;
@@ -1445,8 +1448,10 @@ export class Viewer {
     if (o.labelmap) return;
     const images = imageLoader.createAndCacheDerivedLabelmapImages(data.slots.map((s) => s.imageId));
     images.forEach((image, i) => {
-      const map = o.maps[i];
-      if (map) (image.voxelManager?.getScalarData() ?? image.getPixelData()).set(map);
+      const layers = o.layers[i];
+      if (!layers) return;
+      const pixels = image.voxelManager?.getScalarData() ?? image.getPixelData();
+      pixels.set(topSegments(layers, pixels.length));
     });
     segmentation.addSegmentations([
       {
@@ -1484,34 +1489,43 @@ export class Viewer {
     const canvas = cell.masks;
     const data = cell.data;
     const slot = data?.slots[cell.index];
-    const shown = cell.kind === "stack" && slot ? this.segs.filter((o) => o.kind === "SEG" && o.visible && o.target === data!.series.ID && o.maps[cell.index]) : [];
+    const shown = cell.kind === "stack" && slot ? this.segs.filter((o) => o.kind === "SEG" && o.visible && o.target === data!.series.ID && o.layers[cell.index]) : [];
     const plane = shown.length ? this.planeOf(slot!.meta) : null;
     if (!plane) {
       canvas.hidden = true;
+      cell.masksDrawn = undefined;
       return;
     }
     const { rows, columns } = plane;
-    if (canvas.width !== columns || canvas.height !== rows) Object.assign(canvas, { width: columns, height: rows });
-    const out = new ImageData(columns, rows);
-    const fill = Math.round(this.fill * 255);
-    for (const o of shown) {
-      const map = o.maps[cell.index]!;
-      const color = new Map(o.items.filter((it) => it.visible).map((it) => [it.index, it.color]));
-      for (let y = 0, p = 0; y < rows; y++)
-        for (let x = 0; x < columns; x++, p++) {
-          const v = map[p];
-          const c = v && color.get(v);
+    // the pixels only when what they show changed: a pan or a zoom moves the canvas alone
+    const drawn = [data!.series.ID, cell.index, this.fill, ...shown.map((o) => `${o.seriesId}:${o.items.filter((it) => it.visible).map((it) => it.index)}`)].join("|");
+    if (cell.masksDrawn !== drawn) {
+      if (canvas.width !== columns || canvas.height !== rows) Object.assign(canvas, { width: columns, height: rows });
+      const out = new ImageData(columns, rows);
+      const fill = Math.round(this.fill * 255);
+      for (const o of shown) {
+        const color = new Map(o.items.filter((it) => it.visible).map((it) => [it.index, it.color]));
+        // rising number: where visible segments overlap, the higher one is drawn last, on top;
+        // a hidden one leaves the one under it showing
+        for (const { segment, mask } of o.layers[cell.index]!) {
+          const c = color.get(segment);
           if (!c) continue;
-          // an edge: a neighbour outside the segment, or the image's border
-          const edge = x === 0 || y === 0 || x === columns - 1 || y === rows - 1 || map[p - 1] !== v || map[p + 1] !== v || map[p - columns] !== v || map[p + columns] !== v;
-          const q = p * 4;
-          out.data[q] = c[0];
-          out.data[q + 1] = c[1];
-          out.data[q + 2] = c[2];
-          out.data[q + 3] = edge ? 255 : fill;
+          for (let y = 0, p = 0; y < rows; y++)
+            for (let x = 0; x < columns; x++, p++) {
+              if (!mask[p]) continue;
+              // an edge: a neighbour outside the segment, or the image's border
+              const edge = x === 0 || y === 0 || x === columns - 1 || y === rows - 1 || !mask[p - 1] || !mask[p + 1] || !mask[p - columns] || !mask[p + columns];
+              const q = p * 4;
+              out.data[q] = c[0];
+              out.data[q + 1] = c[1];
+              out.data[q + 2] = c[2];
+              out.data[q + 3] = edge ? 255 : fill;
+            }
         }
+      }
+      canvas.getContext("2d")!.putImageData(out, 0, 0);
+      cell.masksDrawn = drawn;
     }
-    canvas.getContext("2d")!.putImageData(out, 0, 0);
     // image pixel (u, v), its corner, in the patient, then on the screen
     const at = (u: number, v: number) => {
       const w = [0, 1, 2].map((k) => plane.origin[k] + (u - 0.5) * plane.spacing[1] * plane.row[k] + (v - 0.5) * plane.spacing[0] * plane.column[k]);
