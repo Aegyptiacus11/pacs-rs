@@ -40,6 +40,10 @@ pub(crate) struct Remotes {
     /// The remote AEs the settings send to on their own (forwarding, projects' write-back),
     /// each with why: not removed while they do.
     in_use: Vec<(String, String)>,
+    /// Held by each change of the remote AEs, from its checks to the index and the
+    /// directory: two at once could pass the same check, or leave the index and the directory
+    /// apart.
+    changes: tokio::sync::Mutex<()>,
 }
 
 /// The routes, each one by its `#[utoipa::path]`, so that none is served that the API's
@@ -75,6 +79,7 @@ pub(crate) fn router(
             projects,
             index,
             in_use,
+            changes: tokio::sync::Mutex::new(()),
         }))
         .split_for_parts()
         .0

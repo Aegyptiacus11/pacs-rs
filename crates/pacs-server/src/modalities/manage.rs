@@ -42,7 +42,13 @@ fn bad_host(host: &str) -> Option<String> {
     if host.parse::<std::net::IpAddr>().is_ok() {
         return None;
     }
+    // a name's last label is not all digits (RFC 1123 2.1): 999.1.1.1 is a bad address
+    let last_numeric = host
+        .rsplit('.')
+        .next()
+        .is_some_and(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()));
     let name = !host.is_empty()
+        && !last_numeric
         && host.len() <= 253
         && host.split('.').all(|label| {
             !label.is_empty()
@@ -79,7 +85,9 @@ pub(crate) fn stored_remote(stored: &StoredRemoteAe) -> Result<RemoteAe, String>
 /// Kept by the server, and used at once: by the next C-ECHO, search, move or send, and by the
 /// DIMSE server, which answers and sends to the remote AEs it knows. One of
 /// `PACS_DIMSE_REMOTES` is changed there, not here. Two remote AEs that may receive studies
-/// cannot share an AE title: a C-MOVE names its destination by it.
+/// cannot share an AE title: a C-MOVE names its destination by it. One that forwarding or a
+/// project's write-back sends to may be given a new address, but studies may still be sent to
+/// it.
 #[utoipa::path(
     put,
     path = "/modalities/{id}",
@@ -89,7 +97,7 @@ pub(crate) fn stored_remote(stored: &StoredRemoteAe) -> Result<RemoteAe, String>
     responses(
         (status = 200, description = "Added or changed: the remote AE as it is now.", body = Described),
         (status = 400, description = "Not a remote AE: a bad id, AE title, host or port, or TLS this server has no DIMSE TLS for.", body = Error),
-        (status = 409, description = "One of `PACS_DIMSE_REMOTES`, or another that may receive studies has its AE title.", body = Error)
+        (status = 409, description = "One of `PACS_DIMSE_REMOTES`; another that may receive studies has its AE title; or the settings send to it and studies would no longer be sent to it.", body = Error)
     )
 )]
 pub(crate) async fn put(
@@ -104,11 +112,21 @@ pub(crate) async fn put(
                 .into_response();
         }
     };
+    let _changing = remotes.changes.lock().await;
     let directory = &remotes.config.directory;
     if directory.is_fixed(&id) {
         return conflict(
             "Set in the settings",
             format!("{id} is one of PACS_DIMSE_REMOTES: change it there"),
+        );
+    }
+    // what the settings send to may move (a new address), not stop taking studies
+    if !asked.may_receive
+        && let Some((_, why)) = remotes.in_use.iter().find(|(used, _)| *used == id)
+    {
+        return conflict(
+            "In use",
+            format!("{id} is what {why} sends to: studies may still be sent to it"),
         );
     }
     let stored = StoredRemoteAe {
@@ -172,6 +190,7 @@ pub(crate) async fn delete(
     State(remotes): State<Arc<Remotes>>,
     Path(id): Path<String>,
 ) -> Response {
+    let _changing = remotes.changes.lock().await;
     let directory = &remotes.config.directory;
     if directory.remote(&id).is_none() {
         return RestError::NotFound.into_response();
@@ -215,6 +234,7 @@ mod tests {
             "x..local",
             "pacs.hospital.local:104",
             "http://pacs",
+            "999.1.1.1",
         ] {
             assert!(bad_host(bad).is_some(), "{bad:?}");
         }
