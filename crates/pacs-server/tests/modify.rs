@@ -220,3 +220,46 @@ fn only_who_may_modify_patients_does() {
     assert_eq!(right_for(&Method::GET, "/patients/p1"), Right::Read);
     assert_eq!(right_for(&Method::POST, "/instances"), Right::Write);
 }
+
+#[tokio::test]
+async fn an_undo_that_cannot_be_whole_is_refused_with_a_reason() {
+    let series = RealSeries::new(83, 2).for_patient(83);
+    let server = server(std::slice::from_ref(&series)).await;
+    let old = public_ids::patient(&series.patient_id());
+    let (_, done) = server
+        .call(
+            Method::POST,
+            &format!("/patients/{old}/modify"),
+            Some(json!({"PatientID": "H-8"})),
+        )
+        .await;
+    let trash = done["Trash"].as_str().unwrap();
+    let gone = public_ids::instance(
+        "H-8",
+        &series.study_uid(),
+        &series.series_uid(),
+        &series.instance_uid(0),
+    );
+    let (status, _) = server
+        .call(Method::DELETE, &format!("/instances/{gone}"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, refused) = server
+        .call(Method::POST, &format!("/trash/{trash}/restore"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .contains("no longer stored"),
+        "{refused}"
+    );
+    assert_eq!(
+        server.patient(&public_ids::patient("H-8")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(server.patient(&old).await.0, StatusCode::NOT_FOUND);
+}

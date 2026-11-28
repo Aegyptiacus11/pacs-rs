@@ -1684,6 +1684,7 @@ Permission, when the login is on: `delete`.
 | 200 | [Restored](#restored) | What was restored, and what was left. |
 | 403 | nothing | An account limited to projects. |
 | 404 | nothing | No such entry. |
+| 409 | nothing | A modification that cannot be undone whole: an instance deleted or modified again since. Nothing changed. |
 | 503 | nothing | The store or the index did not answer. |
 
 ## Integrity

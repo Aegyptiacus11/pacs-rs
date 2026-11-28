@@ -161,6 +161,7 @@ async fn list(
         (status = 200, description = "What was restored, and what was left.", body = Restored),
         (status = 403, description = "An account limited to projects."),
         (status = 404, description = "No such entry."),
+        (status = 409, description = "A modification that cannot be undone whole: an instance deleted or modified again since. Nothing changed."),
         (status = 503, description = "The store or the index did not answer.")
     )
 )]
@@ -194,6 +195,11 @@ async fn restore(
             .into_response()
         }
         Ok(None) => failed(StatusCode::NOT_FOUND, "No such entry in the trash"),
+        // an undo that cannot be whole (an instance deleted or modified again since) changed
+        // nothing, and says why
+        Err(pacs_archive::CheckError::Index(pacs_index::Error::Conflict(why))) => {
+            failed(StatusCode::CONFLICT, &why)
+        }
         Err(e) => {
             tracing::error!(entry = id, error = %e, "a restore stopped");
             failed(StatusCode::SERVICE_UNAVAILABLE, &e.to_string())
