@@ -45,6 +45,7 @@ import {
   ZoomIn,
   GalleryVerticalEnd,
   Trash2,
+  ScanLine,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -109,6 +110,7 @@ const SHORTCUTS: [string, string][] = [
   ["N", "New view"],
   ["X", "3 planes (axial, sagittal, coronal) on or off"],
   ["S", "Sync: scroll the viewports together"],
+  ["G", "Reference lines: where the active image cuts the other viewports"],
   ["Space", "Play or stop"],
   ["O", "Show or hide the text on the images"],
   ["T", "DICOM tags"],
@@ -342,6 +344,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
         e.preventDefault();
         v.cine();
       } else if (e.key === "s") v.setLinked(!state?.linked);
+      else if (e.key === "g") v.setReferenceLines(!state?.referenceLines);
       else if (e.key === "o") v.setOverlays(!state?.overlays);
       else if (e.key === "t") setTags((x) => !x);
       else if (e.key === "f") toggleFullscreen();
@@ -561,6 +564,16 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
             {mpr && <ToolBtn label="Crosshairs" tip="Crosshairs: drag them to move through the three planes" Icon={Crosshair} active={s.tool === "crosshairs"} onClick={() => v.useTool("crosshairs")} />}
             {!mpr && s.cells.length > 1 && (
               <ToolBtn label="Sync" tip="Scroll the viewports together, to the same slice position" Icon={Link2} shortcut="S" active={s.linked} onClick={() => v.setLinked(!s.linked)} />
+            )}
+            {!mpr && s.cells.length > 1 && (
+              <ToolBtn
+                label="Lines"
+                tip="Reference lines: where the active viewport's image cuts the others (same frame of reference)"
+                Icon={ScanLine}
+                shortcut="G"
+                active={s.referenceLines}
+                onClick={() => v.setReferenceLines(!s.referenceLines)}
+              />
             )}
             <ToolBtn label={s.playing ? "Stop" : "Cine"} Icon={s.playing ? Pause : Play} shortcut="Space" active={s.playing} onClick={() => v.cine()} />
             <Sep />
