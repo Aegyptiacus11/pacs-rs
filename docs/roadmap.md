@@ -116,13 +116,14 @@ tests of `ui/` that CI runs do what its row says.
 | Reference lines | in stack mode, with two or more viewports, each shows the line where the active viewport's image cuts it, for any series of the same frame of reference |
 | Measurements in one menu | the toolbar shows one Measure button that keeps the last tool chosen (length, angle, Cobb, bidirectional, ellipse, rectangle, value), and the keys of each tool still work |
 | Filters that read | the study list shows Date and Modality, and Sex and Age under a More filters button |
-| Remote AEs in the interface | an administrator adds, changes and removes remote AEs on the Remote page; they are kept in the index, `PACS_DIMSE_REMOTES` still seeds them, and each change is in the audit trail |
+| Remote AEs in the interface | an administrator adds, changes and removes remote AEs in the settings, which the Remote page leads to; they are kept in the index and used at once, `PACS_DIMSE_REMOTES` still seeds them, and each change is in the audit trail |
 | Correcting a patient | an account with the right changes a patient's name, ID, birth date or sex, or merges two patients, from the patient's record; what is served afterwards has the new values, the old ones are in the audit trail (the same change as the HL7 one of the clinical archive) |
 | Labels | labels are added and removed on a study from its pane, shown on its row, and filter the list |
 | Segmentations over the images | a DICOM SEG or RTSTRUCT of a study is drawn over its series in the viewer, each segment with its colour, shown or hidden one by one |
-| Encapsulated PDF | an Encapsulated PDF instance opens in the viewer as its pages |
-| Key images | images marked in the viewer, with arrows on them, are stored as a Key Object Selection and its presentation state, and open as a set from the study's pane |
-| Languages | every text of the interface comes from one catalogue, and French is complete |
+| Encapsulated PDF | a PDF is attached to a study as an Encapsulated PDF instance, and one opens as its pages from the viewer or the study's pane |
+| Key images | images marked in the viewer are stored as a Key Object Selection and open as a set from the study's pane; arrows are drawn on them |
+| Arrows for other viewers | the arrows of key images are stored as a Grayscale Softcopy Presentation State that other viewers show |
+| Languages | every text of the interface comes from one catalogue, and French is complete (on hold) |
 
 ## 7. Proven
 
