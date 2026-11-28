@@ -136,6 +136,17 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   it serves every matching study. Saved protocols are kept by the server, in the index, so
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
+- **Segmentations**: a DICOM Segmentation (SEG) or RT Structure Set (RTSTRUCT) series of the
+  study shows in the series list with a shapes icon; a click lays it over the series it was
+  drawn on, which comes into the active viewport if no viewport shows it. A SEG's segments are
+  filled in their own colors with a solid edge; an RTSTRUCT's regions are drawn as contours,
+  whole on their own slice and, in the other planes of MPR, as the lines where the plane cuts
+  them. Each follows zoom, pan, rotation and flips, and stack viewports draw them without
+  WebGL too. Segments takes them to a panel: each segmentation and each of its segments or
+  regions shown or hidden, a fill from 0 to 100 % (the edges stay), × to take one away. A SEG
+  is read as its own geometry places it, even where its rows run the other way from its
+  images'. Not yet: a SEG stored compressed (said so when one is opened), one drawn on a
+  series of another study, and overlapping segments, where the higher number is the one shown.
 - **Measurements are kept**: each one is saved with its study as soon as it is drawn, changed
   or removed, and is there again when the study is opened, in any browser. A click or a tap on one,
   or anywhere inside a rectangle or an ellipse, selects it; one on nothing lets go of the

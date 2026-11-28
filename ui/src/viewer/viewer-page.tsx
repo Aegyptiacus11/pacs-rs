@@ -46,6 +46,7 @@ import {
   GalleryVerticalEnd,
   Trash2,
   ScanLine,
+  Shapes,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -74,7 +75,8 @@ import { href } from "@/lib/route";
 import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, renderingMode, setRenderingMode, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
-import { StudyBrowser, type Registry } from "@/viewer/study-browser";
+import { isSegmentation, StudyBrowser, type Registry } from "@/viewer/study-browser";
+import { SegmentsPanel } from "@/viewer/segments-panel";
 import { autoApply, fetchUserProtocols, plans, studyContext, type Plan, type Protocol, type StudyContext } from "@/viewer/hanging";
 import { ProtocolMenu } from "@/viewer/protocol-menu";
 
@@ -220,6 +222,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   // on a narrow screen the series list lies over the images, so it starts closed
   const [browser, setBrowser] = useState(() => !matchMedia("(max-width: 767px)").matches);
   const [tags, setTags] = useState(false);
+  const [segments, setSegments] = useState(false);
   const [lastTool, setLastTool] = useState<ToolName>(() => {
     try {
       return (localStorage.getItem("pacs-rs.measure") as ToolName | null) ?? "length";
@@ -608,6 +611,9 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
                 onClick={() => v.setReferenceLines(!s.referenceLines)}
               />
             )}
+            {s.segmentations.length > 0 && (
+              <ToolBtn label="Segments" tip="The segmentations laid over the images" Icon={Shapes} active={segments} onClick={() => setSegments(!segments)} />
+            )}
             <ToolBtn label={s.playing ? "Stop" : "Cine"} Icon={s.playing ? Pause : Play} shortcut="Space" active={s.playing} onClick={() => v.cine()} />
             <Sep />
 
@@ -666,6 +672,11 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
             shown={shown}
             active={activeCell?.seriesId ?? null}
             onPick={(id) => {
+              if (isSegmentation(registry.get(id)?.series)) {
+                setSegments(true);
+                v?.addSegmentation(id).then((why) => why && toast.error("The segmentation could not be shown", { description: why }));
+                return;
+              }
               setProtocol(null);
               v?.showSeries(id);
               // over the images on a narrow screen: out of the way once a series is chosen
@@ -674,6 +685,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
           />
         )}
         <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
+        {segments && v && !!s?.segmentations.length && <SegmentsPanel viewer={v} list={s.segmentations} fill={s.fill} onClose={() => setSegments(false)} />}
         {/* with a finger there is no Delete key, and the toolbar's button may be scrolled out of
             sight: what can be done with the selected measurement comes to it */}
         {!!s?.selected && (

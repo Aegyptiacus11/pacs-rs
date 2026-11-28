@@ -25,7 +25,8 @@ requests to a pacs-server on `PACS_DEV_SERVER` (default `http://127.0.0.1:8080`)
 `npx playwright install chromium`). No server is needed: `ui/tests/pacs.ts` answers every
 request, from the answers a test gives, by default the ones in `ui/tests/fixtures`. Those were
 recorded by `ui/tests/record.mjs` from a pacs-server holding only the DICOM files of this
-repository. A request no test answers fails the test.
+repository, the viewer's by `ui/tests/record-viewer.mjs` (one data set of `ui/tests/data` at a
+time: `prostate-dce` or `kidney-seg`). A request no test answers fails the test.
 
 On Windows, a static build (no Visual C++ runtime needed) is what CI and the release do:
 
