@@ -35,13 +35,15 @@ pub struct TrashEntry {
     pub deleted_ms: i64,
     /// When the server empties it, in milliseconds since the Unix epoch.
     pub emptied_ms: i64,
-    /// What the deletion named: `Patient`, `Study`, `Series` or `Instance`.
+    /// What the deletion named: `Patient`, `Study`, `Series` or `Instance`; `Modification`
+    /// for a patient modified or merged, whose restore undoes the change.
     pub level: String,
     /// Its public ID.
     #[serde(rename = "PublicID")]
     pub public_id: String,
     /// The studies it took from, a part or all: `StudyInstanceUID`, `PatientID`,
-    /// `PatientName`, and the `project` the study was in.
+    /// `PatientName`, and the `project` the study was in; for a modification, the values
+    /// before it, and in `changed` the ones it gave.
     #[schema(value_type = Vec<Object>)]
     pub studies: Value,
     /// Files waiting.
@@ -125,6 +127,8 @@ async fn list(
                             .map(|mut s| {
                                 if let Some(s) = s.as_object_mut() {
                                     s.remove("annotations");
+                                    // what an undone modification needs, not for people
+                                    s.remove("rekeyed");
                                 }
                                 s
                             })
@@ -157,6 +161,7 @@ async fn list(
         (status = 200, description = "What was restored, and what was left.", body = Restored),
         (status = 403, description = "An account limited to projects."),
         (status = 404, description = "No such entry."),
+        (status = 409, description = "A modification that cannot be undone whole: an instance deleted or modified again since. Nothing changed."),
         (status = 503, description = "The store or the index did not answer.")
     )
 )]
@@ -190,6 +195,11 @@ async fn restore(
             .into_response()
         }
         Ok(None) => failed(StatusCode::NOT_FOUND, "No such entry in the trash"),
+        // an undo that cannot be whole (an instance deleted or modified again since) changed
+        // nothing, and says why
+        Err(pacs_archive::CheckError::Index(pacs_index::Error::Conflict(why))) => {
+            failed(StatusCode::CONFLICT, &why)
+        }
         Err(e) => {
             tracing::error!(entry = id, error = %e, "a restore stopped");
             failed(StatusCode::SERVICE_UNAVAILABLE, &e.to_string())

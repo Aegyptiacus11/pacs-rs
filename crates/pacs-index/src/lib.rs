@@ -49,6 +49,7 @@ mod jobs;
 pub mod labels;
 pub mod matching;
 mod metadata;
+mod modify;
 mod originals;
 mod protocols;
 mod rest;
@@ -64,6 +65,7 @@ pub use clients::StoredClient;
 pub use delete::{Deleted, IntoTrash, Level};
 pub use jobs::{KEPT_FINISHED, StoredJob};
 pub use matching::{Kind, Match};
+pub use modify::{Moved, Rekey};
 pub use originals::OriginalStudy;
 pub use protocols::StoredProtocol;
 pub use rest::{RestInstance, RestPatient, RestSeries, RestStudy, STABLE_AGE_SECONDS, Statistics};
@@ -530,172 +532,9 @@ impl Index {
     /// series attributes follow the latest instance received.
     pub async fn record(&self, new: &NewInstance) -> Result<Recorded, Error> {
         let mut tx = self.begin_write().await?;
-
-        let series_study: Option<String> = sqlx::query_scalar(
-            "SELECT study_instance_uid FROM series WHERE series_instance_uid = $1",
-        )
-        .bind(&new.series_instance_uid)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some(study) = series_study.filter(|s| *s != new.study_instance_uid) {
-            return Err(Error::Conflict(format!(
-                "series {} is already in study {study}, not {}",
-                new.series_instance_uid, new.study_instance_uid
-            )));
-        }
-        let existing: Option<(String, String)> = sqlx::query_as(
-            "SELECT series_instance_uid, object_key FROM instances WHERE sop_instance_uid = $1",
-        )
-        .bind(&new.sop_instance_uid)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let instance_series = existing.as_ref().map(|(series, _)| series.clone());
-        if let Some(series) = instance_series
-            .as_ref()
-            .filter(|s| **s != new.series_instance_uid)
-        {
-            return Err(Error::Conflict(format!(
-                "instance {} is already in series {series}, not {}",
-                new.sop_instance_uid, new.series_instance_uid
-            )));
-        }
-
-        if new.keep_existing
-            && let Some((_, existing_key)) = &existing
-        {
-            return Ok(Recorded::Kept {
-                existing_key: existing_key.clone(),
-            });
-        }
-
-        // A study is in one project, or in none, from its first instance on: an instance that
-        // comes another way would put identified and de-identified data in one study, or
-        // move the study out of what its readers may see.
-        let study_project: Option<Option<String>> =
-            sqlx::query_scalar("SELECT project FROM studies WHERE study_instance_uid = $1")
-                .bind(&new.study_instance_uid)
-                .fetch_optional(&mut *tx)
-                .await?;
-        if let Some(project) = study_project.filter(|project| *project != new.project) {
-            let named = |project: &Option<String>| match project {
-                Some(name) => format!("in project {name}"),
-                None => "stored as received, in no project".to_owned(),
-            };
-            return Err(Error::Conflict(format!(
-                "study {} is {}, and this instance comes {}",
-                new.study_instance_uid,
-                named(&project),
-                match &new.project {
-                    Some(name) => format!("for project {name}"),
-                    None => "for no project".to_owned(),
-                }
-            )));
-        }
-
-        sqlx::query(
-            "INSERT INTO studies (study_instance_uid, patient_id, patient_name, study_date,
-                                  accession_number, attributes, public_id, patient_public_id,
-                                  main_tags, patient_main_tags, project)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             ON CONFLICT (study_instance_uid) DO UPDATE SET
-                patient_id = excluded.patient_id, patient_name = excluded.patient_name,
-                study_date = excluded.study_date, accession_number = excluded.accession_number,
-                attributes = excluded.attributes, public_id = excluded.public_id,
-                patient_public_id = excluded.patient_public_id,
-                main_tags = excluded.main_tags, patient_main_tags = excluded.patient_main_tags",
-        )
-        .bind(&new.study_instance_uid)
-        .bind(&new.patient_id)
-        .bind(&new.patient_name)
-        .bind(&new.study_date)
-        .bind(&new.accession_number)
-        .bind(new.study_attributes.to_string())
-        .bind(&new.study_public_id)
-        .bind(&new.patient_public_id)
-        .bind(new.study_main_tags.to_string())
-        .bind(new.patient_main_tags.to_string())
-        .bind(&new.project)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO series (series_instance_uid, study_instance_uid, modality, series_number,
-                                 attributes, public_id, main_tags)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (series_instance_uid) DO UPDATE SET
-                modality = excluded.modality, series_number = excluded.series_number,
-                attributes = excluded.attributes, public_id = excluded.public_id,
-                main_tags = excluded.main_tags",
-        )
-        .bind(&new.series_instance_uid)
-        .bind(&new.study_instance_uid)
-        .bind(&new.modality)
-        .bind(new.series_number)
-        .bind(new.series_attributes.to_string())
-        .bind(&new.series_public_id)
-        .bind(new.series_main_tags.to_string())
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO instances (sop_instance_uid, series_instance_uid, sop_class_uid,
-                                    instance_number, transfer_syntax_uid, object_key, size_bytes,
-                                    attributes, metadata, public_id, main_tags, received_ms,
-                                    sha256, checked_ms, check_failure)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL)
-             ON CONFLICT (sop_instance_uid) DO UPDATE SET
-                sop_class_uid = excluded.sop_class_uid,
-                instance_number = excluded.instance_number,
-                transfer_syntax_uid = excluded.transfer_syntax_uid,
-                object_key = excluded.object_key, size_bytes = excluded.size_bytes,
-                attributes = excluded.attributes, metadata = excluded.metadata,
-                public_id = excluded.public_id, main_tags = excluded.main_tags,
-                received_ms = excluded.received_ms, sha256 = excluded.sha256,
-                checked_ms = excluded.checked_ms, check_failure = NULL",
-        )
-        .bind(&new.sop_instance_uid)
-        .bind(&new.series_instance_uid)
-        .bind(&new.sop_class_uid)
-        .bind(new.instance_number)
-        .bind(&new.transfer_syntax_uid)
-        .bind(&new.object_key)
-        .bind(new.size_bytes)
-        .bind(new.instance_attributes.to_string())
-        .bind(new.metadata.to_string())
-        .bind(&new.instance_public_id)
-        .bind(new.instance_main_tags.to_string())
-        .bind(now_ms())
-        .bind(&new.sha256)
-        // a file hashed as it is stored is checked then; one without a hash never was
-        .bind(new.sha256.as_ref().map(|_| now_ms()))
-        .execute(&mut *tx)
-        .await?;
-        if new.forward {
-            sqlx::query(
-                "INSERT INTO forward_due (study_instance_uid, touched_ms) VALUES ($1, $2)
-                 ON CONFLICT (study_instance_uid) DO UPDATE SET touched_ms = excluded.touched_ms",
-            )
-            .bind(&new.study_instance_uid)
-            .bind(now_ms())
-            .execute(&mut *tx)
-            .await?;
-        }
-        if new.result {
-            sqlx::query(
-                "INSERT INTO write_back_due (study_instance_uid, touched_ms) VALUES ($1, $2)
-                 ON CONFLICT (study_instance_uid) DO UPDATE SET touched_ms = excluded.touched_ms",
-            )
-            .bind(&new.study_instance_uid)
-            .bind(now_ms())
-            .execute(&mut *tx)
-            .await?;
-        }
-
+        let recorded = record_in(&mut tx, new).await?;
         tx.commit().await?;
-        Ok(match existing {
-            Some((_, previous_key)) => Recorded::Replaced { previous_key },
-            None => Recorded::Added,
-        })
+        Ok(recorded)
     }
 
     pub async fn studies(&self, filter: &StudyFilter) -> Result<Vec<Study>, Error> {
@@ -913,4 +752,174 @@ impl Index {
 
 fn parse(text: String) -> Result<Value, Error> {
     Ok(serde_json::from_str(&text)?)
+}
+
+/// [`Index::record`] within a transaction that holds the write lock.
+pub(crate) async fn record_in(
+    conn: &mut sqlx::AnyConnection,
+    new: &NewInstance,
+) -> Result<Recorded, Error> {
+    let series_study: Option<String> =
+        sqlx::query_scalar("SELECT study_instance_uid FROM series WHERE series_instance_uid = $1")
+            .bind(&new.series_instance_uid)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(study) = series_study.filter(|s| *s != new.study_instance_uid) {
+        return Err(Error::Conflict(format!(
+            "series {} is already in study {study}, not {}",
+            new.series_instance_uid, new.study_instance_uid
+        )));
+    }
+    let existing: Option<(String, String)> = sqlx::query_as(
+        "SELECT series_instance_uid, object_key FROM instances WHERE sop_instance_uid = $1",
+    )
+    .bind(&new.sop_instance_uid)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let instance_series = existing.as_ref().map(|(series, _)| series.clone());
+    if let Some(series) = instance_series
+        .as_ref()
+        .filter(|s| **s != new.series_instance_uid)
+    {
+        return Err(Error::Conflict(format!(
+            "instance {} is already in series {series}, not {}",
+            new.sop_instance_uid, new.series_instance_uid
+        )));
+    }
+
+    if new.keep_existing
+        && let Some((_, existing_key)) = &existing
+    {
+        return Ok(Recorded::Kept {
+            existing_key: existing_key.clone(),
+        });
+    }
+
+    // A study is in one project, or in none, from its first instance on: an instance that
+    // comes another way would put identified and de-identified data in one study, or
+    // move the study out of what its readers may see.
+    let study_project: Option<Option<String>> =
+        sqlx::query_scalar("SELECT project FROM studies WHERE study_instance_uid = $1")
+            .bind(&new.study_instance_uid)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(project) = study_project.filter(|project| *project != new.project) {
+        let named = |project: &Option<String>| match project {
+            Some(name) => format!("in project {name}"),
+            None => "stored as received, in no project".to_owned(),
+        };
+        return Err(Error::Conflict(format!(
+            "study {} is {}, and this instance comes {}",
+            new.study_instance_uid,
+            named(&project),
+            match &new.project {
+                Some(name) => format!("for project {name}"),
+                None => "for no project".to_owned(),
+            }
+        )));
+    }
+
+    sqlx::query(
+        "INSERT INTO studies (study_instance_uid, patient_id, patient_name, study_date,
+                              accession_number, attributes, public_id, patient_public_id,
+                              main_tags, patient_main_tags, project)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (study_instance_uid) DO UPDATE SET
+            patient_id = excluded.patient_id, patient_name = excluded.patient_name,
+            study_date = excluded.study_date, accession_number = excluded.accession_number,
+            attributes = excluded.attributes, public_id = excluded.public_id,
+            patient_public_id = excluded.patient_public_id,
+            main_tags = excluded.main_tags, patient_main_tags = excluded.patient_main_tags",
+    )
+    .bind(&new.study_instance_uid)
+    .bind(&new.patient_id)
+    .bind(&new.patient_name)
+    .bind(&new.study_date)
+    .bind(&new.accession_number)
+    .bind(new.study_attributes.to_string())
+    .bind(&new.study_public_id)
+    .bind(&new.patient_public_id)
+    .bind(new.study_main_tags.to_string())
+    .bind(new.patient_main_tags.to_string())
+    .bind(&new.project)
+    .execute(&mut *conn)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO series (series_instance_uid, study_instance_uid, modality, series_number,
+                             attributes, public_id, main_tags)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (series_instance_uid) DO UPDATE SET
+            modality = excluded.modality, series_number = excluded.series_number,
+            attributes = excluded.attributes, public_id = excluded.public_id,
+            main_tags = excluded.main_tags",
+    )
+    .bind(&new.series_instance_uid)
+    .bind(&new.study_instance_uid)
+    .bind(&new.modality)
+    .bind(new.series_number)
+    .bind(new.series_attributes.to_string())
+    .bind(&new.series_public_id)
+    .bind(new.series_main_tags.to_string())
+    .execute(&mut *conn)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO instances (sop_instance_uid, series_instance_uid, sop_class_uid,
+                                instance_number, transfer_syntax_uid, object_key, size_bytes,
+                                attributes, metadata, public_id, main_tags, received_ms,
+                                sha256, checked_ms, check_failure)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL)
+         ON CONFLICT (sop_instance_uid) DO UPDATE SET
+            sop_class_uid = excluded.sop_class_uid,
+            instance_number = excluded.instance_number,
+            transfer_syntax_uid = excluded.transfer_syntax_uid,
+            object_key = excluded.object_key, size_bytes = excluded.size_bytes,
+            attributes = excluded.attributes, metadata = excluded.metadata,
+            public_id = excluded.public_id, main_tags = excluded.main_tags,
+            received_ms = excluded.received_ms, sha256 = excluded.sha256,
+            checked_ms = excluded.checked_ms, check_failure = NULL",
+    )
+    .bind(&new.sop_instance_uid)
+    .bind(&new.series_instance_uid)
+    .bind(&new.sop_class_uid)
+    .bind(new.instance_number)
+    .bind(&new.transfer_syntax_uid)
+    .bind(&new.object_key)
+    .bind(new.size_bytes)
+    .bind(new.instance_attributes.to_string())
+    .bind(new.metadata.to_string())
+    .bind(&new.instance_public_id)
+    .bind(new.instance_main_tags.to_string())
+    .bind(now_ms())
+    .bind(&new.sha256)
+    // a file hashed as it is stored is checked then; one without a hash never was
+    .bind(new.sha256.as_ref().map(|_| now_ms()))
+    .execute(&mut *conn)
+    .await?;
+    if new.forward {
+        sqlx::query(
+            "INSERT INTO forward_due (study_instance_uid, touched_ms) VALUES ($1, $2)
+             ON CONFLICT (study_instance_uid) DO UPDATE SET touched_ms = excluded.touched_ms",
+        )
+        .bind(&new.study_instance_uid)
+        .bind(now_ms())
+        .execute(&mut *conn)
+        .await?;
+    }
+    if new.result {
+        sqlx::query(
+            "INSERT INTO write_back_due (study_instance_uid, touched_ms) VALUES ($1, $2)
+             ON CONFLICT (study_instance_uid) DO UPDATE SET touched_ms = excluded.touched_ms",
+        )
+        .bind(&new.study_instance_uid)
+        .bind(now_ms())
+        .execute(&mut *conn)
+        .await?;
+    }
+
+    Ok(match existing {
+        Some((_, previous_key)) => Recorded::Replaced { previous_key },
+        None => Recorded::Added,
+    })
 }

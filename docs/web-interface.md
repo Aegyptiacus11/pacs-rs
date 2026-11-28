@@ -4,8 +4,8 @@ At `/ui/` (`/` redirects there), on the same REST API and DICOMweb as any other 
 React, [shadcn/ui](https://ui.shadcn.com/) (Radix primitives, Tailwind) and lucide icons; the
 viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 
-- **Layout**: a rail down the left side to go places (Studies, Patients, Server for an
-  administrator, Settings), a bar along the top
+- **Layout**: a rail down the left side to go places (Studies, Patients, Remote for a role
+  with `remote`, Server for an administrator, Settings), a bar along the top
   for the tools (the search, light or dark, a warning when the server doesn't answer), the page
   in between.
 - **Narrow screens**: below 768 pixels the rail lies along the bottom, the study list shows
@@ -49,6 +49,20 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   five over; the quarantine (files and bytes, when `PACS_QUARANTINE` is set); and the last
   hundred warnings and errors the server logged, each with its time, where it came from, its
   message and its fields (`/ui/api/server`).
+- **Remote** (a role with `remote`): the other archives of `PACS_DIMSE_REMOTES`, each tested
+  with a C-ECHO when the page opens (how long it took, or why it failed), and a search of one
+  of them: patient name and ID (matched from their start), accession number, a span of dates,
+  a modality. The studies found are ticked and pulled, one job per patient (with its Patient
+  ID, which an archive that retrieves in Patient Root only needs), into this archive or, for an
+  administrator, into a project, de-identified on the way in; an account limited to projects
+  pulls into one of its own only. A search belongs to the archive it was asked of: choosing
+  another one does not search it. A study is sent to a remote
+  archive from its menu in the study list (*Send to*), also as a job; the archive must be in
+  `PACS_DIMSE_MOVE_DESTINATIONS`, and when it is not the answer says so.
+- **Jobs**: every pull, send and write-back, running or among the latest 100 over, newest
+  first, each with its archive, its studies, its state, the images moved, failed and left, and
+  how long it took. Asked again every two seconds while one runs; a running one can be stopped
+  (C-CANCEL), and what it moved by then stays. Reached from the Remote page and the Server page.
 - **Lists refresh themselves**: the study list, its counts and its summary are asked again
   every 20 seconds and when the window comes back into focus, so studies that arrive show up
   without a reload.
@@ -62,7 +76,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   (studies, series, images, first study, modalities), and a timeline of their studies, newest
   first, each with its series as thumbnails. Tick two studies to compare them: the viewer shows
   each one's largest series side by side, scrolling together. Download everything of the
-  patient, or delete them.
+  patient, or delete them; for a role with `modify`, under ⋯, correct their name, ID, birth
+  date or sex, or merge them into another patient found by name or ID, each with an Undo in
+  the message that follows ([Modifying and merging patients](patients.md)).
 - **Signing in**: when the server asks for a [login](login.md), the interface opens on a
   sign-in page. The session survives a reload and lasts while it is used; the button with the
   user's initials, at the right of the top bar, shows the login and the role, leads to the

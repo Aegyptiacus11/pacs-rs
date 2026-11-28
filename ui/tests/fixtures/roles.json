@@ -1,0 +1,43 @@
+[
+    {
+        "id": "reader",
+        "name": "Reader",
+        "permissions": [
+            "read"
+        ],
+        "locked": false
+    },
+    {
+        "id": "editor",
+        "name": "Editor",
+        "permissions": [
+            "read",
+            "write",
+            "remote"
+        ],
+        "locked": false
+    },
+    {
+        "id": "manager",
+        "name": "Manager",
+        "permissions": [
+            "read",
+            "write",
+            "remote",
+            "delete"
+        ],
+        "locked": false
+    },
+    {
+        "id": "admin",
+        "name": "Admin",
+        "permissions": [
+            "read",
+            "write",
+            "remote",
+            "delete",
+            "users"
+        ],
+        "locked": true
+    }
+]

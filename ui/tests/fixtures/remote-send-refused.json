@@ -1,0 +1,6 @@
+{
+  "HttpError": "Conflict",
+  "HttpStatus": 409,
+  "Message": "lab is not an AE instances are sent to",
+  "Details": "list lab in PACS_DIMSE_MOVE_DESTINATIONS to send it studies"
+}

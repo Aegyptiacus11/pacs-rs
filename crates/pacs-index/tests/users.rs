@@ -158,7 +158,8 @@ async fn roles_start_as_four_and_are_made_changed_and_removed() {
         assert_eq!(roles[0].permissions, perms(&["read"]));
         assert_eq!(
             roles[3].permissions,
-            perms(&["read", "write", "remote", "delete", "users"])
+            // modify since its migration: the admin role permits everything
+            perms(&["read", "write", "remote", "delete", "modify", "users"])
         );
         assert_eq!(index.role("nobody").await.unwrap(), None);
 

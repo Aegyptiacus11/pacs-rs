@@ -1,0 +1,12 @@
+{
+  "hospital": {
+    "AET": "HOSPITAL",
+    "Host": "remote",
+    "Port": 11112
+  },
+  "lab": {
+    "AET": "LAB",
+    "Host": "nowhere",
+    "Port": 11112
+  }
+}
