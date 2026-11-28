@@ -44,6 +44,8 @@ export class Pacs {
     this.on("GET", "/ui/api/studies/facets", () => ({ json: fixture("studies-facets.json") }));
     this.on("GET", "/ui/api/patients", () => ({ json: fixture("patients.json") }));
     this.on("GET", "/ui/api/server", () => ({ json: fixture("server.json") }));
+    // the remote archives, which a study's Send to asks for when its menu opens
+    this.on("GET", "/modalities", () => ({ json: fixture("remote-modalities.json") }));
     this.on("GET", /^\/studies\/[\w-]+\/(series|statistics)$/, (_, url) => {
       const [, , id, what] = url.pathname.split("/");
       return { json: fixture(`study-${id}-${what}.json`) };
