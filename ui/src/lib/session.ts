@@ -10,8 +10,9 @@
 import { useSyncExternalStore } from "react";
 import { config, ROOT } from "@/lib/config";
 
-/** `role` is the id of the user's role; `permissions` what that role gives. */
-export type User = { id: string; login: string; role: string; permissions: string[] };
+/** `role` is the id of the user's role; `permissions` what that role gives; `projects` the
+ * projects an account limited to some sees, null for one that sees the whole archive. */
+export type User = { id: string; login: string; role: string; permissions: string[]; projects?: string[] | null };
 type State = { status: "loading" | "out" | "in"; user: User | null };
 
 export const authOn = config.auth === true;
@@ -39,7 +40,7 @@ export function useSession() {
 }
 
 /** What the signed-in user may do; everything when the server asks for no login. */
-export function may(right: "write" | "remote" | "delete" | "admin", user: User | null = state.user) {
+export function may(right: "write" | "remote" | "delete" | "modify" | "admin", user: User | null = state.user) {
   if (!authOn) return right !== "admin";
   if (!user) return false;
   return user.permissions.includes(right === "admin" ? "users" : right);

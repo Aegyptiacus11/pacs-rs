@@ -220,3 +220,46 @@ pub enum Found {
 #[derive(Debug, ToSchema)]
 #[schema(value_type = String, format = Binary)]
 pub struct Binary(pub Vec<u8>);
+
+/// New values for a patient's attributes. One left out stays as it is; an empty string
+/// removes a value, except the Patient ID's.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ModifyPatient {
+    /// Patient's Name, as DICOM writes it: `FAMILY^GIVEN^MIDDLE^PREFIX^SUFFIX`.
+    #[serde(rename = "PatientName")]
+    pub patient_name: Option<String>,
+    #[serde(rename = "PatientID")]
+    pub patient_id: Option<String>,
+    /// Patient's Birth Date, `YYYYMMDD`.
+    #[serde(rename = "PatientBirthDate")]
+    pub patient_birth_date: Option<String>,
+    /// Patient's Sex: `M`, `F` or `O`.
+    #[serde(rename = "PatientSex")]
+    pub patient_sex: Option<String>,
+}
+
+/// The patient another is merged into.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Merge {
+    /// The identifier of the patient kept.
+    #[serde(rename = "Into")]
+    pub into: String,
+}
+
+/// What a modification or a merge did.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields, rename_all = "PascalCase")]
+pub struct Modification {
+    /// The patient's identifier now.
+    #[serde(rename = "ID")]
+    pub id: String,
+    pub path: String,
+    /// Instances whose files were written again.
+    pub instances: u64,
+    /// The trash entry holding the files replaced, whose restore undoes the change; `null`
+    /// when the server keeps no trash (`PACS_TRASH_DAYS` 0).
+    #[schema(required)]
+    pub trash: Option<String>,
+}

@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, bytes, plural } from "@/lib/api";
 import { config } from "@/lib/config";
+import { href } from "@/lib/route";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -49,12 +50,17 @@ function Figure({ label, value, note, alarm }: { label: string; value: ReactNode
   );
 }
 
-function Block({ title, count, children }: { title: string; count?: string; children: ReactNode }) {
+function Block({ title, count, link, children }: { title: string; count?: string; link?: { to: string; label: string }; children: ReactNode }) {
   return (
     <section>
       <div className="mb-2 flex items-baseline gap-2">
         <h2 className="text-sm font-semibold">{title}</h2>
         {count && <span className="text-xs text-muted-foreground">{count}</span>}
+        {link && (
+          <a href={link.to} className="ml-auto text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+            {link.label}
+          </a>
+        )}
       </div>
       {children}
     </section>
@@ -162,7 +168,7 @@ export function ServerPage() {
               )}
             </Block>
 
-            <Block title="Jobs" count={d ? `${d.jobs.filter((j) => j.state === "Running").length} running` : undefined}>
+            <Block title="Jobs" count={d ? `${d.jobs.filter((j) => j.state === "Running").length} running` : undefined} link={{ to: href.jobs(), label: "All jobs" }}>
               {!d ? (
                 <Skeleton className="h-16 w-full" />
               ) : d.jobs.length === 0 ? (

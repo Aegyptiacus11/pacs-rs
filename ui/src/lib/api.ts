@@ -20,7 +20,7 @@ export async function api<T = any>(path: string, options: RequestInit = {}, base
     let message = `${response.status} ${response.statusText}`;
     try {
       const body = await response.json();
-      message = body.Message || body.Details || body.detail || message;
+      message = [body.Message, body.Details].filter(Boolean).join(": ") || body.detail || message;
     } catch {}
     throw new HttpError(response.status, message);
   }
