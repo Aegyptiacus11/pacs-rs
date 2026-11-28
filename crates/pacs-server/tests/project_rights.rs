@@ -1262,3 +1262,44 @@ async fn jobs_stay_within_the_account_s_projects() {
     .await;
     assert_eq!(cancelled.status, StatusCode::ACCEPTED, "{}", cancelled.body);
 }
+
+/// A PDF's own route (`/instances/{id}/pdf`) holds to the projects as every other: a
+/// document of a study outside the account's projects is not there for it. (A project's
+/// de-identified copy takes no document: `POST /studies/{id}/documents` refuses it, 409.)
+#[tokio::test]
+async fn a_document_outside_the_account_s_projects_is_not_there() {
+    let s = server().await;
+    let app = &s.app;
+    let pdf = include_bytes!("../../pacs-core/tests/data/documents/kits19.pdf").to_vec();
+    let path = |study: &str| format!("/studies/{study}/documents?title=KiTS19");
+    let added = send(
+        app,
+        Method::POST,
+        &path(&ids(&s.received).study),
+        &s.admin,
+        None,
+        Some(pdf.clone()),
+    )
+    .await;
+    assert_eq!(added.status, StatusCode::OK, "{}", added.body);
+    let document = format!("/instances/{}/pdf", added.body["ID"].as_str().unwrap());
+    let refused = send(
+        app,
+        Method::POST,
+        &path(&ids(&s.liver).study),
+        &s.admin,
+        None,
+        Some(pdf.clone()),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+    let (_, token) = user(app, &s.admin, "ana", "reader", json!(["liver-2026"])).await;
+
+    let hidden = get(app, &document, &token).await;
+    assert_eq!(hidden.status, StatusCode::NOT_FOUND);
+    assert!(hidden.bytes.is_empty());
+    // the whole archive's account reads it, as it was
+    let read = get(app, &document, &s.admin).await;
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.bytes.as_ref(), pdf.as_slice());
+}

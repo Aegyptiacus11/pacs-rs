@@ -31,6 +31,15 @@ test("a binary SEG: its segments, colors, frames and masks", () => {
   expect(seg.frames.reduce((n, _, i) => n + sum(seg.mask(i)), 0)).toBe(349872);
 });
 
+test("a fractional SEG: a pixel is in from half the Maximum Fractional Value up", () => {
+  // seg-fractional.dcm: frames 51 and 1 of seg.dcm as 8-bit probabilities out of 255, the
+  // first one's mask at 200, the second one's at 100
+  const seg = readOverlay(bytes("seg-fractional.dcm")) as Seg;
+  expect(seg.frames.map((f) => f.segment)).toEqual([2, 1]);
+  expect(sum(seg.mask(0))).toBe(178);
+  expect(sum(seg.mask(1))).toBe(0);
+});
+
 test("a SEG on the images it names: 24 frames on the 8 slices kept, the rest counted as missed", () => {
   const seg = readOverlay(bytes("seg.dcm")) as Seg;
   const sops = readdirSync(path.join(DATA, "ct")).map(sopOf);
@@ -74,6 +83,17 @@ test("a SEG whose rows run the other way lands on the anatomy, not mirrored", ()
   const asStored = segOnImages(seg, [{ sop, frame: 1, plane: null }]).maps[0]!;
   expect(meanHu(asStored, 1)).toBe(-10);
   expect(meanHu(placed, 1)).toBe(135);
+
+  // on images twice as fine, the same anatomy covers four times the pixels, with no holes:
+  // each SEG pixel placed on one image pixel left three of four empty
+  const fine = { ...plane, rows: rows * 2, columns: columns * 2, spacing: plane.spacing.map((x) => x / 2) as [number, number] };
+  const finer = segOnImages(seg, [{ sop, frame: 1, plane: fine }]).maps[0]!;
+  const count = (m: Uint8Array) => m.reduce((n, v) => n + (v > 0 ? 1 : 0), 0);
+  expect(count(finer)).toBeGreaterThan(3.8 * count(placed));
+  expect(count(finer)).toBeLessThan(4.2 * count(placed));
+  // a kidney pixel's four neighbours on the fine grid are kidney too
+  const at = finer.findIndex((v, p) => v === 1 && finer[p + 1] === 1 && finer[p + fine.columns] === 1);
+  expect(at).toBeGreaterThan(-1);
 });
 
 test("an RTSTRUCT: its region, color and contours", () => {
