@@ -44,6 +44,10 @@ export class Pacs {
     this.on("GET", "/ui/api/studies/facets", () => ({ json: fixture("studies-facets.json") }));
     this.on("GET", "/ui/api/patients", () => ({ json: fixture("patients.json") }));
     this.on("GET", "/ui/api/server", () => ({ json: fixture("server.json") }));
+    this.on("GET", /^\/studies\/[\w-]+\/(series|statistics)$/, (_, url) => {
+      const [, , id, what] = url.pathname.split("/");
+      return { json: fixture(`study-${id}-${what}.json`) };
+    });
   }
 
   /** The login on, and this user signed in (a session restored from its refresh cookie). */

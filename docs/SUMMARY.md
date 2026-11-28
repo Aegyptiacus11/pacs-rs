@@ -39,6 +39,7 @@
 - [Backing up and upgrading](backup.md)
 - [Checking stored files](integrity.md)
 - [Deleting and restoring](trash.md)
+- [Modifying and merging patients](patients.md)
 - [Hospital interfaces: the plan](interop.md)
 
 # Reference

@@ -15,6 +15,7 @@
 //! | `write` | uploads, measurements, hanging protocols |
 //! | `remote` | everything about remote AEs (`/modalities`, `/jobs`), which reaches the hospital's PACS |
 //! | `delete` | deleting patients, studies, series and instances |
+//! | `modify` | modifying a patient (name, ID, birth date, sex) or merging two, which rewrites their files |
 //! | `users` | managing users and roles (`/users`, `/roles`) |
 //!
 //! Roles are in the index and can be changed (`/roles`). A server starts with four: `reader`
@@ -79,15 +80,17 @@ pub enum Permission {
     Write,
     Remote,
     Delete,
+    Modify,
     Users,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 5] = [
+    pub const ALL: [Permission; 6] = [
         Permission::Read,
         Permission::Write,
         Permission::Remote,
         Permission::Delete,
+        Permission::Modify,
         Permission::Users,
     ];
 
@@ -97,6 +100,7 @@ impl Permission {
             Permission::Write => "write",
             Permission::Remote => "remote",
             Permission::Delete => "delete",
+            Permission::Modify => "modify",
             Permission::Users => "users",
         }
     }
@@ -110,7 +114,9 @@ impl FromStr for Permission {
             .into_iter()
             .find(|permission| permission.as_str() == text)
             .ok_or_else(|| {
-                format!("{text:?} is not a permission: read, write, remote, delete or users")
+                format!(
+                    "{text:?} is not a permission: read, write, remote, delete, modify or users"
+                )
             })
     }
 }
@@ -128,6 +134,8 @@ pub enum Right {
     /// Remote AEs: a search there lists the hospital's patients, identified.
     Remote,
     Delete,
+    /// Patients modified or merged: their files rewritten.
+    Modify,
     /// Users and roles.
     Admin,
 }
@@ -141,6 +149,7 @@ impl Right {
             Right::Write => Some(Permission::Write),
             Right::Remote => Some(Permission::Remote),
             Right::Delete => Some(Permission::Delete),
+            Right::Modify => Some(Permission::Modify),
             Right::Admin => Some(Permission::Users),
         }
     }
@@ -199,6 +208,14 @@ pub fn right_for(method: &Method, path: &str) -> Right {
     // their studies in. Not for someone who may only read this archive.
     if under("/modalities") || under("/jobs") {
         return Right::Remote;
+    }
+    // a patient's files rewritten: a correction, or a merge into another patient
+    if *method == Method::POST
+        && path
+            .strip_prefix("/patients/")
+            .is_some_and(|rest| rest.ends_with("/modify") || rest.ends_with("/merge"))
+    {
+        return Right::Modify;
     }
     match *method {
         Method::GET | Method::HEAD => Right::Read,

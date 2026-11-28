@@ -29,6 +29,13 @@ const answers = {
   "server.json": "ui/api/server",
 };
 
+// each study's series and statistics, as a patient's record shows them
+const studies = await (await fetch(new URL("studies", base))).json();
+for (const id of studies) {
+  answers[`study-${id}-series.json`] = `studies/${id}/series`;
+  answers[`study-${id}-statistics.json`] = `studies/${id}/statistics`;
+}
+
 const token = process.env.PACS_TOKEN;
 if (token) Object.assign(answers, { "roles.json": "roles", "me-admin.json": "auth/me" });
 

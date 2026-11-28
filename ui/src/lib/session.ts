@@ -40,7 +40,7 @@ export function useSession() {
 }
 
 /** What the signed-in user may do; everything when the server asks for no login. */
-export function may(right: "write" | "remote" | "delete" | "admin", user: User | null = state.user) {
+export function may(right: "write" | "remote" | "delete" | "modify" | "admin", user: User | null = state.user) {
   if (!authOn) return right !== "admin";
   if (!user) return false;
   return user.permissions.includes(right === "admin" ? "users" : right);
