@@ -24,6 +24,12 @@ fn refused(error: ModifyError) -> RestError {
         },
         ModifyError::File(..) => RestError::internal(error),
         ModifyError::Store(e) => e.into(),
+        // an instance of the patient stored meanwhile: nothing changed, a retry reads it too
+        ModifyError::Index(pacs_index::Error::Conflict(why)) => RestError::Status {
+            status: StatusCode::CONFLICT,
+            message: "Not modified".into(),
+            details: Some(why),
+        },
         ModifyError::Index(e) => e.into(),
     }
 }
@@ -72,7 +78,7 @@ fn answer(done: Modified) -> Json<Value> {
         (status = 400, description = "No value given, or one that does not fit its value representation.", body = Error),
         (status = 403, description = "An account limited to projects.", body = Error),
         (status = 404, description = "No patient has this identifier; the body is empty."),
-        (status = 409, description = "A study of the patient is a project's de-identified copy.", body = Error)
+        (status = 409, description = "A study of the patient is a project's de-identified copy, or an instance of the patient was stored while the change was made (nothing changed: try again).", body = Error)
     )
 )]
 pub(crate) async fn patient(
@@ -116,7 +122,7 @@ pub(crate) async fn patient(
         (status = 400, description = "Not a merge, or a patient merged into themselves.", body = Error),
         (status = 403, description = "An account limited to projects.", body = Error),
         (status = 404, description = "Either patient is not there; the body is empty."),
-        (status = 409, description = "A study of the patient merged is a project's de-identified copy.", body = Error)
+        (status = 409, description = "A study of the patient merged is a project's de-identified copy, or an instance of the patient was stored while the merge was made (nothing changed: try again).", body = Error)
     )
 )]
 pub(crate) async fn merge(
@@ -134,4 +140,26 @@ pub(crate) async fn merge(
         .map_err(refused)?
         .ok_or(RestError::NotFound)?;
     Ok(answer(done))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+
+    use super::*;
+
+    #[test]
+    fn a_change_the_index_refuses_is_a_conflict_and_other_index_errors_are_not() {
+        let arrived = refused(ModifyError::Index(pacs_index::Error::Conflict(
+            "instance 1.2.3 of the patient was stored while the change was made".into(),
+        )));
+        assert_eq!(arrived.into_response().status(), StatusCode::CONFLICT);
+        let broken = refused(ModifyError::Index(pacs_index::Error::Json(
+            serde_json::from_str::<u8>("broken").unwrap_err(),
+        )));
+        assert_eq!(
+            broken.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }
