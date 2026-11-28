@@ -20,6 +20,7 @@ pub mod levels;
 mod made;
 pub mod main_tags;
 pub mod metrics;
+pub mod patient;
 pub mod public_ids;
 #[cfg(feature = "real")]
 pub mod real;

@@ -83,7 +83,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   (studies, series, images, first study, modalities), and a timeline of their studies, newest
   first, each with its series as thumbnails. Tick two studies to compare them: the viewer shows
   each one's largest series side by side, scrolling together. Download everything of the
-  patient, or delete them.
+  patient, or delete them; for a role with `modify`, under ⋯, correct their name, ID, birth
+  date or sex, or merge them into another patient found by name or ID, each with an Undo in
+  the message that follows ([Modifying and merging patients](patients.md)).
 - **Signing in**: when the server asks for a [login](login.md), the interface opens on a
   sign-in page. The session survives a reload and lasts while it is used; the button with the
   user's initials, at the right of the top bar, shows the login and the role, leads to the

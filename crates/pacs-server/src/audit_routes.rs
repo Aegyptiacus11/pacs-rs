@@ -36,6 +36,10 @@ pub(crate) enum Subject {
     /// A resource and everything under it removed. (DICOM Study Deleted, or DICOM
     /// Instances Accessed, delete, when part of the study stays)
     Deleted(Level, String),
+    /// A patient's files rewritten with new patient attributes, or merged into another
+    /// patient's, by the patient's public ID. (DICOM Instances Accessed, update, of the
+    /// patient before and after)
+    Modified(String),
     /// Instances received. (DICOM Instances Transferred, create)
     Stores,
     /// A remote AE searched by C-FIND, by its id here. (Query, of that AE)
@@ -131,6 +135,9 @@ pub(crate) fn subject(method: &Method, path: &str, mount: &str) -> Option<Subjec
             let target = Target::Resource(level, (*id).to_owned());
             match (method.as_str(), rest) {
                 ("DELETE", []) => Some(Subject::Deleted(level, (*id).to_owned())),
+                ("POST", ["modify"] | ["merge"]) if level == Level::Patient => {
+                    Some(Subject::Modified((*id).to_owned()))
+                }
                 ("PUT" | "DELETE", ["labels", _] | ["metadata", _]) => {
                     Some(Subject::Annotated(target))
                 }

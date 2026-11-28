@@ -161,6 +161,30 @@ Permission, when the login is on: `write`.
 | 400 | [Error](#error) | Not a label. |
 | 404 | nothing | No such resource; the body is empty. |
 
+### `POST /patients/{id}/merge`
+
+Merges a patient into another.
+
+The patient's files take the other's Patient's Name, Patient ID, Birth Date and Sex, as
+the other's latest study has them, and with them the other's identifier: their studies
+are the other's from then on. As for a modification, the files replaced wait in the trash,
+and restoring that entry undoes the merge.
+
+Permission, when the login is on: `modify`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The identifier of the patient merged, who goes. |
+| the body | | [Merge](#merge) | The patient kept. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Modification](#modification) | Merged: the patient kept, and the trash entry that undoes it. |
+| 400 | [Error](#error) | Not a merge, or a patient merged into themselves. |
+| 403 | [Error](#error) | An account limited to projects. |
+| 404 | nothing | Either patient is not there; the body is empty. |
+| 409 | [Error](#error) | A study of the patient merged is a project's de-identified copy. |
+
 ### `GET /patients/{id}/metadata`
 
 The metadata of a patient: their names, or names and values.
@@ -229,6 +253,33 @@ Permission, when the login is on: `write`.
 | 400 | [Error](#error) | Not a name. |
 | 403 | [Error](#error) | A name of the server's own metadata. |
 | 404 | nothing | No such resource; the body is empty. |
+
+### `POST /patients/{id}/modify`
+
+Modifies a patient.
+
+Patient's Name, Patient ID, Patient's Birth Date or Patient's Sex, each given, is written
+into every stored file of the patient; the rest of each file, pixel data and UIDs included,
+stays as it is. A new Patient ID gives the patient, their studies, series and instances new
+identifiers, which the answer names: the old ones are gone, and labels and metadata move
+to the new ones. The files replaced wait in the trash, and restoring that entry
+(`POST /trash/{id}/restore`) undoes the change. A project's de-identified copy is not
+modified.
+
+Permission, when the login is on: `modify`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The patient's identifier. |
+| the body | | [ModifyPatient](#modifypatient) | The new values; an attribute left out stays as it is. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Modification](#modification) | Modified: the patient's identifier now, and the trash entry that undoes it. |
+| 400 | [Error](#error) | No value given, or one that does not fit its value representation. |
+| 403 | [Error](#error) | An account limited to projects. |
+| 404 | nothing | No patient has this identifier; the body is empty. |
+| 409 | [Error](#error) | A study of the patient is a project's de-identified copy. |
 
 ### `GET /patients/{id}/series`
 
@@ -1745,6 +1796,7 @@ Permission, when the login is on: `delete`.
 | 200 | [Restored](#restored) | What was restored, and what was left. |
 | 403 | nothing | An account limited to projects. |
 | 404 | nothing | No such entry. |
+| 409 | nothing | A modification that cannot be undone whole: an instance deleted or modified again since. Nothing changed. |
 | 503 | nothing | The store or the index did not answer. |
 
 ## Integrity
@@ -2344,6 +2396,36 @@ Who a token is.
 | `projects` | list of string or null | The projects the account is limited to; `null` when it sees every study. |
 | `role` | string | The id of their role. |
 
+### Merge
+
+The patient another is merged into.
+
+| Field | Type | |
+|---|---|---|
+| `Into` | string | The identifier of the patient kept. |
+
+### Modification
+
+What a modification or a merge did.
+
+| Field | Type | |
+|---|---|---|
+| `ID` | string | The patient's identifier now. |
+| `Instances` | integer | Instances whose files were written again. |
+| `Path` | string |  |
+| `Trash` | string or null | The trash entry holding the files replaced, whose restore undoes the change; `null` when the server keeps no trash (`PACS_TRASH_DAYS` 0). |
+
+### ModifyPatient
+
+New values for a patient's attributes. One left out stays as it is; an empty string removes a value, except the Patient ID's.
+
+| Field | Type | |
+|---|---|---|
+| `PatientBirthDate` | string or null, optional | Patient's Birth Date, `YYYYMMDD`. |
+| `PatientID` | string or null, optional |  |
+| `PatientName` | string or null, optional | Patient's Name, as DICOM writes it: `FAMILY^GIVEN^MIDDLE^PREFIX^SUFFIX`. |
+| `PatientSex` | string or null, optional | Patient's Sex: `M`, `F` or `O`. |
+
 ### Move
 
 Which studies to bring in, and how.
@@ -2694,8 +2776,8 @@ A deletion in the trash.
 | `deleted_ms` | integer | When it was deleted, in milliseconds since the Unix epoch. |
 | `emptied_ms` | integer | When the server empties it, in milliseconds since the Unix epoch. |
 | `files` | integer | Files waiting. |
-| `level` | string | What the deletion named: `Patient`, `Study`, `Series` or `Instance`. |
-| `studies` | list of object | The studies it took from, a part or all: `StudyInstanceUID`, `PatientID`, `PatientName`, and the `project` the study was in. |
+| `level` | string | What the deletion named: `Patient`, `Study`, `Series` or `Instance`; `Modification` for a patient modified or merged, whose restore undoes the change. |
+| `studies` | list of object | The studies it took from, a part or all: `StudyInstanceUID`, `PatientID`, `PatientName`, and the `project` the study was in; for a modification, the values before it, and in `changed` the ones it gave. |
 
 ### Uids
 

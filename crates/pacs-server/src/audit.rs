@@ -789,6 +789,33 @@ struct Asked {
     body: Vec<u8>,
     /// For a deletion: the studies the resource lay in, read before it went.
     doomed: Vec<AuditedStudy>,
+    /// For a patient modified: their main tags before (name, ID, birth date, sex).
+    patient_before: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A patient's birth date and sex, as `ParticipantObjectDetail`s of their participant object:
+/// the name and ID are its name and ID already. Empty values are left out.
+fn patient_details(tags: &serde_json::Map<String, serde_json::Value>) -> Vec<(String, Vec<u8>)> {
+    ["PatientBirthDate", "PatientSex"]
+        .into_iter()
+        .filter_map(|key| {
+            let value = tags.get(key)?.as_str()?.trim();
+            (!value.is_empty()).then(|| (key.to_owned(), value.as_bytes().to_vec()))
+        })
+        .collect()
+}
+
+/// `details` added to the patient participant object of `message`.
+fn with_patient_details(
+    mut message: pacs_audit::Message,
+    details: &[(String, Vec<u8>)],
+) -> pacs_audit::Message {
+    for object in &mut message.objects {
+        if object.id_type == pacs_audit::events::PATIENT_NUMBER {
+            object.details.extend(details.iter().cloned());
+        }
+    }
+    message
 }
 
 /// What is said of a request refused for being outside its account's projects.
@@ -824,6 +851,8 @@ impl Observer {
                 )
             }
             Subject::Deleted(..) => (Action::Delete, asked.doomed.clone()),
+            // the account saw the patient whole, or the request was refused
+            Subject::Modified(..) => (Action::Update, asked.doomed.clone()),
             // nothing here names a study of this archive
             Subject::Search
             | Subject::Stores
@@ -1018,6 +1047,46 @@ impl Observer {
                     ));
                 }
             }
+            Subject::Modified(..) => {
+                // the studies as they were, under the patient before, and as they are now,
+                // under the patient after: both identities are in the trail
+                // with the birth date and sex of each, which the trail has no other field for
+                let before: Vec<_> = asked.doomed.iter().map(|s| described(s, false)).collect();
+                let was = patient_details(&asked.patient_before);
+                let mut after = Vec::new();
+                for study in &asked.doomed {
+                    if let Some(now) = self.index.audited_study(&study.study_instance_uid).await? {
+                        after.push(described(&now, false));
+                    }
+                }
+                let is = match after.first().and_then(|s| s.patient_id.as_deref()) {
+                    Some(id) => patient_details(
+                        &self
+                            .index
+                            .patient_main_tags(&pacs_core::public_ids::patient(id))
+                            .await?
+                            .unwrap_or_default(),
+                    ),
+                    None => Vec::new(),
+                };
+                let groups = by_patient(before)
+                    .into_iter()
+                    .map(|g| (g, &was))
+                    .chain(by_patient(after).into_iter().map(|g| (g, &is)));
+                for (group, details) in groups {
+                    self.audit.record(with_patient_details(
+                        events::instances_accessed(
+                            &trail.source,
+                            now,
+                            Action::Update,
+                            ok,
+                            vec![who.clone()],
+                            &group,
+                        ),
+                        details,
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -1070,10 +1139,15 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
         request
     };
 
-    // A deletion takes what it deletes with it: whose it was is read first.
+    // A deletion takes what it deletes with it, a modification changes whose it is: whose it
+    // was is read first.
     let doomed = match &subject {
-        Some(Subject::Deleted(level, id)) => {
-            match observer.index.audited_by_public_id(*level, id).await {
+        Some(Subject::Deleted(_, id) | Subject::Modified(id)) => {
+            let level = match &subject {
+                Some(Subject::Deleted(level, _)) => *level,
+                _ => Level::Patient,
+            };
+            match observer.index.audited_by_public_id(level, id).await {
                 Ok(studies) => studies,
                 Err(error) => {
                     tracing::error!(%error, "the audit trail could not read what is being deleted");
@@ -1082,6 +1156,16 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             }
         }
         _ => Vec::new(),
+    };
+    let patient_before = match &subject {
+        Some(Subject::Modified(id)) => match observer.index.patient_main_tags(id).await {
+            Ok(tags) => tags.unwrap_or_default(),
+            Err(error) => {
+                tracing::error!(%error, "the audit trail could not read the patient being modified");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        },
+        _ => serde_json::Map::new(),
     };
     let (response, stored) = if subject == Some(Subject::Stores) {
         stored_during(next.run(request)).await
@@ -1211,6 +1295,7 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
             query,
             body: asked_body,
             doomed,
+            patient_before,
         };
         let written = match &outside {
             Some(account) => {

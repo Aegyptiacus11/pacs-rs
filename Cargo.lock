@@ -2130,6 +2130,7 @@ name = "pacs-archive"
 version = "0.16.3"
 dependencies = [
  "bytes",
+ "dicom-core",
  "dicom-dictionary-std",
  "pacs-core",
  "pacs-index",
