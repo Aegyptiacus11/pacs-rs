@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 mod consistency;
 pub mod frames;
 pub mod observed;
+pub use modify::{Modified, ModifyError};
+mod modify;
 mod trash;
 
 use bytes::Bytes;
