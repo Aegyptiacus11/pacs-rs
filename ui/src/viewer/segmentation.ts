@@ -154,8 +154,9 @@ function readSeg(ds: any): Seg {
     };
   });
   const bytes = new Uint8Array(ds.byteArray.buffer, ds.byteArray.byteOffset + pixels.dataOffset, pixels.length);
-  // FRACTIONAL: a probability or occupancy up to Maximum Fractional Value; half of it is in
-  const max = ds.uint16("x00620010") || 255;
+  // FRACTIONAL: a probability or occupancy up to Maximum Fractional Value (0062,000E);
+  // half of it is in
+  const max = ds.uint16("x0062000e") || 255;
   return {
     kind: "SEG",
     sop: text(ds, "x00080018"),
@@ -216,7 +217,8 @@ const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]
  * a referenced image, in that image's pixels, each pixel the number of the segment there
  * (where segments overlap, the higher number). Images are found by SOP Instance UID and
  * frame, or, for frames that name none, by the plane they lie in. A frame whose geometry is
- * known is carried through it into the image's pixels (nearest pixel); one without is taken
+ * known is sampled at each image pixel it covers (nearest SEG pixel), so a SEG coarser than
+ * its images, or turned against them, has no holes; one without is taken
  * as lying pixel for pixel on its image. Frames on no image of the series are counted, not
  * drawn. */
 export function segOnImages(seg: Seg, images: { sop: string; frame: number; plane: Plane | null }[]) {
@@ -245,13 +247,23 @@ export function segOnImages(seg: Seg, images: { sop: string; frame: number; plan
       for (let p = 0; p < mask.length; p++) if (mask[p]) target[p] = f.segment;
       continue;
     }
-    // SEG pixel (c, r) -> image pixel (x, y) = base + c * dc + r * dr
+    // SEG pixel (c, r) -> image pixel (x, y) = base + c * dc + r * dr; each image pixel
+    // within the frame's outline takes the SEG pixel it falls in, by the inverse
     const [bx, by, cx, cy, rx, ry] = map;
-    for (let r = 0, p = 0; r < seg.rows; r++)
-      for (let c = 0; c < seg.columns; c++, p++) {
-        if (!mask[p]) continue;
-        const x = Math.round(bx + c * cx + r * rx), y = Math.round(by + c * cy + r * ry);
-        if (x >= 0 && y >= 0 && x < columns && y < rows) target[y * columns + x] = f.segment;
+    const det = cx * ry - rx * cy;
+    if (Math.abs(det) < 1e-9) {
+      // a frame seen edge-on, across the image: it covers no area of it
+      missed++;
+      continue;
+    }
+    const corners = [-0.5, seg.columns - 0.5].flatMap((c) => [-0.5, seg.rows - 0.5].map((r) => [bx + c * cx + r * rx, by + c * cy + r * ry]));
+    const [x0, x1] = [Math.max(0, Math.floor(Math.min(...corners.map((k) => k[0])))), Math.min(columns - 1, Math.ceil(Math.max(...corners.map((k) => k[0]))))];
+    const [y0, y1] = [Math.max(0, Math.floor(Math.min(...corners.map((k) => k[1])))), Math.min(rows - 1, Math.ceil(Math.max(...corners.map((k) => k[1]))))];
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++) {
+        const [u, v] = [x - bx, y - by];
+        const c = Math.round((ry * u - rx * v) / det), r = Math.round((cx * v - cy * u) / det);
+        if (c >= 0 && r >= 0 && c < seg.columns && r < seg.rows && mask[r * seg.columns + c]) target[y * columns + x] = f.segment;
       }
   }
   return { maps: out, missed };
