@@ -13,7 +13,7 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, Send, TriangleAlert, Search, Tag, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, Send, TriangleAlert, Search, Tag, Trash2, Upload, User, X, FilePlus, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { FacetedFilter } from "@/components/faceted-filter";
 import { LabelEditor, LabelPicker, RowLabels } from "@/components/labels";
 import { addLabel, labelAll, removeLabel } from "@/lib/labels";
+import { addDocument, isDocument, notAPdf } from "@/lib/documents";
+import { PdfDialog, type OpenDocument } from "@/components/pdf-dialog";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { DownloadLink } from "@/components/download-link";
 import { SeriesThumb } from "@/components/series-thumb";
@@ -906,10 +908,31 @@ function deleteOne(s: Study): PendingDelete {
 }
 
 // the actions beyond Open and Download: in the pane's ⋯ menu and on a right click
+// a PDF chosen on this computer, made a document of the study by the server: checked before
+// it is sent, the list told afterwards
+function attachPdf(s: Study, refresh: () => void) {
+  const input = Object.assign(document.createElement("input"), { type: "file", accept: "application/pdf,.pdf" });
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const why = await notAPdf(file);
+    if (why) return void toast.error("Not attached", { description: why });
+    try {
+      await addDocument(s.id, file);
+      refresh();
+      toast.success("PDF attached", { description: `${file.name} is now a document of ${s.description || "the study"}.` });
+    } catch (e) {
+      toast.error("Not attached", { description: (e as Error).message });
+    }
+  });
+  input.click();
+}
+
 function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown" | "context"; onDelete: (p: PendingDelete) => void }) {
   // asked for when the menu opens
   const theirs = usePatientStudies(s.patient).data ?? [s];
   const [Item, Separator] = kind === "dropdown" ? [DropdownMenuItem, DropdownMenuSeparator] : [ContextMenuItem, ContextMenuSeparator];
+  const refresh = useRefreshStudies();
   return (
     <>
       {kind === "context" && (
@@ -927,6 +950,11 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
       <Item onSelect={() => copy(s.uid, "Study Instance UID")}>
         <Copy /> Copy Study UID
       </Item>
+      {may("write") && (
+        <Item onSelect={() => attachPdf(s, refresh)}>
+          <FilePlus /> Attach PDF…
+        </Item>
+      )}
       {may("remote") && <SendTo study={s} kind={kind} />}
       <Separator />
       <Item onSelect={() => go(href.studies(s.patient))}>
@@ -1040,6 +1068,9 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 // the chosen study: who, what, its series, the patient's other studies, and what can be done
 function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPick: (id: string) => void; onClose: () => void; onDelete: (p: PendingDelete) => void }) {
   const details = useStudySeries(s.id);
+  const [reading, setReading] = useState<OpenDocument | null>(null);
+  const images = details.data?.series.filter((x: any) => !isDocument(x));
+  const documents = details.data?.series.filter(isDocument) ?? [];
   const others = (usePatientStudies(s.patient).data ?? []).filter((x) => x.id !== s.id);
   const facts: [string, ReactNode][] = [
     ["Accession", s.accession || "—"],
@@ -1098,10 +1129,10 @@ function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPi
         <StudyLabels study={s} />
       </Section>
 
-      <Section title="Series" aside={details.data ? `${plural(details.data.series.length, "series", "series")} · ${plural(s.instances, "image")}` : null}>
+      <Section title="Series" aside={images ? `${plural(images.length, "series", "series")} · ${plural(s.instances - documents.length, "image")}` : null}>
         <div className="grid grid-cols-3 gap-2.5">
           {details.isPending && Array.from({ length: Math.min(s.series || 3, 6) }, (_, i) => <Skeleton key={i} className="aspect-square rounded-md" />)}
-          {details.data?.series.map((x: any) => (
+          {images?.map((x: any) => (
             <button key={x.ID} className="group/thumb min-w-0 text-left" onClick={() => openStudy(s.id, x.ID)} title="Open this series">
               <SeriesThumb series={x} studyUid={s.uid} className="ring-selection ring-offset-2 ring-offset-card transition group-hover/thumb:ring-2" />
               <div className="mt-1 truncate text-xs font-medium">{x.MainDicomTags.SeriesDescription || "No description"}</div>
@@ -1112,6 +1143,27 @@ function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPi
           ))}
         </div>
       </Section>
+
+      {documents.length > 0 && (
+        <Section title="Documents" aside={plural(documents.length, "PDF")}>
+          <div className="-mx-2 flex flex-col">
+            {documents.map((x: any) => {
+              const title = x.MainDicomTags.SeriesDescription || "PDF document";
+              return (
+                <button
+                  key={x.ID}
+                  className="flex items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+                  onClick={() => x.Instances[0] && setReading({ instance: x.Instances[0], title, detail: `${personName(s.name)} · ${formatDate(s.date)}` })}
+                >
+                  <FileText className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{title}</span>
+                  <span className="text-xs text-muted-foreground">PDF</span>
+                </button>
+              );
+            })}
+          </div>
+        </Section>
+      )}
 
       <Section title={others.length ? "Other studies of this patient" : "No other study of this patient"}>
         {others.length > 0 && (
@@ -1145,6 +1197,7 @@ function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPi
           </dd>
         </dl>
       </Section>
+      <PdfDialog document={reading} onClose={() => setReading(null)} />
     </div>
   );
 }

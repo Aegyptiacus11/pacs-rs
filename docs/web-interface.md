@@ -136,6 +136,14 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   it serves every matching study. Saved protocols are kept by the server, in the index, so
   every browser and everyone using the server shares them; they come first when they fit.
   Opening one series (a thumbnail) shows that series alone.
+- **PDF documents**: a report, a scanned request or any PDF joins a study from its ⋯ menu,
+  Attach PDF… (a role with `write`): the server makes it an Encapsulated PDF instance of the
+  study, in a series of its own titled by the file's name ([REST API](rest-api.md)). A file
+  that is not a PDF is refused before it is sent. The study's pane lists its documents apart
+  from its image series, and in the viewer they show in the series list with a page icon; a
+  click opens one in the browser's own PDF viewer, with a Download button. Documents,
+  segmentations, reports and key image notes are never hung in a viewport, whatever the
+  protocol.
 - **Segmentations**: a DICOM Segmentation (SEG) or RT Structure Set (RTSTRUCT) series of the
   study shows in the series list with a shapes icon; a click lays it over the series it was
   drawn on, which comes into the active viewport if no viewport shows it. A SEG's segments are

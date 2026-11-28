@@ -46,5 +46,12 @@ at every level, and of an instance `IndexInSeries`, `ReceptionDate`, `SopClassUi
 text of at most 64 KiB. Setting and removing them needs `write`; a deletion takes the
 metadata of what it removed.
 
+**PDF documents** join a study as a report system adds them: `POST /studies/{id}/documents`
+with the PDF as the body (`?title=` names it; "PDF document" if not) makes it an Encapsulated
+PDF instance of the study, in a series of its own of modality DOC, with the study's patient and
+study attributes and the time it was added (UTC). It answers as `POST /instances` does, refuses
+what does not begin with `%PDF-`, and needs `write`. `GET /instances/{id}/pdf` gives any
+Encapsulated PDF instance's document back, as it was put in.
+
 Not yet: searching series or instances by anything but their UID or their labels. Not
 planned: modifications (`/modify`).

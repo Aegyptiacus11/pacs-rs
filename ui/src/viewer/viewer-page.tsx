@@ -77,6 +77,8 @@ import { cn } from "@/lib/utils";
 import { initCornerstone, LAYOUTS, PRESETS, renderingMode, setRenderingMode, Viewer, type ToolName, type ViewerState } from "@/viewer/controller";
 import { isSegmentation, StudyBrowser, type Registry } from "@/viewer/study-browser";
 import { SegmentsPanel } from "@/viewer/segments-panel";
+import { PdfDialog, type OpenDocument } from "@/components/pdf-dialog";
+import { isDocument } from "@/lib/documents";
 import { autoApply, fetchUserProtocols, plans, studyContext, type Plan, type Protocol, type StudyContext } from "@/viewer/hanging";
 import { ProtocolMenu } from "@/viewer/protocol-menu";
 
@@ -223,6 +225,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
   const [browser, setBrowser] = useState(() => !matchMedia("(max-width: 767px)").matches);
   const [tags, setTags] = useState(false);
   const [segments, setSegments] = useState(false);
+  const [reading, setReading] = useState<OpenDocument | null>(null);
   const [lastTool, setLastTool] = useState<ToolName>(() => {
     try {
       return (localStorage.getItem("pacs-rs.measure") as ToolName | null) ?? "length";
@@ -672,7 +675,13 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
             shown={shown}
             active={activeCell?.seriesId ?? null}
             onPick={(id) => {
-              if (isSegmentation(registry.get(id)?.series)) {
+              const known = registry.get(id);
+              if (isDocument(known?.series)) {
+                const first = known!.series.Instances?.[0];
+                if (first) setReading({ instance: first, title: known!.series.MainDicomTags.SeriesDescription || "PDF document" });
+                return;
+              }
+              if (isSegmentation(known?.series)) {
                 setSegments(true);
                 v?.addSegmentation(id).then((why) => why && toast.error("The segmentation could not be shown", { description: why }));
                 return;
@@ -685,6 +694,7 @@ export function ViewerPage({ study: studyId, series: seriesId, compare }: { stud
           />
         )}
         <main ref={grid} className="viewer-grid min-w-0 flex-1" data-tool={s?.tool} />
+        <PdfDialog document={reading} onClose={() => setReading(null)} />
         {segments && v && !!s?.segmentations.length && <SegmentsPanel viewer={v} list={s.segmentations} fill={s.fill} onClose={() => setSegments(false)} />}
         {/* with a finger there is no Delete key, and the toolbar's button may be scrolled out of
             sight: what can be done with the selected measurement comes to it */}

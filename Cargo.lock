@@ -2267,6 +2267,7 @@ dependencies = [
  "bytes",
  "dicom-dictionary-std",
  "futures",
+ "getrandom 0.4.3",
  "http-body-util",
  "pacs-archive",
  "pacs-core",

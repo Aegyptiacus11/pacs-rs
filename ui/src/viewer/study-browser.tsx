@@ -4,7 +4,8 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Layers, Shapes } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Layers, Shapes } from "lucide-react";
+import { isDocument } from "@/lib/documents";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SeriesThumb } from "@/components/series-thumb";
@@ -32,18 +33,20 @@ function StudySeries({ study, registry, shown, active, onPick }: { study: any; r
       {series.data!.map((s) => {
         const t = s.MainDicomTags;
         const isActive = s.ID === active;
-        // a segmentation is laid over the images it was drawn on, not shown on its own
+        // a segmentation is laid over the images it was drawn on, a document read on its own:
+        // neither is shown in a viewport
         const overlay = isSegmentation(s);
+        const document = isDocument(s);
         return (
           <button
             key={s.ID}
-            draggable={!overlay}
+            draggable={!overlay && !document}
             onDragStart={(e) => {
               e.dataTransfer.setData("application/x-pacs-series", s.ID);
               e.dataTransfer.effectAllowed = "copy";
             }}
             onClick={() => onPick(s.ID)}
-            title={overlay ? "Click to lay it over the images it was drawn on" : "Click to show in the active viewport, or drag onto a viewport"}
+            title={overlay ? "Click to lay it over the images it was drawn on" : document ? "Click to read the document" : "Click to show in the active viewport, or drag onto a viewport"}
             className={cn(
               "group flex w-full items-start gap-2.5 border-l-2 border-transparent px-2.5 py-1.5 text-left hover:bg-accent",
               shown.has(s.ID) && "border-selection/40",
@@ -51,9 +54,9 @@ function StudySeries({ study, registry, shown, active, onPick }: { study: any; r
             )}
           >
             <div className="relative w-16 shrink-0">
-              {overlay ? (
+              {overlay || document ? (
                 <div className="grid aspect-square place-items-center rounded-sm bg-muted text-muted-foreground">
-                  <Shapes className="size-6" strokeWidth={1.4} />
+                  {document ? <FileText className="size-6" strokeWidth={1.4} /> : <Shapes className="size-6" strokeWidth={1.4} />}
                 </div>
               ) : (
                 <SeriesThumb series={s} studyUid={study.MainDicomTags.StudyInstanceUID} className="rounded-sm" />

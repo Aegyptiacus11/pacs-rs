@@ -16,6 +16,7 @@ use utoipa_axum::routes;
 
 mod archive;
 mod delete;
+mod documents;
 mod error;
 mod find;
 mod labels;
@@ -58,6 +59,8 @@ fn described() -> OpenApiRouter<scope::Whole> {
         .routes(routes!(upload::instance))
         .routes(routes!(resources::instance, delete::instance))
         .routes(routes!(resources::instance_file))
+        .routes(routes!(documents::pdf))
+        .routes(routes!(documents::add))
         .routes(routes!(parents::instance_series))
         .routes(routes!(parents::instance_study))
         .routes(routes!(parents::instance_patient))

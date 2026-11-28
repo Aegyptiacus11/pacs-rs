@@ -30,7 +30,18 @@ use crate::scope::Seen;
 )]
 pub(crate) async fn instance(Seen(state): Seen, body: Bytes) -> Result<Json<Value>, RestError> {
     let size = body.len();
-    let ingested = match state.archive.ingest(body).await {
+    let ingested = state.archive.ingest(body).await;
+    stored(&state, ingested, size).await
+}
+
+/// The answer to a file stored (or the refusal), as `POST /instances` gives it; `size` is
+/// the body's, for the message.
+pub(crate) async fn stored(
+    state: &crate::AppState,
+    ingested: Result<pacs_archive::Ingested, IngestError>,
+    size: usize,
+) -> Result<Json<Value>, RestError> {
+    let ingested = match ingested {
         Ok(ingested) => ingested,
         Err(IngestError::Invalid(e)) => {
             return Err(RestError::bad_request(

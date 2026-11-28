@@ -11,6 +11,8 @@ repository.workspace = true
 axum = "0.8.9"
 bytes = "1.12.1"
 futures = "0.3.34"
+# the random part of a new document's UIDs
+getrandom = "0.4.3"
 pacs-archive = { path = "../pacs-archive" }
 pacs-core = { path = "../pacs-core" }
 pacs-index = { path = "../pacs-index" }

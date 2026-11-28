@@ -123,6 +123,8 @@ pub(crate) fn subject(method: &Method, path: &str, mount: &str) -> Option<Subjec
         ["tools", "find"] if post => Some(Subject::Search),
         ["tools", "create-archive"] if get || post => Some(Subject::Exported(Target::Listed)),
         ["instances"] if post => Some(Subject::Stores),
+        // a PDF made into an instance of the study: stored as an upload is
+        ["studies", _, "documents"] if post => Some(Subject::Stores),
         // a restore indexes its files again, as an upload would
         ["trash", _, "restore"] if post => Some(Subject::Stores),
         [list] if get && level(list).is_some() => Some(Subject::Search),
@@ -229,6 +231,12 @@ mod tests {
             (Method::GET, "/instances", Some(Search)),
             (Method::POST, "/tools/find", Some(Search)),
             (Method::POST, "/instances", Some(Stores)),
+            (Method::POST, "/studies/s1/documents", Some(Stores)),
+            (
+                Method::GET,
+                "/instances/i1/pdf",
+                Some(Viewed(rest(Level::Instance, "i1"))),
+            ),
             (
                 Method::GET,
                 "/studies/abc",

@@ -138,19 +138,24 @@ export type StudyContext = { study: any; series: any[]; prior: { study: any; ser
 
 const contexts = new Map<string, Promise<StudyContext>>();
 
-/** The study's series, and its latest prior (an older study of the same patient) with its own. */
+/** Series of no images of their own: documents, segmentations, reports, key image notes and
+ * presentation states are read or laid over images, never hung in a viewport. */
+const NOT_HUNG = new Set(["DOC", "SEG", "RTSTRUCT", "SR", "KO", "PR"]);
+const hung = (list: any[]) => list.filter((s) => !NOT_HUNG.has(s.MainDicomTags?.Modality));
+
+/** The study's series that have images, and its latest prior (an older study of the same patient) with its own. */
 export function studyContext(studyId: string) {
   if (!contexts.has(studyId))
     contexts.set(
       studyId,
       (async () => {
         const study = await api(`studies/${studyId}`);
-        const [series, studies] = await Promise.all([api<any[]>(`studies/${studyId}/series`).then(sortSeries), api<any[]>(`patients/${study.ParentPatient}/studies`)]);
+        const [series, studies] = await Promise.all([api<any[]>(`studies/${studyId}/series`).then((l) => hung(sortSeries(l))), api<any[]>(`patients/${study.ParentPatient}/studies`)]);
         const date = String(study.MainDicomTags.StudyDate || "");
         const older = studies
           .filter((s) => s.ID !== studyId && String(s.MainDicomTags.StudyDate || "") < date)
           .sort((a, b) => String(b.MainDicomTags.StudyDate).localeCompare(String(a.MainDicomTags.StudyDate)));
-        const prior = older[0] ? { study: older[0], series: sortSeries(await api<any[]>(`studies/${older[0].ID}/series`)) } : null;
+        const prior = older[0] ? { study: older[0], series: hung(sortSeries(await api<any[]>(`studies/${older[0].ID}/series`))) } : null;
         const modalities = [...new Set(series.map((s) => s.MainDicomTags.Modality).filter(Boolean))] as string[];
         return { study, series, prior, modalities };
       })().catch((e) => {
