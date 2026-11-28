@@ -7,6 +7,7 @@
 //! - `modality`, `sex`: comma-separated choices (`sex=O` for anything but F and M);
 //! - `age`: the patient's age at the study, comma-separated ranges of whole years, both ends
 //!   included, either left open (`0-17,65-`);
+//! - `label`: comma-separated labels, the studies with any of them;
 //! - `patient`: one patient's studies, by public ID;
 //! - `sort`: `patient`, `description`, `modality`, `date` (the default), `series`, `images`
 //!   or `received`; `order`: `asc` or `desc` (the default);
@@ -14,9 +15,10 @@
 //! - `summary=true`: also the totals of the whole list and its five last received studies.
 //!
 //! The answer: `{"Total", "Studies": [...], "Summary"?}`, each study with its ID, its
-//! patient's, its and its patient's main tags, modalities, series and image counts and when it
-//! last received an image. `/ui/api/studies/facets[?patient=]` gives what the filters can
-//! choose, with how many studies each has: `{"Modalities", "Sexes", "Dates", "Ages"}`.
+//! patient's, its and its patient's main tags, modalities, series and image counts, when it
+//! last received an image and its labels. `/ui/api/studies/facets[?patient=]` gives what the
+//! filters can choose, with how many studies each has:
+//! `{"Modalities", "Sexes", "Dates", "Ages", "Labels"}`.
 //!
 //! `/ui/api/patients` lists the patients the same way: `q` (words in the name or Patient ID),
 //! `sort` (`name`, `last`: the latest study, the default, or `studies`), `order`, `offset`,
@@ -50,6 +52,7 @@ struct Params {
     modality: String,
     sex: String,
     age: String,
+    label: String,
     patient: Option<String>,
     sort: Option<String>,
     order: Option<String>,
@@ -130,6 +133,7 @@ fn query(p: Params) -> Result<(WorklistQuery, bool), &'static str> {
             modalities: list(&p.modality),
             sexes: list(&p.sex),
             ages: ages(&p.age)?,
+            labels: list(&p.label),
             patient: p.patient.filter(|s| !s.is_empty()),
             sort,
             descending,
@@ -150,6 +154,7 @@ fn study(s: WorklistStudy) -> Value {
         "Series": s.series,
         "Instances": s.instances,
         "LastReceived": s.last_ms,
+        "Labels": s.labels,
     })
 }
 
@@ -226,6 +231,7 @@ async fn facets(Seen(index): Seen, Query(p): Query<FacetParams>) -> Response {
                 "Sexes": counts(f.sexes),
                 "Dates": counts(f.dates),
                 "Ages": counts(f.ages),
+                "Labels": counts(f.labels),
             })),
         )
             .into_response(),

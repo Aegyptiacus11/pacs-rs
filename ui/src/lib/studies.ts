@@ -24,6 +24,7 @@ export type Study = {
   instances: number;
   /** when its latest image arrived, epoch ms, as text */
   updated: string;
+  labels: string[];
 };
 
 /** What the list shows: the filters, the order, the page. */
@@ -35,6 +36,8 @@ export type StudyQuery = {
   sexes: string[];
   /** age at the study: ranges such as "0-17" or "65-" */
   ages: string[];
+  /** studies with any of these labels */
+  labels: string[];
   patient: string | null;
   sort: "patient" | "description" | "modality" | "date" | "series" | "images" | "received";
   desc: boolean;
@@ -52,7 +55,13 @@ export type StudySummary = {
   recent: Study[];
 };
 
-export type StudyFacets = { modalities: Record<string, number>; sexes: Record<string, number>; dates: Record<string, number>; ages: Record<string, number> };
+export type StudyFacets = {
+  modalities: Record<string, number>;
+  sexes: Record<string, number>;
+  dates: Record<string, number>;
+  ages: Record<string, number>;
+  labels: Record<string, number>;
+};
 
 /** A study as `/ui/api/studies` gives it (or the REST API, with the counts added). */
 function fromList(s: any): Study {
@@ -75,6 +84,7 @@ function fromList(s: any): Study {
     series: Number(s.Series ?? 0),
     instances: Number(s.Instances ?? 0),
     updated: s.LastReceived ? String(s.LastReceived) : "",
+    labels: s.Labels ?? [],
   };
 }
 
@@ -88,6 +98,7 @@ function search(query: Partial<StudyQuery>, extra: Record<string, string> = {}) 
   set("modality", query.modalities?.join(","));
   set("sex", query.sexes?.join(","));
   set("age", query.ages?.join(","));
+  set("label", query.labels?.join(","));
   set("patient", query.patient);
   set("sort", query.sort);
   if (query.desc !== undefined) set("order", query.desc ? "desc" : "asc");
@@ -156,7 +167,7 @@ export function useStudyFacets(patient: string | null) {
       url.hash = "";
       if (patient) url.searchParams.set("patient", patient);
       const f = await get(url);
-      return { modalities: f.Modalities, sexes: f.Sexes, dates: f.Dates, ages: f.Ages ?? {} };
+      return { modalities: f.Modalities, sexes: f.Sexes, dates: f.Dates, ages: f.Ages ?? {}, labels: f.Labels ?? {} };
     },
   });
 }

@@ -13,7 +13,7 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, Send, TriangleAlert, Search, Trash2, Upload, User, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, Send, TriangleAlert, Search, Tag, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { FacetedFilter } from "@/components/faceted-filter";
+import { LabelEditor, LabelPicker, RowLabels } from "@/components/labels";
+import { addLabel, labelAll, removeLabel } from "@/lib/labels";
 import { ConfirmDelete, type PendingDelete } from "@/components/confirm-delete";
 import { DownloadLink } from "@/components/download-link";
 import { SeriesThumb } from "@/components/series-thumb";
@@ -120,6 +122,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [span, setSpan] = useState<Span>({ from: "", to: "" });
   const [sexes, setSexes] = useState<string[]>([]);
   const [ages, setAges] = useState<string[]>([]);
+  const [labels, setLabels] = useState<string[]>([]);
   const [moreFilters, setMoreFilters] = useState(false);
   // the Sex filter takes the focus of the button that showed it, which is gone
   const more = useRef<HTMLSpanElement>(null);
@@ -159,7 +162,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
     return () => clearTimeout(t);
   }, [typed]);
 
-  const filters: StudyFilters = { q, ...spanDates(span), modalities, sexes, ages, patient };
+  const filters: StudyFilters = { q, ...spanDates(span), modalities, sexes, ages, labels, patient };
   const filterKey = JSON.stringify(filters);
   const sort = sorting[0] ?? { id: "date", desc: true };
   // other filters or another order: back to the first page
@@ -181,7 +184,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
   // what each filter can pick, with how many studies have it (over every study, or the patient's)
   const facets = useMemo(() => {
-    const f = choices.data ?? { modalities: {}, sexes: {}, dates: {}, ages: {} };
+    const f = choices.data ?? { modalities: {}, sexes: {}, dates: {}, ages: {}, labels: {} };
     const dates = Object.entries(f.dates);
     const all = Object.values(f.sexes).reduce((n, c) => n + c, 0);
     const extra = Object.keys(f.modalities).filter((m) => !IMAGING_MODALITIES.some(([c]) => c === m)).sort();
@@ -196,6 +199,7 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         hint,
         count: Object.entries(f.ages).reduce((n, [age, c]) => (Number(age) >= lo && Number(age) <= hi ? n + c : n), 0),
       })),
+      labels: Object.entries(f.labels).map(([l, n]) => ({ value: l, label: l, count: n })),
       dates: dates.map(([d]) => d),
       count: (s: Span) => dates.filter(([d]) => inSpan(d, s)).reduce((n, [, c]) => n + c, 0),
     };
@@ -245,7 +249,10 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
         header: ({ column }) => <SortHeader column={column}>Study</SortHeader>,
         cell: ({ row: { original: s } }) => (
           <div className="min-w-0">
-            <div className="truncate">{s.description || <span className="text-muted-foreground">No description</span>}</div>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate">{s.description || <span className="text-muted-foreground">No description</span>}</span>
+              <RowLabels labels={s.labels} />
+            </div>
             <div className="truncate text-xs text-muted-foreground">{[s.accession && `Acc. ${s.accession}`, s.referring && `Ref. ${personName(s.referring)}`].filter(Boolean).join(" · ") || " "}</div>
           </div>
         ),
@@ -297,11 +304,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
 
   const selected = Object.keys(selection).filter((id) => selection[id]).map((id) => known.get(id)).filter((x): x is Study => !!x);
   const dated = !!(span.from || span.to);
-  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || ages.length > 0 || dated;
+  const filtered = !!q || modalities.length > 0 || sexes.length > 0 || ages.length > 0 || labels.length > 0 || dated;
   const visible = table.getRowModel().rows;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   // what the summary covers: the date range, and whether other filters narrow it
-  const narrowed = !!(q || modalities.length || sexes.length || ages.length);
+  const narrowed = !!(q || modalities.length || sexes.length || ages.length || labels.length);
   const scope = dated ? spanName(span) + (narrowed ? ", filtered" : "") : narrowed ? "The studies filtered" : "Every study";
 
   // a page reached by ↑ or ↓: its first or last row
@@ -337,6 +344,14 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
       e.preventDefault();
       visible[at].toggleSelected();
     } else if (e.key === "Escape") setCurrent(null);
+  }
+
+  // one label on every study ticked: those it went on keep it if one fails
+  async function labelSelected(label: string) {
+    const { done, error } = await labelAll(selected.map((s) => s.id), label);
+    refresh();
+    if (error) toast.error(`“${label}” went on ${plural(done, "study", "studies")} of ${selected.length}`, { description: error.message });
+    else toast.success(`“${label}” put on ${plural(done, "study", "studies")}`);
   }
 
   async function confirmDelete() {
@@ -376,6 +391,8 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           <FilterBox value={typed} onChange={setTyped} placeholder="Name, ID, accession…" className="w-full min-w-0 sm:w-72" />
           <DateFilter span={span} dates={facets.dates} count={facets.count} total={facets.all} onApply={setSpan} />
           <FacetedFilter title="Modality" options={facets.modalities} selected={modalities} onChange={setModalities} />
+          {/* only once some study has a label */}
+          {(facets.labels.length > 0 || labels.length > 0) && <FacetedFilter title="Label" options={facets.labels} selected={labels} onChange={setLabels} />}
           {/* who the patients are: research more than reading, so behind a button, open while used */}
           {moreFilters ? (
             <span ref={more} className="contents">
@@ -415,11 +432,12 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
               variant="ghost"
               size="sm"
               className="h-8 px-2 text-muted-foreground"
-              title="Clear the filter, the dates, the modality, the sex and the age"
+              title="Clear the filter, the dates, the modality, the label, the sex and the age"
               onClick={() => {
                 setTyped("");
                 setQ("");
                 setModalities([]);
+                setLabels([]);
                 setSexes([]);
                 setAges([]);
                 setMoreFilters(false);
@@ -453,6 +471,11 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                     <span className="block truncate text-xs text-muted-foreground">
                       {[s.description || "No description", plural(s.series, "series", "series")].join(" · ")}
                     </span>
+                    {s.labels.length > 0 && (
+                      <span className="mt-1 flex">
+                        <RowLabels labels={s.labels} max={3} />
+                      </span>
+                    )}
                   </span>
                   <span className="flex shrink-0 flex-col items-end gap-1">
                     <span className="tabular text-xs">{formatDate(s.date)}</span>
@@ -614,6 +637,13 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
                 <Download /> Download ZIP
               </DownloadLink>
             </Button>
+            {may("write") && (
+              <LabelPicker onPick={(label) => labelSelected(label)}>
+                <Button variant="ghost" size="sm">
+                  <Tag /> Label
+                </Button>
+              </LabelPicker>
+            )}
             {may("delete") && <Button
               variant="ghost"
               size="sm"
@@ -930,6 +960,33 @@ function StudyMenu({ study: s, kind, onDelete }: { study: Study; kind: "dropdown
   );
 }
 
+// the study's labels: taken off and put on at once, the list told afterwards
+function StudyLabels({ study: s }: { study: Study }) {
+  const refresh = useRefreshStudies();
+  const [labels, setLabels] = useState(s.labels);
+  const [busy, setBusy] = useState(false);
+  const theirs = s.labels.join(",");
+  useEffect(() => setLabels(s.labels), [theirs]);
+  async function change(label: string, on: boolean) {
+    // one change at a time: the next starts from what the last left
+    if (busy) return;
+    setBusy(true);
+    const before = labels;
+    setLabels(on ? [...labels, label].sort() : labels.filter((l) => l !== label));
+    try {
+      await (on ? addLabel : removeLabel)(s.id, label);
+      refresh();
+    } catch (e) {
+      setLabels(before);
+      toast.error(on ? `“${label}” was not put on` : `“${label}” was not taken off`, { description: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+  const write = may("write");
+  return <LabelEditor labels={labels} onAdd={write ? (l) => change(l, true) : undefined} onRemove={write ? (l) => change(l, false) : undefined} />;
+}
+
 /** "Send to" a remote archive, as a job; the archive must be one studies may be sent to. */
 function SendTo({ study: s, kind }: { study: Study; kind: "dropdown" | "context" }) {
   const [Sub, Trigger, Content, Item] =
@@ -1036,6 +1093,10 @@ function StudyPane({ study: s, onPick, onClose, onDelete }: { study: Study; onPi
           </DropdownMenu>
         </div>
       </div>
+
+      <Section title="Labels">
+        <StudyLabels study={s} />
+      </Section>
 
       <Section title="Series" aside={details.data ? `${plural(details.data.series.length, "series", "series")} · ${plural(s.instances, "image")}` : null}>
         <div className="grid grid-cols-3 gap-2.5">

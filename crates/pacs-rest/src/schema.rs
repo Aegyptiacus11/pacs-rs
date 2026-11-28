@@ -21,7 +21,7 @@ pub struct Patient {
     pub is_protected: bool,
     /// Always `false` for now.
     pub is_stable: bool,
-    /// Always empty: labels are not supported yet.
+    /// Its labels, sorted (`/{level}/{id}/labels`).
     pub labels: Vec<String>,
     /// When something under the patient last changed, as `YYYYMMDDTHHMMSS` in UTC.
     pub last_update: String,
@@ -42,7 +42,7 @@ pub struct Study {
     pub id: String,
     /// Always `false` for now.
     pub is_stable: bool,
-    /// Always empty: labels are not supported yet.
+    /// Its labels, sorted (`/{level}/{id}/labels`).
     pub labels: Vec<String>,
     /// When something under the study last changed, as `YYYYMMDDTHHMMSS` in UTC.
     pub last_update: String,
@@ -73,7 +73,7 @@ pub struct Series {
     pub instances: Vec<String>,
     /// Always `false` for now.
     pub is_stable: bool,
-    /// Always empty: labels are not supported yet.
+    /// Its labels, sorted (`/{level}/{id}/labels`).
     pub labels: Vec<String>,
     /// When something in the series last changed, as `YYYYMMDDTHHMMSS` in UTC.
     pub last_update: String,
@@ -100,7 +100,7 @@ pub struct Instance {
     pub id: String,
     /// The Instance Number; left out when the file has none.
     pub index_in_series: Option<i64>,
-    /// Always empty: labels are not supported yet.
+    /// Its labels, sorted (`/{level}/{id}/labels`).
     pub labels: Vec<String>,
     /// SOP Instance UID, Instance Number and Image Position (Patient), where the file gives
     /// them.

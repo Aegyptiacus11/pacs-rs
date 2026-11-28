@@ -412,8 +412,22 @@ async fn the_study_list_comes_a_page_at_a_time() {
     let (_, _, body) = call(&app, get("/ui/api/studies?modality=MR")).await;
     assert_eq!(json(body)["Total"], 0);
 
+    // a label put on a study by the REST API shows on its row, filters, and is counted
+    let labelled = page["Studies"][0]["ID"].as_str().unwrap().to_owned();
+    assert_eq!(page["Studies"][0]["Labels"], json!([]));
+    let put = Request::put(format!("/studies/{labelled}/labels/teaching"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(&app, put).await.0, StatusCode::OK);
+    let (_, _, body) = call(&app, get("/ui/api/studies?label=teaching,other")).await;
+    let found = json(body);
+    assert_eq!(found["Total"], 1);
+    assert_eq!(found["Studies"][0]["ID"], labelled.as_str());
+    assert_eq!(found["Studies"][0]["Labels"], json!(["teaching"]));
+
     let (_, _, body) = call(&app, get("/ui/api/studies/facets")).await;
     let facets = json(body);
+    assert_eq!(facets["Labels"], json!({"teaching": 1}));
     assert_eq!(facets["Modalities"]["CT"], 3);
     // patients said to be born in 1970, scanned in 2026
     assert_eq!(facets["Ages"]["56"], 3);

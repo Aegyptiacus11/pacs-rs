@@ -2221,7 +2221,7 @@ An instance: one stored DICOM file.
 | `FileSize` | integer | Bytes of the file as stored, which is smaller than the file sent when pacs-rs compressed it. |
 | `ID` | string | The instance's identifier: the SHA-1 of `PatientID\|StudyInstanceUID\|SeriesInstanceUID\|SOPInstanceUID`. |
 | `IndexInSeries` | integer or null, optional | The Instance Number; left out when the file has none. |
-| `Labels` | list of string | Always empty: labels are not supported yet. |
+| `Labels` | list of string | Its labels, sorted (`/{level}/{id}/labels`). |
 | `MainDicomTags` | object of string | SOP Instance UID, Instance Number and Image Position (Patient), where the file gives them. |
 | `ParentSeries` | string | The identifier of the instance's series. |
 | `Type` | string | `Instance`. |
@@ -2373,7 +2373,7 @@ A patient: the studies that share a Patient ID.
 | `ID` | string | The patient's identifier: the SHA-1 of the Patient ID. |
 | `IsProtected` | boolean | Always `false`: pacs-rs never removes a patient to make room. |
 | `IsStable` | boolean | Always `false` for now. |
-| `Labels` | list of string | Always empty: labels are not supported yet. |
+| `Labels` | list of string | Its labels, sorted (`/{level}/{id}/labels`). |
 | `LastUpdate` | string | When something under the patient last changed, as `YYYYMMDDTHHMMSS` in UTC. |
 | `MainDicomTags` | object of string | Patient ID, Patient's Name, Birth Date and Sex, where the files give them. |
 | `Studies` | list of string | The identifiers of the patient's studies. |
@@ -2465,7 +2465,7 @@ A series.
 | `ID` | string | The series' identifier: the SHA-1 of `PatientID\|StudyInstanceUID\|SeriesInstanceUID`. |
 | `Instances` | list of string | The identifiers of the series' instances, in Instance Number order. |
 | `IsStable` | boolean | Always `false` for now. |
-| `Labels` | list of string | Always empty: labels are not supported yet. |
+| `Labels` | list of string | Its labels, sorted (`/{level}/{id}/labels`). |
 | `LastUpdate` | string | When something in the series last changed, as `YYYYMMDDTHHMMSS` in UTC. |
 | `MainDicomTags` | object of string | Series Instance UID, Number and Description, and Modality, where the files give them. |
 | `ParentStudy` | string | The identifier of the series' study. |
@@ -2542,7 +2542,7 @@ A study.
 |---|---|---|
 | `ID` | string | The study's identifier: the SHA-1 of `PatientID\|StudyInstanceUID`. |
 | `IsStable` | boolean | Always `false` for now. |
-| `Labels` | list of string | Always empty: labels are not supported yet. |
+| `Labels` | list of string | Its labels, sorted (`/{level}/{id}/labels`). |
 | `LastUpdate` | string | When something under the study last changed, as `YYYYMMDDTHHMMSS` in UTC. |
 | `MainDicomTags` | object of string | Study Instance UID, Date, Time, ID and Description, Accession Number and Referring Physician's Name, where the files give them. |
 | `ParentPatient` | string | The identifier of the study's patient. |
