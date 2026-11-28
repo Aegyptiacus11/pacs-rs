@@ -21,8 +21,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   there is no wheel, so a touch screen starts on the Scroll tool: a drag up or down goes
   through the images. In a 3D view one finger turns it and two zoom.
 - **Studies**: a worklist and, beside it, the chosen study. One row of filters over the table:
-  a filter box (`/`), the date, the modality (every DICOM imaging modality), the sex and the age
-  at the study (0–17, 18–39, 40–64, 65+), each with how many studies it holds. The date opens
+  a filter box (`/`), the date, the modality (every DICOM imaging modality), and under More
+  filters the sex and the age at the study (0–17, 18–39, 40–64, 65+), each with how many
+  studies it holds; More filters stays open while one of them is used. The date opens
   a small panel: today, yesterday, this week, this month and this year, each with its studies
   (clicked again, it lets go), and From
   and To fields, typed (in the browser's day, month, year order, or year first) or picked on a
@@ -99,7 +100,9 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   to `POST /instances` and is counted as new, already stored or skipped.
 - **Viewer**: full screen and dark, laid out like a reading workstation. A toolbar of labelled
   tools: window/level with presets and invert, scroll (a drag through the images; the wheel always does), pan, zoom, a magnifying glass (held over a spot, 1.5 to 8 times with the wheel), measurements
-  (length, pixel value, angle, Cobb angle, bidirectional, elliptical and rectangle ROI), rotate
+  in one button that takes up the last one chosen, its menu holding them all (length, angle,
+  Cobb angle, bidirectional, elliptical and rectangle ROI, pixel value, each with its key) and
+  the removal of the selected ones or all, rotate
   and flip, Add view (the active series in the next plane, sagittal then coronal, or the next
   series), Views (up to 2 × 3, 3 planes, scrolling the viewports together: Sync), reference
   lines (with two viewports or more, where the active one's image cuts the others of the same

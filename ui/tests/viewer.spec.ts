@@ -49,6 +49,41 @@ test("one viewport has no reference lines to show, and no Lines button", async (
   await expect(page.getByRole("button", { name: "Lines" })).toHaveCount(0);
 });
 
+test("the measurements are one button that takes up the last one chosen", async ({ page }) => {
+  await page.goto(VIEW);
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  // one button, Length on a first visit, and none of the others on the bar
+  await expect(page.getByRole("button", { name: "Length", exact: true })).toHaveAttribute("aria-pressed", "false");
+  for (const name of ["Angle", "Cobb", "Bidir.", "Ellipse", "Rectangle", "Value"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+
+  // a key chooses one: the button shows it, pressed
+  await page.keyboard.press("a");
+  await expect(page.getByRole("button", { name: "Angle", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  // the menu has them all; one chosen there takes the button
+  await page.getByRole("button", { name: "Measurements" }).click();
+  for (const name of ["Length", "Angle", "Cobb angle", "Bidirectional", "Ellipse ROI", "Rectangle ROI", "Pixel value"])
+    await expect(page.getByRole("menuitem", { name: new RegExp(`^${name}`) })).toBeVisible();
+  await page.getByRole("menuitem", { name: /^Bidirectional/ }).click();
+  await expect(page.getByRole("button", { name: "Bidir.", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  // another tool lets it go, and the button keeps the last measurement for next time
+  await page.keyboard.press("p");
+  await expect(page.getByRole("button", { name: "Bidir.", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Bidir.", exact: true })).toBeVisible();
+});
+
+test("the measurement button works when the browser refuses storage", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", { get: () => { throw new DOMException("refused", "SecurityError"); } });
+  });
+  await page.goto(VIEW);
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  await page.keyboard.press("c");
+  await expect(page.getByRole("button", { name: "Cobb", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("a slow machine is not taken for one whose WebGL draws blank", async ({ page }) => {
   // On a loaded machine the first image was drawn later than the check's fixed wait of 600 ms:
   // the viewer judged WebGL blank, switched to reading it back and reloaded, mid-test (the
