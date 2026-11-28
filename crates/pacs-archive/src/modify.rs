@@ -150,7 +150,11 @@ impl Archive {
             trash_key: &trash_key,
             id: None,
         };
-        let rekeyed = match self.index.replace_instances(&news, &mut trash).await {
+        let rekeyed = match self
+            .index
+            .replace_instances(public_id, &news, &mut trash)
+            .await
+        {
             Ok(rekeyed) => rekeyed,
             Err(error) => {
                 self.forget(&written).await;

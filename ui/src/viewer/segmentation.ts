@@ -213,19 +213,22 @@ export type Plane = { origin: number[]; row: number[]; column: number[]; spacing
 const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
-/** The masks of a SEG laid on the images of its series, as the viewer draws them: one array
- * a referenced image, in that image's pixels, each pixel the number of the segment there
- * (where segments overlap, the higher number). Images are found by SOP Instance UID and
- * frame, or, for frames that name none, by the plane they lie in. A frame whose geometry is
- * known is sampled at each image pixel it covers (nearest SEG pixel), so a SEG coarser than
- * its images, or turned against them, has no holes; one without is taken
- * as lying pixel for pixel on its image. Frames on no image of the series are counted, not
- * drawn. */
+/** One segment's mask on one image, in that image's pixels: 1 where the segment is. */
+export type Layer = { segment: number; mask: Uint8Array };
+
+/** The masks of a SEG laid on the images of its series, as the viewer draws them: for each
+ * referenced image, a mask a segment on it, in that image's pixels, in rising segment number
+ * (overlapping segments each keep their own, so hiding one shows what lies under it). Images
+ * are found by SOP Instance UID and frame, or, for frames that name none, by the plane they
+ * lie in. A frame whose geometry is known is sampled at each image pixel it covers (nearest
+ * SEG pixel), so a SEG coarser than its images, or turned against them, has no holes; one
+ * without is taken as lying pixel for pixel on its image. Frames on no image of the series
+ * are counted, not drawn. */
 export function segOnImages(seg: Seg, images: { sop: string; frame: number; plane: Plane | null }[]) {
   const bySop = new Map(images.map((im, i) => [`${im.sop}/${im.frame}`, i]));
-  const out: (Uint8Array | null)[] = images.map(() => null);
+  const out: (Layer[] | null)[] = images.map(() => null);
   let missed = 0;
-  // drawn lowest segment first, so that a higher one ends on top
+  // lowest segment first: each image's layers in rising number, a higher one drawn on top
   const order = seg.frames.map((f, i) => [f, i] as const).sort((a, b) => a[0].segment - b[0].segment);
   for (const [f, i] of order) {
     let at = f.sop ? bySop.get(`${f.sop}/${f.frame}`) : undefined;
@@ -237,14 +240,17 @@ export function segOnImages(seg: Seg, images: { sop: string; frame: number; plan
     const plane = images[at].plane;
     const rows = plane?.rows ?? seg.rows, columns = plane?.columns ?? seg.columns;
     const mask = seg.mask(i);
-    const target = (out[at] ??= new Uint8Array(rows * columns));
+    const layers = (out[at] ??= []);
+    let layer = layers.find((l) => l.segment === f.segment);
+    if (!layer) layers.push((layer = { segment: f.segment, mask: new Uint8Array(rows * columns) }));
+    const target = layer.mask;
     const map = plane && f.position && f.orientation && f.spacing ? carry(f, plane) : null;
     if (!map) {
       if (rows !== seg.rows || columns !== seg.columns) {
         missed++;
         continue;
       }
-      for (let p = 0; p < mask.length; p++) if (mask[p]) target[p] = f.segment;
+      for (let p = 0; p < mask.length; p++) if (mask[p]) target[p] = 1;
       continue;
     }
     // SEG pixel (c, r) -> image pixel (x, y) = base + c * dc + r * dr; each image pixel
@@ -263,10 +269,18 @@ export function segOnImages(seg: Seg, images: { sop: string; frame: number; plan
       for (let x = x0; x <= x1; x++) {
         const [u, v] = [x - bx, y - by];
         const c = Math.round((ry * u - rx * v) / det), r = Math.round((cx * v - cy * u) / det);
-        if (c >= 0 && r >= 0 && c < seg.columns && r < seg.rows && mask[r * seg.columns + c]) target[y * columns + x] = f.segment;
+        if (c >= 0 && r >= 0 && c < seg.columns && r < seg.rows && mask[r * seg.columns + c]) target[y * columns + x] = 1;
       }
   }
-  return { maps: out, missed };
+  return { layers: out, missed };
+}
+
+/** One image's layers as one map: each pixel the highest segment number there, 0 where none
+ * is; what a single labelmap (MPR) can hold. */
+export function topSegments(layers: Layer[], size: number) {
+  const map = new Uint16Array(size);
+  for (const { segment, mask } of layers) for (let p = 0; p < size; p++) if (mask[p]) map[p] = segment;
+  return map;
 }
 
 /** How a SEG frame's pixel indices become an image's: [x0, y0, dx/dc, dy/dc, dx/dr, dy/dr]. */

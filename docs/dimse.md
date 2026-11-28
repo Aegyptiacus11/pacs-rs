@@ -16,8 +16,8 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   studies (a new address it may have). Changes are made one at a time, so two at once never
   leave the index and the server apart. One added with `TLS` is called with the authorities of
   `PACS_DIMSE_TLS_CA_FILE`, which is enough for it; kept in the index, it stops a start whose
-  settings name none. Each change is audited as a
-  Security Alert, Network Configuration (DCM 110128). An id in both the settings and the index
+  settings name none. Each change, and each one refused, is
+  audited as a Security Alert, Network Configuration (DCM 110128). An id in both the settings and the index
   stops the server at start, with which one to remove.
 - **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the remote AEs, through
   `POST /modalities/{id}/echo`, to test a hospital link.

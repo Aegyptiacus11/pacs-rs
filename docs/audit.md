@@ -29,7 +29,12 @@ About accounts and the server itself:
 | User Authentication, Logout | `POST /auth/logout` and `/auth/logout-all` |
 | Security Alert, User Security Attributes Changed | a user or a tool is made, changed or removed; a password is changed |
 | Security Alert, Security Roles Changed | a role is made, changed or removed |
+| Security Alert, Network Configuration | a remote AE is added, changed or removed (`PUT`, `DELETE /modalities/{id}`) |
 | Security Alert, Access Control Decision | a request the caller's role, or a tool's scope, does not allow |
+
+A change of these kinds that is refused (a bad request, a conflict) or fails is kept as well,
+with a failure outcome and the HTTP status as its description: the attempt is in the trail
+even though nothing changed.
 
 About the data, for requests that succeeded; each names the study and its patient:
 

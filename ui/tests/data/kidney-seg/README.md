@@ -21,6 +21,11 @@ Imaging Data Commons public bucket (index v23) with the `idc-index` Python packa
   8 bits, Maximum Fractional Value 255, frame 51's mask at 200 (in) and frame 1's at 100
   (under half: out); new SOP Instance and Series UIDs, " (fractional, derived)" added to the
   Series Description. No real fractional SEG of this series is published.
+- `seg-overlap.dcm`: made from `seg.dcm` with pydicom 3.0.1 and numpy, altered too: the 24
+  frames on the eight slices kept, each Kidney frame OR-ed with the Mass frame of the same
+  image, so the kidney holds its mass (6653 pixels where both segments are) as many models
+  label it; new SOP Instance and Series UIDs, " (overlapping, derived)" added to the Series
+  Description. The segments of `seg.dcm` never overlap.
 
 The slices were chosen where all three segments and the contour are present, eight so that
 the viewer can reformat them. The viewer's browser tests and `../../segmentation.spec.ts` use

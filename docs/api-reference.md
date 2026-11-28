@@ -183,7 +183,7 @@ Permission, when the login is on: `modify`.
 | 400 | [Error](#error) | Not a merge, or a patient merged into themselves. |
 | 403 | [Error](#error) | An account limited to projects. |
 | 404 | nothing | Either patient is not there; the body is empty. |
-| 409 | [Error](#error) | A study of the patient merged is a project's de-identified copy. |
+| 409 | [Error](#error) | A study of the patient merged is a project's de-identified copy, or an instance of the patient was stored while the merge was made (nothing changed: try again). |
 
 ### `GET /patients/{id}/metadata`
 
@@ -279,7 +279,7 @@ Permission, when the login is on: `modify`.
 | 400 | [Error](#error) | No value given, or one that does not fit its value representation. |
 | 403 | [Error](#error) | An account limited to projects. |
 | 404 | nothing | No patient has this identifier; the body is empty. |
-| 409 | [Error](#error) | A study of the patient is a project's de-identified copy. |
+| 409 | [Error](#error) | A study of the patient is a project's de-identified copy, or an instance of the patient was stored while the change was made (nothing changed: try again). |
 
 ### `GET /patients/{id}/series`
 

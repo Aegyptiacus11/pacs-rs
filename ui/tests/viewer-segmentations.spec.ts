@@ -75,6 +75,52 @@ test("segments are hidden one by one or all, the fill changes, and × takes the 
   await expect.poll(async () => (await painted(page)).pixels).toBe(0);
 });
 
+test("hiding a segment shows the one under it", async ({ page, pacs }) => {
+  // seg-overlap.dcm: the Kidney holds its Mass, which lies on top
+  pacs.on("GET", SEG_FILE, () => dicom("seg-overlap.dcm"));
+  await open(page);
+  await lay(page, /AIMI kidney tumor cyst/);
+  const panel = page.getByRole("region", { name: "Segmentations" });
+  await expect.poll(async () => (await painted(page)).pixels).toBeGreaterThan(1000);
+  const all = (await painted(page)).pixels;
+  await panel.getByRole("button", { name: "Hide Mass" }).click();
+  // the mass's pixels are the kidney's now: as many painted, none in the mass's color
+  await expect.poll(async () => (await painted(page)).pixels).toBe(all);
+  await panel.getByRole("button", { name: "Hide Kidney" }).click();
+  await expect.poll(async () => (await painted(page)).pixels).toBeLessThan(all / 10);
+});
+
+test("panning and zooming move the masks without painting them again", async ({ page }) => {
+  await page.addInitScript(() => {
+    const put = CanvasRenderingContext2D.prototype.putImageData;
+    (window as any).maskPaints = 0;
+    CanvasRenderingContext2D.prototype.putImageData = function (this: CanvasRenderingContext2D, ...args: any[]) {
+      if (this.canvas.classList.contains("cell-masks")) (window as any).maskPaints++;
+      return (put as any).apply(this, args);
+    };
+  });
+  await open(page);
+  await lay(page, /AIMI kidney tumor cyst/);
+  await expect.poll(async () => (await painted(page)).pixels).toBeGreaterThan(1000);
+  const masks = page.locator(".cell-masks").first();
+  const before = { paints: await page.evaluate(() => (window as any).maskPaints), transform: await masks.evaluate((c) => c.style.transform) };
+  const box = (await page.locator(".cs").first().boundingBox())!;
+  // zoom with the right button dragged, then a pan with the middle one
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down({ button: "right" });
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 60, { steps: 6 });
+  await page.mouse.up({ button: "right" });
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2 + 100, { steps: 6 });
+  await page.mouse.up({ button: "middle" });
+  await expect.poll(() => masks.evaluate((c) => c.style.transform)).not.toBe(before.transform);
+  expect(await page.evaluate(() => (window as any).maskPaints)).toBe(before.paints);
+  // a new image is painted
+  await page.locator(".cell").first().focus();
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(() => page.evaluate(() => (window as any).maskPaints)).toBeGreaterThan(before.paints);
+});
+
 test("an RTSTRUCT draws its contour on its slice, and as a line across it in MPR", async ({ page }) => {
   await open(page);
   await lay(page, /Pre-Dose, RIGHT/);

@@ -33,6 +33,9 @@ with an Undo. They are in the [API reference](api-reference.md#patients).
 - **One transaction.** The new files are written first, beside the old ones; the index then
   names them in one transaction, and the old files go to the trash. A server that stops part
   way leaves the old files named, or the new: never a file the index names that is not there.
+  An instance of the patient stored while the files were rewritten, here or by another
+  server sharing the index, makes the request a 409 that changes nothing: the files are
+  read again on the next try.
 - **Projects.** A project's de-identified copy is not modified: its patient is a pseudonym,
   made again from the original's ID each time a study arrives. The request is a 409.
 - **Audit trail.** Each modification or merge is recorded as DICOM Instances Accessed,

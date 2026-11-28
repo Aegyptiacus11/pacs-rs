@@ -18,10 +18,11 @@ export function KeyImagesPanel({ viewer, keys, onClose }: { viewer: Viewer; keys
   async function save() {
     setBusy(true);
     try {
-      const why = await viewer.saveKeys(description);
-      if (why) toast.error("The key images were not saved", { description: why });
+      const done = await viewer.saveKeys(description);
+      if ("why" in done) toast.error("The key images were not saved", { description: done.why });
+      else if (done.saved === 0) toast.info("Already saved", { description: "The study's key image series holds them already." });
       else {
-        toast.success(`${pending === 1 ? "1 key image" : `${pending} key images`} saved`, { description: "In a key image series of the study, for any viewer to show." });
+        toast.success(`${done.saved === 1 ? "1 key image" : `${done.saved} key images`} saved`, { description: "In a key image series of the study, for any viewer to show." });
         setDescription("");
       }
     } finally {

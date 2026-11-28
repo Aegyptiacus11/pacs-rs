@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { test, expect } from "@playwright/test";
 import dicomParser from "dicom-parser";
-import { contourCut, labToRgb, OverlayError, readOverlay, segOnImages, type RtStruct, type Seg } from "../src/viewer/segmentation";
+import { contourCut, labToRgb, OverlayError, readOverlay, segOnImages, topSegments, type RtStruct, type Seg } from "../src/viewer/segmentation";
 
 const DATA = path.resolve(import.meta.dirname, "data/kidney-seg");
 const bytes = (name: string) => {
@@ -43,12 +43,37 @@ test("a fractional SEG: a pixel is in from half the Maximum Fractional Value up"
 test("a SEG on the images it names: 24 frames on the 8 slices kept, the rest counted as missed", () => {
   const seg = readOverlay(bytes("seg.dcm")) as Seg;
   const sops = readdirSync(path.join(DATA, "ct")).map(sopOf);
-  const { maps, missed } = segOnImages(seg, sops.map((sop) => ({ sop, frame: 1, plane: null })));
+  const { layers, missed } = segOnImages(seg, sops.map((sop) => ({ sop, frame: 1, plane: null })));
   expect(missed).toBe(101 - 24);
-  expect(maps.every((m) => m !== null)).toBe(true);
-  // every segment is somewhere, and the higher numbers lie over the lower
-  const values = new Set(maps.flatMap((m) => [...new Set(m!)]));
+  expect(layers.every((m) => m !== null)).toBe(true);
+  // every segment is somewhere, each image's in rising number
+  expect([...new Set(layers.flatMap((m) => m!.map((l) => l.segment)))].sort()).toEqual([1, 2, 3]);
+  for (const m of layers) expect(m!.map((l) => l.segment)).toEqual([...m!.map((l) => l.segment)].sort());
+  // as one labelmap, the higher numbers lie over the lower
+  const size = seg.rows * seg.columns;
+  const values = new Set(layers.flatMap((m) => [...new Set(topSegments(m!, size))]));
   expect([...values].sort()).toEqual([0, 1, 2, 3]);
+});
+
+test("overlapping segments each keep their mask on an image; as one labelmap the higher wins", () => {
+  // seg-overlap.dcm: each Kidney frame of seg.dcm also holds the Mass of its image
+  const seg = readOverlay(bytes("seg-overlap.dcm")) as Seg;
+  const sops = readdirSync(path.join(DATA, "ct")).map(sopOf);
+  const { layers } = segOnImages(seg, sops.map((sop) => ({ sop, frame: 1, plane: null })));
+  const size = seg.rows * seg.columns;
+  let overlap = 0;
+  for (const image of layers) {
+    const kidney = image!.find((l) => l.segment === 1)!.mask, mass = image!.find((l) => l.segment === 2)!.mask;
+    const top = topSegments(image!, size);
+    for (let p = 0; p < size; p++)
+      if (mass[p]) {
+        // the kidney is still there under its mass, and a labelmap shows the mass
+        expect(kidney[p]).toBe(1);
+        expect(top[p]).toBe(2);
+        overlap++;
+      }
+  }
+  expect(overlap).toBe(6653);
 });
 
 test("a SEG whose rows run the other way lands on the anatomy, not mirrored", () => {
@@ -73,22 +98,23 @@ test("a SEG whose rows run the other way lands on the anatomy, not mirrored", ()
   const pixel = ct.elements.x7fe00010;
   const raw = new Int16Array(ct.byteArray.buffer.slice(ct.byteArray.byteOffset + pixel.dataOffset, ct.byteArray.byteOffset + pixel.dataOffset + pixel.length));
   const [slope, intercept] = [Number(ct.string("x00281053")), Number(ct.string("x00281052"))];
-  const meanHu = (map: Uint8Array, segment: number) => {
+  const meanHu = (map: Uint16Array, segment: number) => {
     let total = 0, count = 0;
     map.forEach((v, p) => v === segment && ((total += raw[p] * slope + intercept), count++));
     return Math.round(total / count);
   };
   const sop = ct.string("x00080018")!;
-  const placed = segOnImages(seg, [{ sop, frame: 1, plane }]).maps[0]!;
-  const asStored = segOnImages(seg, [{ sop, frame: 1, plane: null }]).maps[0]!;
+  const top = (p: typeof plane | null, size: number) => topSegments(segOnImages(seg, [{ sop, frame: 1, plane: p }]).layers[0]!, size);
+  const placed = top(plane, rows * columns);
+  const asStored = top(null, rows * columns);
   expect(meanHu(asStored, 1)).toBe(-10);
   expect(meanHu(placed, 1)).toBe(135);
 
   // on images twice as fine, the same anatomy covers four times the pixels, with no holes:
   // each SEG pixel placed on one image pixel left three of four empty
   const fine = { ...plane, rows: rows * 2, columns: columns * 2, spacing: plane.spacing.map((x) => x / 2) as [number, number] };
-  const finer = segOnImages(seg, [{ sop, frame: 1, plane: fine }]).maps[0]!;
-  const count = (m: Uint8Array) => m.reduce((n, v) => n + (v > 0 ? 1 : 0), 0);
+  const finer = top(fine, fine.rows * fine.columns);
+  const count = (m: Uint16Array) => m.reduce((n, v) => n + (v > 0 ? 1 : 0), 0);
   expect(count(finer)).toBeGreaterThan(3.8 * count(placed));
   expect(count(finer)).toBeLessThan(4.2 * count(placed));
   // a kidney pixel's four neighbours on the fine grid are kidney too
