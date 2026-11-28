@@ -131,6 +131,13 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
   const [ages, setAges] = useState<string[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [moreFilters, setMoreFilters] = useState(false);
+  // the Sex filter takes the focus of the button that showed it, which is gone
+  const more = useRef<HTMLSpanElement>(null);
+  const [focusMore, setFocusMore] = useState(false);
+  useEffect(() => {
+    if (focusMore) more.current?.querySelector("button")?.focus();
+    setFocusMore(false);
+  }, [focusMore]);
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [selection, setSelection] = useState<RowSelectionState>({});
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: PAGE_SIZE });
@@ -394,13 +401,27 @@ export function StudiesPage({ patient, open }: { patient: string | null; open: s
           {/* only once some study has a label */}
           {(facets.labels.length > 0 || labels.length > 0) && <FacetedFilter title="Label" options={facets.labels} selected={labels} onChange={setLabels} />}
           {/* who the patients are: research more than reading, so behind a button, open while used */}
-          {moreFilters || sexes.length || ages.length ? (
-            <>
+          {moreFilters ? (
+            <span ref={more} className="contents">
               <FacetedFilter title="Sex" options={facets.sexes} selected={sexes} onChange={setSexes} searchable={false} />
               <FacetedFilter title="Age" options={facets.ages} selected={ages} onChange={setAges} searchable={false} />
-            </>
+              {/* put away again while neither is used */}
+              {!sexes.length && !ages.length && (
+                <Button variant="ghost" size="icon-sm" aria-label="Fewer filters" title="Fewer filters" className="text-muted-foreground" onClick={() => setMoreFilters(false)}>
+                  <X />
+                </Button>
+              )}
+            </span>
           ) : (
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground" onClick={() => setMoreFilters(true)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-muted-foreground"
+              onClick={() => {
+                setMoreFilters(true);
+                setFocusMore(true);
+              }}
+            >
               <SlidersHorizontal /> More filters
             </Button>
           )}
