@@ -1507,7 +1507,9 @@ Adds a remote AE, or changes one added before.
 Kept by the server, and used at once: by the next C-ECHO, search, move or send, and by the
 DIMSE server, which answers and sends to the remote AEs it knows. One of
 `PACS_DIMSE_REMOTES` is changed there, not here. Two remote AEs that may receive studies
-cannot share an AE title: a C-MOVE names its destination by it.
+cannot share an AE title: a C-MOVE names its destination by it. One that forwarding or a
+project's write-back sends to may be given a new address, but studies may still be sent to
+it.
 
 Permission, when the login is on: `users`.
 
@@ -1520,7 +1522,7 @@ Permission, when the login is on: `users`.
 |---|---|---|
 | 200 | [RemoteAe](#remoteae) | Added or changed: the remote AE as it is now. |
 | 400 | [Error](#error) | Not a remote AE: a bad id, AE title, host or port, or TLS this server has no DIMSE TLS for. |
-| 409 | [Error](#error) | One of `PACS_DIMSE_REMOTES`, or another that may receive studies has its AE title. |
+| 409 | [Error](#error) | One of `PACS_DIMSE_REMOTES`; another that may receive studies has its AE title; or the settings send to it and studies would no longer be sent to it. |
 
 ### `DELETE /modalities/{id}`
 

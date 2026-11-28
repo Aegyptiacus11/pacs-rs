@@ -12,7 +12,11 @@ pacs-rs and retrieve from it, on the Patient Root and the Study Root models.
   /modalities/{id}` (`{"AET", "Host", "Port", "TLS", "MayReceive"}`). The ones added are kept
   in the index and used at once by everything below, the known-callers check and C-MOVE
   destinations included; those of the settings are changed there only, and one that
-  forwarding or a project's write-back sends to is not removed. Each change is audited as a
+  forwarding or a project's write-back sends to is not removed, nor kept from receiving
+  studies (a new address it may have). Changes are made one at a time, so two at once never
+  leave the index and the server apart. One added with `TLS` is called with the authorities of
+  `PACS_DIMSE_TLS_CA_FILE`, which is enough for it; kept in the index, it stops a start whose
+  settings name none. Each change is audited as a
   Security Alert, Network Configuration (DCM 110128). An id in both the settings and the index
   stops the server at start, with which one to remove.
 - **C-ECHO SCP** on the Verification SOP Class, and **C-ECHO SCU** to the remote AEs, through
