@@ -25,7 +25,10 @@ with an Undo. They are in the [API reference](api-reference.md#patients).
   old ones are gone, and links to them stop working. Labels and metadata move to the new
   ones.
 - **Undo.** The files replaced wait in the [trash](trash.md) as an entry of level
-  `Modification`, for `PACS_TRASH_DAYS`; restoring it undoes the change. With
+  `Modification`, for `PACS_TRASH_DAYS`; restoring it undoes the change, whole or not at
+  all: in one transaction the old files are named again, the labels and metadata go back
+  (a patient merged into another keeps their own), and the entry goes. An instance deleted
+  or modified again since makes the restore a 409 that changes nothing. With
   `PACS_TRASH_DAYS=0` they are removed at once and there is no undo.
 - **One transaction.** The new files are written first, beside the old ones; the index then
   names them in one transaction, and the old files go to the trash. A server that stops part
@@ -33,8 +36,8 @@ with an Undo. They are in the [API reference](api-reference.md#patients).
 - **Projects.** A project's de-identified copy is not modified: its patient is a pseudonym,
   made again from the original's ID each time a study arrives. The request is a 409.
 - **Audit trail.** Each modification or merge is recorded as DICOM Instances Accessed,
-  update, once under the patient before and once under the patient after
-  ([Audit trail](audit.md)).
+  update, once under the patient before and once under the patient after, each with its
+  birth date and sex as details of the patient ([Audit trail](audit.md)).
 
 This is the archive's own correction. The hospital's systems send the same changes as HL7
 messages (IHE RAD-12, Patient Update), which the [roadmap](roadmap.md) plans on this same
