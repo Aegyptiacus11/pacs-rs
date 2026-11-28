@@ -10,7 +10,7 @@ import { formatDate, formatTime, personName, plural, sexAge } from "@/lib/api";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { emptyQuery, pull, useEcho, useRemotes, useRemoteSearch, type RemoteAe, type RemoteQuery } from "@/lib/remote";
 import { href } from "@/lib/route";
-import { may } from "@/lib/session";
+import { may, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { useProjects } from "@/pages/projects-choice";
 import { Button } from "@/components/ui/button";
@@ -55,7 +55,7 @@ function RemoteList({ remotes, chosen, onChoose }: { remotes: RemoteAe[]; chosen
           size="icon-sm"
           aria-label="Test every archive again"
           title="Test every archive again (C-ECHO)"
-          onClick={() => client.invalidateQueries({ queryKey: ["remotes"] })}
+          onClick={() => client.invalidateQueries({ predicate: (q) => q.queryKey[0] === "remotes" && q.queryKey[2] === "echo" })}
         >
           <RefreshCw />
         </Button>
@@ -143,10 +143,13 @@ function SearchForm({ onSearch, busy }: { onSearch: (q: RemoteQuery) => void; bu
 
 function Results({ ae, search }: { ae: RemoteAe; search: ReturnType<typeof useRemoteSearch> }) {
   const [ticked, setTicked] = useState<Set<string>>(new Set());
-  const [project, setProject] = useState("");
   const [pulling, setPulling] = useState(false);
-  // only an administrator may list the projects (GET /projects needs `users`)
-  const projects = useProjects(may("admin"));
+  // an account limited to projects pulls into one of its own only; an administrator lists
+  // every project (GET /projects needs `users`) and may pull into this archive too
+  const limitedTo = useSession().user?.projects ?? null;
+  const listed = useProjects(may("admin") && !limitedTo);
+  const projects = limitedTo ?? (may("admin") ? (listed.data ?? []) : []);
+  const [project, setProject] = useState(limitedTo?.[0] ?? "");
   const client = useQueryClient();
   useEffect(() => setTicked(new Set()), [search.data]);
 
@@ -162,10 +165,14 @@ function Results({ ae, search }: { ae: RemoteAe; search: ReturnType<typeof useRe
   async function start() {
     setPulling(true);
     try {
-      const job = await pull(ae.id, [...ticked], project || null);
+      const jobs = await pull(
+        ae.id,
+        studies.filter((s) => ticked.has(s.uid)),
+        project || null,
+      );
       toast.success(`Pulling ${plural(ticked.size, "study", "studies")} from ${ae.id}`, {
         description: project ? `Into project ${project}, de-identified.` : "Into this archive.",
-        action: { label: "Jobs", onClick: () => (location.hash = href.jobs(job.ID)) },
+        action: { label: "Jobs", onClick: () => (location.hash = jobs.length === 1 ? href.jobs(jobs[0].ID) : href.jobs()) },
       });
       setTicked(new Set());
       client.invalidateQueries({ queryKey: ["jobs"] });
@@ -197,11 +204,11 @@ function Results({ ae, search }: { ae: RemoteAe; search: ReturnType<typeof useRe
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {search.data.warning && (
-        <p role="status" className="mx-4 mb-3 flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-800 md:mx-6 dark:text-amber-300">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {search.data.warning.replace(/^\d+\s+\S+\s+"?|"$/g, "")}
+      {search.data.warnings.map((warning) => (
+        <p key={warning} role="status" className="mx-4 mb-3 flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-800 md:mx-6 dark:text-amber-300">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" /> {warning}
         </p>
-      )}
+      ))}
       <div className="min-h-0 flex-1 overflow-auto border-t">
         {studies.length === 0 ? (
           <p className="px-6 py-16 text-center text-sm text-muted-foreground">No study of {ae.id} matches.</p>
@@ -258,12 +265,12 @@ function Results({ ae, search }: { ae: RemoteAe; search: ReturnType<typeof useRe
           {plural(studies.length, "study", "studies")}
           {ticked.size ? ` · ${ticked.size} ticked` : ""}
         </span>
-        {may("admin") && projects.data && projects.data.length > 0 && (
+        {projects.length > 0 && (
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             Into
             <select value={project} onChange={(e) => setProject(e.target.value)} className="h-8 rounded-md border bg-background px-2 text-sm text-foreground dark:bg-input/30">
-              <option value="">this archive</option>
-              {projects.data.map((p) => (
+              {!limitedTo && <option value="">this archive</option>}
+              {projects.map((p) => (
                 <option key={p} value={p}>
                   project {p} (de-identified)
                 </option>
@@ -271,7 +278,7 @@ function Results({ ae, search }: { ae: RemoteAe; search: ReturnType<typeof useRe
             </select>
           </label>
         )}
-        <Button size="sm" disabled={!ticked.size || pulling} onClick={start}>
+        <Button size="sm" disabled={!ticked.size || pulling || (!!limitedTo && !project)} onClick={start}>
           {pulling ? <Loader2 className="animate-spin" /> : <ArrowDownToLine />} Pull {ticked.size ? plural(ticked.size, "study", "studies") : ""}
         </Button>
       </div>
@@ -281,10 +288,13 @@ function Results({ ae, search }: { ae: RemoteAe; search: ReturnType<typeof useRe
 
 export function RemotePage({ open }: { open: string | null }) {
   const remotes = useRemotes();
-  const [query, setQuery] = useState<RemoteQuery | null>(null);
-  const chosen = useMemo(() => remotes.data?.find((r) => r.id === open) ?? remotes.data?.[0] ?? null, [remotes.data, open]);
+  // a search belongs to the archive it was asked of: another archive chosen starts with none,
+  // so a patient's name is never sent to an archive nobody asked
+  const [asked, setAsked] = useState<{ id: string; q: RemoteQuery } | null>(null);
+  const found = remotes.data?.find((r) => r.id === open) ?? null;
+  const chosen = useMemo(() => found ?? remotes.data?.[0] ?? null, [found, remotes.data]);
+  const query = asked && asked.id === chosen?.id ? asked.q : null;
   const search = useRemoteSearch(chosen?.id ?? null, query);
-  useEffect(() => setQuery(null), [chosen?.id]);
 
   if (remotes.isPending)
     return (
@@ -317,6 +327,11 @@ export function RemotePage({ open }: { open: string | null }) {
     <div className="flex h-full flex-col md:flex-row">
       <RemoteList remotes={remotes.data} chosen={chosen.id} onChoose={(id) => (location.hash = href.remote(id))} />
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {open && !found && (
+          <p role="status" className="mx-4 mt-4 flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-800 md:mx-6 dark:text-amber-300">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" /> There is no remote archive {open}: {chosen.id} is shown.
+          </p>
+        )}
         <div className="px-4 pt-5 pb-3 md:px-6">
           <h2 className="text-lg font-semibold tracking-tight">{chosen.id}</h2>
           <p className="font-mono text-xs text-muted-foreground">
@@ -326,7 +341,7 @@ export function RemotePage({ open }: { open: string | null }) {
         <SearchForm
           key={chosen.id}
           busy={search.isFetching}
-          onSearch={(q) => (JSON.stringify(q) === JSON.stringify(query) ? search.refetch() : setQuery(q))}
+          onSearch={(q) => (JSON.stringify(q) === JSON.stringify(query) ? search.refetch() : setAsked({ id: chosen.id, q }))}
         />
         {query ? (
           <Results key={JSON.stringify(query)} ae={chosen} search={search} />

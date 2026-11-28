@@ -47,7 +47,7 @@ export class Pacs {
   }
 
   /** The login on, and this user signed in (a session restored from its refresh cookie). */
-  signedIn(user: { login: string; role: string; permissions: string[] }) {
+  signedIn(user: { login: string; role: string; permissions: string[]; projects?: string[] | null }) {
     // a token whose payload says it runs for an hour
     const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
     this.on("GET", "/ui/config.json", () => ({ json: { ...fixture("config.json"), auth: true } }));
