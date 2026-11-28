@@ -287,6 +287,55 @@ async fn one_that_forwarding_sends_to_is_not_removed() {
     let (status, answer) = call(&app, Method::DELETE, "/modalities/ws", None).await;
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert!(answer["Details"].as_str().unwrap().contains("PACS_FORWARD"));
+    // nor kept from receiving studies; a new address it may have
+    let stopped = json!({"AET": "WS", "Host": "10.0.0.6", "Port": 104, "MayReceive": false});
+    let (status, answer) = call(&app, Method::PUT, "/modalities/ws", Some(stopped)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert!(answer["Details"].as_str().unwrap().contains("PACS_FORWARD"));
+    let moved = json!({"AET": "WS", "Host": "10.0.0.9", "Port": 104, "MayReceive": true});
+    let (status, answer) = call(&app, Method::PUT, "/modalities/ws", Some(moved)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
+#[tokio::test]
+async fn changes_at_the_same_time_are_one_after_the_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = server(dir.path(), &[]).await;
+    // two receivers under one AE title asked at once: one is refused
+    let put = |id: &'static str| {
+        let app = app.clone();
+        async move {
+            let body = json!({"AET": "TWIN", "Host": "10.0.0.6", "Port": 104, "MayReceive": true});
+            call(&app, Method::PUT, &format!("/modalities/{id}"), Some(body))
+                .await
+                .0
+        }
+    };
+    for _ in 0..20 {
+        let (a, b) = tokio::join!(tokio::spawn(put("a")), tokio::spawn(put("b")));
+        let mut statuses = [a.unwrap(), b.unwrap()];
+        statuses.sort();
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+        for id in ["a", "b"] {
+            call(&app, Method::DELETE, &format!("/modalities/{id}"), None).await;
+        }
+    }
+    // an add and a removal at once: what the server lists is what a restart finds
+    for _ in 0..20 {
+        let body = json!({"AET": "WS", "Host": "10.0.0.6", "Port": 104});
+        let (put, delete) = tokio::join!(
+            call(&app, Method::PUT, "/modalities/ws", Some(body)),
+            call(&app, Method::DELETE, "/modalities/ws", None),
+        );
+        assert_eq!(put.0, StatusCode::OK);
+        let (_, now) = call(&app, Method::GET, "/modalities", None).await;
+        let listed = now.as_array().unwrap().iter().any(|id| id == "ws");
+        assert_eq!(listed, delete.0 == StatusCode::NOT_FOUND, "{delete:?}");
+        let (again, _) = server(dir.path(), &[]).await;
+        let (_, after) = call(&again, Method::GET, "/modalities", None).await;
+        assert_eq!(after, now);
+        call(&app, Method::DELETE, "/modalities/ws", None).await;
+    }
 }
 
 #[tokio::test]
