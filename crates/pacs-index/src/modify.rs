@@ -130,12 +130,36 @@ impl Index {
     /// one, and keep the files replaced in a trash entry (`trash.id` is set) whose first
     /// study holds the moves as `rekeyed`, written in the same transaction: a server that
     /// stops after it can still undo the change whole. Answers the moves.
+    ///
+    /// `news` must cover every instance of patient `patient` (its public ID before the
+    /// change): one stored since the files were read, by this server or another sharing the
+    /// index, refuses the change, and nothing changes. The check runs under the write lock
+    /// every server takes, so nothing arrives between it and the commit.
     pub async fn replace_instances(
         &self,
+        patient: &str,
         news: &[NewInstance],
         trash: &mut IntoTrash<'_>,
     ) -> Result<Vec<Moved>, Error> {
         let mut tx = self.begin_write().await?;
+        let stored: Vec<String> = sqlx::query_scalar(
+            "SELECT i.sop_instance_uid FROM instances i
+             JOIN series se ON se.series_instance_uid = i.series_instance_uid
+             JOIN studies st ON st.study_instance_uid = se.study_instance_uid
+             WHERE st.patient_public_id = $1
+             ORDER BY i.sop_instance_uid",
+        )
+        .bind(patient)
+        .fetch_all(&mut *tx)
+        .await?;
+        let rewritten: std::collections::HashSet<&str> =
+            news.iter().map(|n| n.sop_instance_uid.as_str()).collect();
+        if let Some(arrived) = stored.iter().find(|uid| !rewritten.contains(uid.as_str())) {
+            return Err(Error::Conflict(format!(
+                "instance {arrived} of the patient was stored while the change was made: \
+                 nothing changed, try again"
+            )));
+        }
         let (replaced, rekeys) = replace_in(&mut tx, news).await?;
         let moves = move_in(&mut tx, &rekeys).await?;
         let mut studies = trash.studies.clone();
