@@ -51,8 +51,11 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
 - **Remote** (a role with `remote`): the other archives of `PACS_DIMSE_REMOTES`, each tested
   with a C-ECHO when the page opens (how long it took, or why it failed), and a search of one
   of them: patient name and ID (matched from their start), accession number, a span of dates,
-  a modality. The studies found are ticked and pulled, as a job, into this archive or, for an
-  administrator, into a project, de-identified on the way in. A study is sent to a remote
+  a modality. The studies found are ticked and pulled, one job per patient (with its Patient
+  ID, which an archive that retrieves in Patient Root only needs), into this archive or, for an
+  administrator, into a project, de-identified on the way in; an account limited to projects
+  pulls into one of its own only. A search belongs to the archive it was asked of: choosing
+  another one does not search it. A study is sent to a remote
   archive from its menu in the study list (*Send to*), also as a job; the archive must be in
   `PACS_DIMSE_MOVE_DESTINATIONS`, and when it is not the answer says so.
 - **Jobs**: every pull, send and write-back, running or among the latest 100 over, newest
