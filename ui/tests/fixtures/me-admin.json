@@ -1,0 +1,13 @@
+{
+    "id": "b63710870b9152d31ffc914a323a7d41",
+    "login": "admin",
+    "role": "admin",
+    "permissions": [
+        "read",
+        "write",
+        "remote",
+        "delete",
+        "users"
+    ],
+    "projects": null
+}
