@@ -759,7 +759,6 @@ pub fn open_store(location: &str, settings: &Settings) -> anyhow::Result<Store> 
     })
 }
 
-/// Open the store and the index the settings name.
 /// The remote AEs added in the web interface, from the index into the settings' directory,
 /// after those of PACS_DIMSE_REMOTES. One with an id or a destination AE title the settings
 /// already have stops the server: which one to keep is not for it to guess.
@@ -779,6 +778,13 @@ async fn load_remote_aes(settings: &Settings, index: &Index) -> anyhow::Result<(
         let remote = modalities::manage::stored_remote(&stored).map_err(|why| {
             anyhow::anyhow!("the remote AE {} kept in the index: {why}", stored.id)
         })?;
+        if remote.secure && settings.dimse_tls_ca_file.is_none() {
+            bail!(
+                "the remote AE {} added in the web interface is reached over TLS: name the \
+                 authorities that sign its certificate in PACS_DIMSE_TLS_CA_FILE",
+                stored.id
+            );
+        }
         if stored.may_receive
             && let Some(other) = directory.move_destination(remote.ae_title.as_str())
         {
@@ -794,6 +800,7 @@ async fn load_remote_aes(settings: &Settings, index: &Index) -> anyhow::Result<(
     Ok(())
 }
 
+/// Open the store and the index the settings name.
 pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     let store = open_store(&settings.storage, settings)?;
     let index = match IndexLocation::parse(&settings.index) {
