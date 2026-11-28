@@ -22,6 +22,7 @@ mod find;
 mod key_images;
 mod labels;
 mod metadata;
+mod modify;
 mod resources;
 pub mod schema;
 mod scope;
@@ -78,6 +79,8 @@ fn described() -> OpenApiRouter<scope::Whole> {
         .routes(routes!(parents::study_patient))
         .routes(routes!(resources::patients))
         .routes(routes!(resources::patient, delete::patient))
+        .routes(routes!(modify::patient))
+        .routes(routes!(modify::merge))
         .routes(routes!(resources::patient_studies))
         .routes(routes!(resources::patient_series))
         .routes(routes!(resources::patient_instances))

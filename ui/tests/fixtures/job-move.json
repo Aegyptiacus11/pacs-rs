@@ -1,0 +1,19 @@
+{
+  "ID": "2",
+  "Type": "C-MOVE",
+  "Remote": "hospital",
+  "PatientID": null,
+  "StudyInstanceUIDs": [
+    "2.25.3100000"
+  ],
+  "State": "Success",
+  "Progress": 100,
+  "Remaining": null,
+  "Completed": 3,
+  "Failed": 0,
+  "Warning": 0,
+  "FailedSOPInstanceUIDs": [],
+  "Error": null,
+  "ElapsedMs": 9,
+  "Restarts": 0
+}

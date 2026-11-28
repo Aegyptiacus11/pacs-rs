@@ -14,7 +14,7 @@ import { api } from "@/lib/api";
 export type Projects = string[] | null;
 
 /** The server's projects, for who manages users. Empty on a server without projects. */
-export const useProjects = () => useQuery({ queryKey: ["projects"], queryFn: () => api<string[]>("projects"), staleTime: 60_000 });
+export const useProjects = (enabled = true) => useQuery({ queryKey: ["projects"], queryFn: () => api<string[]>("projects"), staleTime: 60_000, enabled });
 
 /** A limit in a few words, for a table row; nothing for an account that sees everything. */
 export function limitLabel(projects: Projects): string | null {

@@ -1,0 +1,6 @@
+{
+  "HttpError": "Bad Gateway",
+  "HttpStatus": 502,
+  "Message": "C-FIND to lab failed",
+  "Details": "no association with LAB@nowhere:11112: could not connect to server"
+}
