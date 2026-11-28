@@ -36,6 +36,7 @@ the ones it is given.
 | `write` | uploads, STOW-RS, measurements, hanging protocols |
 | `remote` | everything about remote AEs (`/modalities`, `/jobs`) |
 | `delete` | deleting patients, studies, series and instances |
+| `modify` | [modifying a patient](patients.md) (name, ID, birth date, sex) or merging two, which rewrites their files |
 | `users` | managing users and roles |
 
 `remote` is apart from `read` because a search on a remote AE shows the hospital's patients,
@@ -49,6 +50,9 @@ A server starts with four roles, which can be changed or removed, and others add
 | `editor` | `read`, `write`, `remote` |
 | `manager` | `read`, `write`, `remote`, `delete` |
 | `admin` | all of them, for good: this role cannot be changed or removed |
+
+A server upgraded from a version without `modify` gives it to `admin` only; an
+administrator ticks it for any other role that is to have it.
 
 | Request | |
 |---|---|

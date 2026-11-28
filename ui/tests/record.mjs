@@ -6,8 +6,11 @@
 //     curl -fsS --data-binary @$f http://127.0.0.1:18090/instances; done
 //   PACS_URL=http://127.0.0.1:18090 node tests/record.mjs
 //
-// It first puts labels on two studies (below), then records. Stops with exit 1 on the first
-// request that fails.
+// It first puts labels on two studies (below), then records. roles.json and me-admin.json
+// need the login on: with PACS_TOKEN set to an administrator's access token (POST /auth/login)
+// of a server started with PACS_AUTH=true, they are recorded from it too.
+//
+// Stops with exit 1 on the first request that fails.
 import { writeFile } from "node:fs/promises";
 
 const base = process.env.PACS_URL;
@@ -48,8 +51,17 @@ const answers = {
   "server.json": "ui/api/server",
 };
 
+// each study's series and statistics, as a patient's record shows them
+for (const id of await (await ask("studies")).json()) {
+  answers[`study-${id}-series.json`] = `studies/${id}/series`;
+  answers[`study-${id}-statistics.json`] = `studies/${id}/statistics`;
+}
+
+const token = process.env.PACS_TOKEN;
+if (token) Object.assign(answers, { "roles.json": "roles", "me-admin.json": "auth/me" });
+
 for (const [file, path] of Object.entries(answers)) {
-  const response = await ask(path);
+  const response = await ask(path, token ? { headers: { Authorization: `Bearer ${token}` } } : {});
   await writeFile(new URL(`fixtures/${file}`, import.meta.url), JSON.stringify(await response.json(), null, 2) + "\n");
   console.log(`${file} <- ${path}`);
 }

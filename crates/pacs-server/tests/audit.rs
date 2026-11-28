@@ -1164,3 +1164,84 @@ async fn without_a_login_the_trail_names_the_address_and_a_tool_is_named_by_its_
     );
     has(&lines.one(), &[QUERY, "UserID=\"unknown@test-pacs\""]);
 }
+
+#[tokio::test]
+async fn a_patient_modified_leaves_the_values_before_and_after_and_needs_its_right() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = trail(dir.path());
+    let extra = [
+        "--auth",
+        "true",
+        "--audit-file",
+        path.to_str().unwrap(),
+        "--audit-source-id",
+        "test-pacs",
+    ];
+    let app = start(&settings(dir.path(), &extra)).await;
+    let mut lines = Reader::new(path.clone());
+    let bearer = sign_in(&app, "admin", ADMIN_PASSWORD).await.body["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let admin = Some(bearer.as_str());
+    let series = RealSeries::new(52, 1)
+        .with_patient("DOE^JANE", None)
+        .born("19650303");
+    let stored = upload(&app, admin, series.slice_bytes(0)).await;
+    assert_eq!(stored.status, StatusCode::OK, "{}", stored.body);
+    let patient = pacs_core::public_ids::patient(&series.patient_id());
+
+    // a role without `modify` is refused, and nothing changes
+    let new = json!({"login": "rita", "password": READER_PASSWORD, "role": "reader"});
+    let made = call(&app, Method::POST, "/users", admin, Some(new)).await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.body);
+    let rita = sign_in(&app, "rita", READER_PASSWORD).await.body["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let change = json!({"PatientID": "H-0042", "PatientBirthDate": "19800102"});
+    let refused = call(
+        &app,
+        Method::POST,
+        &format!("/patients/{patient}/modify"),
+        Some(&rita),
+        Some(change.clone()),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    let unchanged = call(
+        &app,
+        Method::GET,
+        &format!("/patients/{patient}"),
+        admin,
+        None,
+    )
+    .await;
+    assert_eq!(unchanged.status, StatusCode::OK);
+    lines.new_lines();
+
+    let done = call(
+        &app,
+        Method::POST,
+        &format!("/patients/{patient}/modify"),
+        admin,
+        Some(change),
+    )
+    .await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.body);
+    let detail = |kind: &str, value: &str| {
+        let value = base64::engine::general_purpose::STANDARD.encode(value);
+        format!("<ParticipantObjectDetail type=\"{kind}\" value=\"{value}\"/>")
+    };
+    let written = lines.new_lines().join("\n");
+    // the patient before, with the birth date it had; the patient after, with the new one
+    has(
+        &written,
+        &[
+            &patient_object(&series.patient_id(), "DOE^JANE"),
+            &detail("PatientBirthDate", "19650303"),
+            "ParticipantObjectID=\"H-0042\"",
+            &detail("PatientBirthDate", "19800102"),
+        ],
+    );
+}

@@ -17,6 +17,10 @@ holds what every project deleted. They are in the [API reference](api-reference.
 - Once an hour, the server empties the deletions older than `PACS_TRASH_DAYS`.
 - An instance stored again between the deletion and the restore keeps the newer copy: the
   restore leaves that file in the trash and says so, to be emptied.
+- A [patient modified or merged](patients.md) leaves an entry too, of level `Modification`:
+  the files it replaced, and for each study the values before and, in `changed`, after.
+  Restoring it undoes the change: the old files replace the new ones, and labels and
+  metadata go back to the old identifiers.
 - `PACS_TRASH_DAYS=0` turns the trash off: a deletion removes the files at once, as before
   0.13.
 - The trash takes room in the store until it is emptied. The

@@ -1,0 +1,24 @@
+[
+  {
+    "ExpectedNumberOfInstances": null,
+    "ID": "95204644-8052ee6c-ad3a3db9-22191e1f-3a6aeb05",
+    "Instances": [
+      "518d98a6-f5a3181d-2984303f-271f3d0d-c973dfc2",
+      "8a3affa1-2acb2dfe-012c8fcf-a1d113d6-bdf4a1fb",
+      "9cd16b73-7d0f8d85-241e9bbc-f9ddb0a0-afb3d988"
+    ],
+    "IsStable": false,
+    "Labels": [],
+    "LastUpdate": "20261127T192723",
+    "MainDicomTags": {
+      "Modality": "CT",
+      "SeriesDescription": "Axial 5 mm",
+      "SeriesInstanceUID": "2.25.3200000",
+      "SeriesNumber": "1",
+      "ImageOrientationPatient": "1\\0\\0\\0\\1\\0"
+    },
+    "ParentStudy": "478cde9c-3f36815e-7253a722-f52d98c8-d15779eb",
+    "Status": "Unknown",
+    "Type": "Series"
+  }
+]

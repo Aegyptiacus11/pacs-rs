@@ -4,7 +4,7 @@
 // (/ui/api/patients).
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDownUp, Check, Columns2, Download, Ellipsis, Eye, FileStack, Trash2, Users, X } from "lucide-react";
+import { ArrowDownUp, Check, Columns2, Download, Ellipsis, Eye, FileStack, GitMerge, Trash2, UserPen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,6 +22,7 @@ import { go, href } from "@/lib/route";
 import { deleteStudies, usePatientPage, usePatientStudies, useRefreshStudies, useStudySeries, type Patient, type PatientQuery, type Study } from "@/lib/studies";
 import { cn } from "@/lib/utils";
 import { afterDelete } from "@/lib/config";
+import { MergePatientDialog, ModifyPatientDialog } from "@/pages/modify-patient";
 
 const SORTS: [PatientQuery["sort"], boolean, string][] = [
   ["last", true, "Latest study first"],
@@ -215,6 +216,7 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
   const list = studies.data ?? [];
   const [compare, setCompare] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingDelete | null>(null);
+  const [modifying, setModifying] = useState<"modify" | "merge" | null>(null);
   const s0 = list[0];
   const who = known ?? (s0 && { name: s0.name, patientId: s0.patientId, sex: s0.sex, birth: s0.birth, modalities: [...new Set(list.flatMap((s) => s.modalities))].sort() });
   const instances = list.reduce((n, s) => n + s.instances, 0);
@@ -243,14 +245,25 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
             <Download /> Download all
           </DownloadLink>
         </Button>
-        {may("delete") && <DropdownMenu>
+        {(may("delete") || may("modify")) && <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="More actions">
               <Ellipsis />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuItem
+            {may("modify") && (
+              <>
+                <DropdownMenuItem disabled={!list.length} onSelect={() => setModifying("modify")}>
+                  <UserPen /> Modify patient…
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!list.length} onSelect={() => setModifying("merge")}>
+                  <GitMerge /> Merge into another…
+                </DropdownMenuItem>
+              </>
+            )}
+            {may("modify") && may("delete") && <DropdownMenuSeparator />}
+            {may("delete") && <DropdownMenuItem
               variant="destructive"
               disabled={!list.length}
               onSelect={() =>
@@ -262,9 +275,11 @@ function PatientRecord({ id, known, onClose, onDeleted }: { id: string; known: P
               }
             >
               <Trash2 /> Delete patient…
-            </DropdownMenuItem>
+            </DropdownMenuItem>}
           </DropdownMenuContent>
         </DropdownMenu>}
+        {modifying === "modify" && <ModifyPatientDialog id={id} who={who} open onOpenChange={(o) => !o && setModifying(null)} />}
+        {modifying === "merge" && <MergePatientDialog id={id} who={who} studies={list.length} open onOpenChange={(o) => !o && setModifying(null)} />}
         <Button
           variant="ghost"
           size="icon-sm"

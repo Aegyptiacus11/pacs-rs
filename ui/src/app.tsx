@@ -11,6 +11,8 @@ import { SignInPage } from "@/pages/sign-in-page";
 import { StudiesPage } from "@/pages/studies-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { ServerPage } from "@/pages/server-page";
+import { RemotePage } from "@/pages/remote-page";
+import { JobsPage } from "@/pages/jobs-page";
 
 // Cornerstone loads only when a series is opened
 const ViewerPage = lazy(() => import("@/viewer/viewer-page").then((m) => ({ default: m.ViewerPage })));
@@ -48,6 +50,10 @@ export function App() {
             <SettingsPage section={route.section} />
           ) : route.page === "server" ? (
             <ServerPage />
+          ) : route.page === "remote" ? (
+            <RemotePage open={route.open} />
+          ) : route.page === "jobs" ? (
+            <JobsPage open={route.open} />
           ) : route.page === "patients" ? (
             <PatientsPage open={route.open} />
           ) : (

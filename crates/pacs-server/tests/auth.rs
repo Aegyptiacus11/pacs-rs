@@ -1160,12 +1160,12 @@ async fn roles_are_made_changed_and_removed_and_decide_what_a_user_may_do() {
     assert_eq!(roles.body[3]["locked"], true);
     assert_eq!(
         roles.body[3]["permissions"],
-        json!(["read", "write", "remote", "delete", "users"])
+        json!(["read", "write", "remote", "delete", "modify", "users"])
     );
     let me = get(&app, "/auth/me", Some(&admin)).await;
     assert_eq!(
         me.body["permissions"],
-        json!(["read", "write", "remote", "delete", "users"])
+        json!(["read", "write", "remote", "delete", "modify", "users"])
     );
 
     // A new role: its id comes from its name, its permissions are stored in one order.

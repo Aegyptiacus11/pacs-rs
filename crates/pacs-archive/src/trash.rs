@@ -108,7 +108,7 @@ impl Archive {
 
     /// Move a file the trash lists to where it waits. One that cannot be moved stays where
     /// it was, still the trash's: restoring or emptying its entry finds it there.
-    async fn move_to_trash(&self, file: &TrashFile) {
+    pub(crate) async fn move_to_trash(&self, file: &TrashFile) {
         match self.store.rename(&file.object_key, &file.trash_key).await {
             // not there: moved already
             Ok(()) | Err(pacs_store::Error::NotFound(_)) => {}
@@ -144,6 +144,9 @@ impl Archive {
         let Some(entry) = self.index.trash_entry(id).await? else {
             return Ok(None);
         };
+        if entry.level == "Modification" {
+            return self.undo_modification(id, &entry).await.map(Some);
+        }
         let studies = entry.studies.as_array().cloned().unwrap_or_default();
         let project_of = |study: &str| -> Option<String> {
             studies
@@ -200,6 +203,83 @@ impl Archive {
             self.index.remove_trash(id).await?;
         }
         Ok(Some(done))
+    }
+
+    /// Undo the modification trash entry `id` keeps, whole or not at all: its files are
+    /// stored again beside the modified ones, then one transaction names them in their place,
+    /// moves the labels and metadata back and removes the entry; the modified files and the
+    /// trash's copies go after. A file missing from the trash, or an instance deleted or
+    /// modified again since, refuses the undo with nothing changed. Holds the write lock a
+    /// modification holds, so neither runs during the other.
+    async fn undo_modification(
+        &self,
+        id: i64,
+        entry: &pacs_index::TrashEntry,
+    ) -> Result<Restored, CheckError> {
+        let _undoing = self.writes.write().await;
+        let moves = match entry.studies.get(0).and_then(|s| s.get("rekeyed")) {
+            Some(kept) => pacs_index::Moved::list_from_json(kept)?,
+            None => Vec::new(),
+        };
+        let files = self.index.trash_files(id).await?;
+        let mut olds = Vec::with_capacity(files.len());
+        let mut written: Vec<String> = Vec::with_capacity(files.len());
+        let mut copies = Vec::with_capacity(files.len());
+        let outcome = async {
+            for file in &files {
+                let Some((found_at, bytes)) = self.trashed(file).await? else {
+                    return Err(CheckError::Index(pacs_index::Error::Conflict(format!(
+                        "{} is gone from the trash: the change cannot be undone whole",
+                        file.object_key
+                    ))));
+                };
+                let instance = pacs_core::Instance::from_bytes(&bytes).map_err(|e| {
+                    CheckError::Index(pacs_index::Error::Conflict(format!(
+                        "{} in the trash is not readable: {e}",
+                        file.object_key
+                    )))
+                })?;
+                let (size, hash) = (bytes.len(), crate::sha256_hex(&bytes));
+                let key = self
+                    .store
+                    .put_new(&instance.key, bytes)
+                    .await
+                    .map_err(CheckError::Store)?;
+                written.push(key.clone());
+                olds.push(
+                    pacs_index::NewInstance::new(&instance, key, size)
+                        .map_err(|e| {
+                            CheckError::Index(pacs_index::Error::Conflict(format!(
+                                "{}: {e}",
+                                file.object_key
+                            )))
+                        })?
+                        .with_sha256(hash),
+                );
+                copies.push(found_at);
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = outcome {
+            self.forget(&written).await;
+            return Err(error);
+        }
+        let modified = match self.index.undo_replacement(&olds, &moves, id).await {
+            Ok(modified) => modified,
+            Err(error) => {
+                self.forget(&written).await;
+                return Err(error.into());
+            }
+        };
+        // the index names the old files again; the modified ones and the trash's copies are
+        // named by nothing: what cannot be removed now the consistency check finds
+        self.forget(&modified.into_iter().chain(copies).collect::<Vec<_>>())
+            .await;
+        Ok(Restored {
+            restored: olds.len(),
+            kept: Vec::new(),
+        })
     }
 
     /// Remove trash entry `id` and its files for good. `false`: no such entry.
