@@ -112,20 +112,47 @@ export function useRemoteSearch(id: string | null, q: RemoteQuery | null) {
         throw new HttpError(response.status, message);
       }
       const studies = ((await response.json()) as any[]).map(fromDicomJson);
-      return { studies, warning: response.headers.get("Warning"), limit: LIMIT };
+      return { studies, warnings: warnings(response.headers.get("Warning")), limit: LIMIT };
     },
   });
 }
 
+/** The texts of a Warning header (RFC 7234: `299 pacs-rs "text"`, several joined by ", "). */
+export function warnings(header: string | null) {
+  if (!header) return [];
+  const quoted = [...header.matchAll(/\d{3}\s+\S+\s+"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, "$1"));
+  return quoted.length ? quoted : [header];
+}
+
 export type Started = { ID: string; Path: string };
 
-/** Pulls studies in, as a job; to a project's AE title when one is named. */
-export function pull(id: string, studies: string[], project?: string | null) {
-  return api<Started>(`modalities/${encodeURIComponent(id)}/move`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ StudyInstanceUID: studies, Asynchronous: true, ...(project ? { Project: project } : {}) }),
-  });
+/** Pulls studies in, as jobs; to a project's AE title when one is named. One job per patient,
+ * with its Patient ID: an archive that retrieves in Patient Root only refuses a move without
+ * it, and a move names one patient. */
+export async function pull(id: string, studies: { uid: string; patientId: string }[], project?: string | null) {
+  const byPatient = new Map<string, string[]>();
+  // a Patient ID the move could not carry (a wild card, a backslash, too long) is left out:
+  // an archive in Study Root needs none
+  const carried = (id: string) => (/^[^*?\\\p{Cc}]{1,64}$/u.test(id) ? id : "");
+  for (const s of studies) {
+    const key = carried(s.patientId.trim());
+    byPatient.set(key, [...(byPatient.get(key) ?? []), s.uid]);
+  }
+  const started: Started[] = [];
+  for (const [patientId, uids] of byPatient)
+    started.push(
+      await api<Started>(`modalities/${encodeURIComponent(id)}/move`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(patientId ? { PatientID: patientId } : {}),
+          StudyInstanceUID: uids,
+          Asynchronous: true,
+          ...(project ? { Project: project } : {}),
+        }),
+      }),
+    );
+  return started;
 }
 
 /** Sends studies out, as a job. */
@@ -161,8 +188,17 @@ export function useJobs() {
     queryKey: ["jobs"],
     queryFn: async () => {
       const ids = await api<string[]>("jobs");
-      const jobs = await Promise.all(ids.map((id) => api<Job>(`jobs/${encodeURIComponent(id)}`)));
-      return jobs.reverse();
+      // a job the server dropped (it keeps the last finished ones) between the two calls is
+      // left out; any other failure fails the list
+      const jobs = await Promise.all(
+        ids.map((id) =>
+          api<Job>(`jobs/${encodeURIComponent(id)}`).catch((e) => {
+            if (e instanceof HttpError && e.status === 404) return null;
+            throw e;
+          }),
+        ),
+      );
+      return jobs.filter((j): j is Job => j !== null).reverse();
     },
     refetchInterval: (query) => (query.state.data?.some((j) => j.State === "Running") ? 2_000 : 15_000),
   });
