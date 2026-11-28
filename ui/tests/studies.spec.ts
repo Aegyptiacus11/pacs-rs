@@ -34,13 +34,23 @@ test("sex and age are behind More filters, which stays open while one is used", 
   await expect(page.getByRole("button", { name: "Age", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "More filters" }).click();
+  // the keyboard is not lost with the button: it is on Sex
+  await expect(page.getByRole("button", { name: "Sex", exact: true })).toBeFocused();
+  // unused, they can be put away again
+  await page.getByRole("button", { name: "Fewer filters" }).click();
+  await expect(page.getByRole("button", { name: "Sex", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "More filters" }).click();
   await page.getByRole("button", { name: "Sex", exact: true }).click();
   await page.getByRole("option", { name: /Female/ }).click();
   await page.keyboard.press("Escape");
   await expect.poll(() => pacs.asked.some((a) => a.startsWith("GET /ui/api/studies?") && a.includes("sex=F"))).toBe(true);
+  // in use, they stay: nothing puts them away but Reset
+  await expect(page.getByRole("button", { name: "Fewer filters" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "More filters" })).toHaveCount(0);
 
   // Reset clears them and puts them away again
   await page.getByRole("button", { name: "Reset" }).click();
   await expect(page.getByRole("button", { name: "More filters" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sex", exact: true })).toHaveCount(0);
 });
