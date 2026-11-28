@@ -1387,14 +1387,18 @@ async fn observe(State(observer): State<Observer>, request: Request, next: Next)
                 &format!("{method} {path} refused: the caller's role or scope does not allow it"),
             ));
         }
-    } else if status.is_success()
-        && let Some((alert, what)) = account_change(&method, &path)
-    {
+    } else if let Some((alert, what)) = account_change(&method, &path) {
+        // a change refused (a 400, a 409) or failed is an attempt the trail keeps too
+        let what = if status.is_success() {
+            what
+        } else {
+            format!("{method} {path} failed with HTTP {}", status.as_u16())
+        };
         audit.record(events::security_alert(
             &trail.source,
             now,
             alert,
-            Outcome::Success,
+            outcome_of(status),
             &trail.process,
             user.map(|user| caller(&trail, user, ip)),
             &path,

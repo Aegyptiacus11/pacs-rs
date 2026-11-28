@@ -332,14 +332,24 @@ async fn sign_ins_account_changes_and_refusals_leave_a_line_each() {
             &described("a user was made"),
         ],
     );
-    // a change that is refused changes nothing, and is no account change
+    // a change that is refused changes nothing, and is kept as a failed attempt
     assert_eq!(
         call(&app, Method::POST, "/users", Some(&admin), Some(new))
             .await
             .status,
         StatusCode::CONFLICT
     );
-    lines.none();
+    has(
+        &lines.one(),
+        &[
+            ALERT,
+            "originalText=\"User Security Attributes Changed\"",
+            REFUSED,
+            by_admin,
+            "ParticipantObjectID=\"/users\"",
+            &described("POST /users failed with HTTP 409"),
+        ],
+    );
 
     let role = json!({"name": "Student", "permissions": ["read"]});
     assert_eq!(
@@ -388,6 +398,48 @@ async fn sign_ins_account_changes_and_refusals_leave_a_line_each() {
         tool.body["secret"].as_str().unwrap().to_owned(),
     );
     has(&lines.one(), &[&described("a tool was made"), by_admin]);
+
+    // A remote AE added, then one refused for its id: the network's configuration, both kept.
+    let peer = json!({"AET": "PEER", "Host": "10.0.0.6", "Port": 104});
+    assert_eq!(
+        call(
+            &app,
+            Method::PUT,
+            "/modalities/peer",
+            Some(&admin),
+            Some(peer.clone())
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    has(
+        &lines.one(),
+        &[
+            ALERT,
+            "originalText=\"Network Configuration\"",
+            OK,
+            by_admin,
+            &described("a remote AE was added or changed"),
+        ],
+    );
+    let bad = format!("/modalities/{}", "x".repeat(65));
+    assert_eq!(
+        call(&app, Method::PUT, &bad, Some(&admin), Some(peer))
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    has(
+        &lines.one(),
+        &[
+            ALERT,
+            "originalText=\"Network Configuration\"",
+            REFUSED,
+            by_admin,
+            &described(&format!("PUT {bad} failed with HTTP 400")),
+        ],
+    );
 
     // A tool's token request is a sign-in too, by its ID.
     let token = ask_token(&app, &id, &secret).await;
