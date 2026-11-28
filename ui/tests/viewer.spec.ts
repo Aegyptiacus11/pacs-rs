@@ -1,5 +1,5 @@
 import path from "node:path";
-import { test, expect } from "./pacs";
+import { test, expect, FIRST_IMAGE } from "./pacs";
 
 // tests/data/prostate-dce, as the viewer asked a pacs-server for it (record-viewer.mjs)
 const HAR = path.join(import.meta.dirname, "fixtures/viewer-dce.har");
@@ -21,12 +21,12 @@ test("an image that names VOI LUT Function LINEAR is drawn with its own window",
   // slice 6 of 10, opened in the middle: its Window Center 1070 and Width 1860
   const corner = page.locator(".ov-bl").first();
   await expect(corner).toContainText("Image 6 / 10");
-  await expect(corner).toContainText("W 1860  L 1070");
+  await expect(corner).toContainText("W 1860  L 1070", FIRST_IMAGE);
 });
 
 test("the active viewport's plane is drawn on the others, and G takes it away", async ({ page }) => {
   await page.goto(VIEW);
-  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860", FIRST_IMAGE);
   // a sagittal plane beside the axial images; the new view is the active one
   await page.keyboard.press("n");
   await expect(page.locator(".ov-tl", { hasText: "Sagittal" })).toBeVisible();
@@ -45,13 +45,13 @@ test("the active viewport's plane is drawn on the others, and G takes it away", 
 
 test("one viewport has no reference lines to show, and no Lines button", async ({ page }) => {
   await page.goto(VIEW);
-  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860", FIRST_IMAGE);
   await expect(page.getByRole("button", { name: "Lines" })).toHaveCount(0);
 });
 
 test("the measurements are one button that takes up the last one chosen", async ({ page }) => {
   await page.goto(VIEW);
-  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860", FIRST_IMAGE);
   // one button, Length on a first visit, and none of the others on the bar
   await expect(page.getByRole("button", { name: "Length", exact: true })).toHaveAttribute("aria-pressed", "false");
   for (const name of ["Angle", "Cobb", "Bidir.", "Ellipse", "Rectangle", "Value"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
@@ -79,7 +79,7 @@ test("the measurement button works when the browser refuses storage", async ({ p
     Object.defineProperty(window, "localStorage", { get: () => { throw new DOMException("refused", "SecurityError"); } });
   });
   await page.goto(VIEW);
-  await expect(page.locator(".ov-bl").first()).toContainText("W 1860");
+  await expect(page.locator(".ov-bl").first()).toContainText("W 1860", FIRST_IMAGE);
   await page.keyboard.press("c");
   await expect(page.getByRole("button", { name: "Cobb", exact: true })).toHaveAttribute("aria-pressed", "true");
 });

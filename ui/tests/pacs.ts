@@ -115,5 +115,9 @@ export const test = base.extend<{ pacs: Pacs }>({
   },
 });
 
+/** How long the first image of a viewer may take: decoded and drawn through software WebGL,
+ * with the other tests' viewers doing the same on the machine's cores. */
+export const FIRST_IMAGE = { timeout: 20_000 };
+
 export { expect };
 export type { Pacs as PacsType };

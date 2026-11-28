@@ -48,6 +48,7 @@ import {
   BidirectionalTool,
   EllipticalROITool,
   RectangleROITool,
+  ArrowAnnotateTool,
   annotation,
   segmentation,
   Enums as ToolEnums,
@@ -95,6 +96,7 @@ export const TOOLS = {
   bidirectional: BidirectionalTool,
   ellipse: EllipticalROITool,
   rectangle: RectangleROITool,
+  arrow: ArrowAnnotateTool,
 } as const;
 export type ToolName = keyof typeof TOOLS;
 
@@ -354,6 +356,21 @@ type Overlay = {
   /** whether Cornerstone has it as a labelmap, for MPR */
   labelmap: boolean;
 };
+/** An image marked as key: by SOP Instance UID and frame (0: every frame), with where to find
+ * it. Saved ones come from the study's Key Object Selections. */
+type KeyMark = {
+  id: string;
+  study: string;
+  sop: string;
+  frame: number;
+  instance: string | null;
+  seriesUid: string;
+  seriesId: string | null;
+  label: string;
+  saved: boolean;
+};
+export type KeyState = Pick<KeyMark, "id" | "label" | "saved">;
+
 export type OverlayState = Omit<Overlay, "rois" | "target" | "maps" | "labelmap"> & { targetShown: boolean };
 
 export type CellState = { seriesId: string | null; studyId: string | null; kind: Cell["kind"]; orientation: Orientation | null };
@@ -385,6 +402,9 @@ export type ViewerState = {
   /** the segmentations laid over the images, and how opaque their fill is */
   segmentations: OverlayState[];
   fill: number;
+  /** whether the active viewport's image is a key image, saved or not yet */
+  key: "saved" | "pending" | null;
+  keys: KeyState[];
 };
 
 /** VOI LUT Function LINEAR, as a data set gives it, taken out: it is the default when absent
@@ -412,6 +432,12 @@ export class Viewer {
   private syncing = false;
   private overlaysOn = true;
   private segs: Overlay[] = [];
+  private keyMarks = new Map<string, KeyMark>();
+  private keysOf = new Map<string, Promise<void>>();
+  /** Called when a study's key images could not be read. */
+  onKeysFailed: ((message: string) => void) | null = null;
+  /** Asks for an arrow's words; resolves to null when cancelled. The page sets it. */
+  askText: (initial: string) => Promise<string | null> = async (initial) => prompt("The arrow's label", initial);
   private fill = 0.35;
   // with a finger there is no wheel: going through the images is the tool one starts with
   private tool: ToolName = matchMedia("(pointer: coarse)").matches ? "scroll" : "windowLevel";
@@ -584,6 +610,14 @@ export class Viewer {
             getReferenceLineControllable: () => true,
             getReferenceLineDraggableRotatable: () => true,
             getReferenceLineSlabThicknessControlsOn: () => false,
+          });
+        else if (tool === ArrowAnnotateTool)
+          group.addTool(tool.toolName, {
+            // the label is asked in the page, not with the browser's prompt; an arrow given no
+            // words keeps a blank one, Cancel drops it
+            getTextCallback: (done: (text: string | null) => void) => this.askText("").then((t) => done(t === null ? null : t || " ")),
+            changeTextCallback: (a: any, _: unknown, done: (text: string | null) => void) =>
+              this.askText(a?.data?.label?.trim() ?? "").then((t) => t !== null && done(t || " ")),
           });
         else group.addTool(tool.toolName);
       }
@@ -762,6 +796,8 @@ export class Viewer {
       loadingVolume: this.loadingVolume,
       segmentations: this.segs.map(({ seriesId, kind, label, visible, items, missed, target }) => ({ seriesId, kind, label, visible, items, missed, targetShown: this.cells.some((c) => c.data?.series.ID === target) })),
       fill: this.fill,
+      key: this.keyOfSlot(slot ?? null)?.saved ? "saved" : this.keyOfSlot(slot ?? null) ? "pending" : null,
+      keys: [...this.keyMarks.values()].map(({ id, label, saved }) => ({ id, label, saved })),
     });
   }
 
@@ -774,6 +810,7 @@ export class Viewer {
         (async () => {
           const { study, series } = await this.resolve(id);
           this.loadAnnotations(study.MainDicomTags.StudyInstanceUID);
+          this.loadKeys(study);
           const base = new URL(`studies/${study.MainDicomTags.StudyInstanceUID}/series/${series.MainDicomTags.SeriesInstanceUID}/`, WEB);
           const [instances, metadata] = await Promise.all([api<any[]>(`series/${id}/instances`), api<any[]>("metadata", {}, base)]);
           metadata.forEach(linearByDefault);
@@ -1105,7 +1142,9 @@ export class Viewer {
       if (cell.fitZoom) zoom = (cell.viewport as any).getZoom() / cell.fitZoom;
     } catch {}
     const wl = voi ? utilities.windowLevel.toWindowLevel(voi.lower, voi.upper) : null;
+    const key = cell.kind === "stack" ? this.keyOfSlot(slot) : null;
     ov.tl.textContent = [
+      key ? (key.saved ? "★ Key image" : "★ Key image, not saved") : "",
       `${st.Modality || ""} ${st.SeriesNumber ?? ""}  ${st.SeriesDescription || ""}`.trim(),
       cell.kind === "3d" ? `3D  ·  ${rendersOf(data)[cell.preset]?.name ?? ""}` : cell.orientation ? `${cell.orientation[0].toUpperCase()}${cell.orientation.slice(1)}${SLABS[cell.slab].mm ? `  ·  ${SLABS[cell.slab].name}` : ""}` : rows ? `${columns} × ${rows}` : "",
     ].filter(Boolean).join("\n");
@@ -1560,6 +1599,128 @@ export class Viewer {
     }
     this.engine.render();
     this.emit();
+  }
+
+  // ---- key images: marked here, saved as a Key Object Selection of their study ----
+
+  private keyOfSlot(slot: Slot | null) {
+    if (!slot) return undefined;
+    const sop = slot.instance.MainDicomTags.SOPInstanceUID;
+    return this.keyMarks.get(`${sop}/${slot.frame}`) ?? this.keyMarks.get(`${sop}/0`);
+  }
+
+  /** The key images the study's Key Object Selections name, read once. */
+  private loadKeys(study: any) {
+    if (this.keysOf.has(study.ID)) return;
+    this.keysOf.set(
+      study.ID,
+      (async () => {
+        const list = await api<any[]>(`studies/${study.ID}/series`);
+        const label = (uid: string) => {
+          const s = list.find((x) => x.MainDicomTags.SeriesInstanceUID === uid);
+          return s ? `${s.MainDicomTags.Modality || ""} ${s.MainDicomTags.SeriesNumber ?? ""} ${s.MainDicomTags.SeriesDescription || ""}`.trim() : "Another series";
+        };
+        for (const ko of list.filter((x) => x.MainDicomTags.Modality === "KO")) {
+          const base = new URL(`studies/${study.MainDicomTags.StudyInstanceUID}/series/${ko.MainDicomTags.SeriesInstanceUID}/`, WEB);
+          for (const meta of await api<any[]>("metadata", {}, base)) {
+            const seriesOf = new Map<string, string>();
+            for (const ev of tag(meta, "0040A375") ?? [])
+              for (const se of tag(ev, "00081115") ?? []) for (const sop of tag(se, "00081199") ?? []) seriesOf.set(first(sop, "00081155"), first(se, "0020000E"));
+            for (const item of tag(meta, "0040A730") ?? []) {
+              if (first(item, "0040A040") !== "IMAGE") continue;
+              const ref = (tag(item, "00081199") ?? [])[0];
+              const sop = ref && first(ref, "00081155");
+              if (!sop) continue;
+              const frame = num(ref, "00081160", 0);
+              const seriesUid = seriesOf.get(sop) ?? "";
+              const id = `${sop}/${frame}`;
+              if (!this.keyMarks.has(id))
+                this.keyMarks.set(id, {
+                  id, study: study.ID, sop, frame, instance: null, seriesUid, label: label(seriesUid), saved: true,
+                  seriesId: list.find((x) => x.MainDicomTags.SeriesInstanceUID === seriesUid)?.ID ?? null,
+                });
+            }
+          }
+        }
+        this.cells.forEach((c) => this.overlays(c));
+        this.emit();
+      })().catch((e: Error) => {
+        // the study is shown without them, the page says so, and they are asked again later
+        this.keysOf.delete(study.ID);
+        this.onKeysFailed?.(e.message);
+      }),
+    );
+  }
+
+  /**
+   * Marks the active viewport's image as a key image, or takes a mark not saved yet off.
+   * Resolves to why it did nothing, if it did nothing.
+   */
+  toggleKey(): string | null {
+    const cell = this.active();
+    const slot = cell?.kind === "stack" ? cell.data?.slots[cell.index] : null;
+    if (!cell?.data || !slot) return "Key images are marked on an image as acquired, not in a reformatted plane";
+    const known = this.keyOfSlot(slot);
+    if (known?.saved) return "This key image is saved in the study: delete its key image series to take it off";
+    if (known) this.keyMarks.delete(known.id);
+    else {
+      const sop = slot.instance.MainDicomTags.SOPInstanceUID;
+      const st = cell.data.series.MainDicomTags;
+      const id = `${sop}/${slot.frames > 1 ? slot.frame : 0}`;
+      this.keyMarks.set(id, {
+        id, study: cell.data.study.ID, sop, frame: slot.frames > 1 ? slot.frame : 0, instance: slot.instance.ID,
+        seriesUid: st.SeriesInstanceUID, seriesId: cell.data.series.ID, saved: false,
+        label: `${`${st.Modality || ""} ${st.SeriesNumber ?? ""} ${st.SeriesDescription || ""}`.trim()} · image ${cell.index + 1}${slot.frames > 1 ? `, frame ${slot.frame}` : ""}`,
+      });
+    }
+    this.overlays(cell);
+    this.emit();
+    return null;
+  }
+
+  /** Takes off a mark not saved yet. */
+  unmarkKey(id: string) {
+    if (this.keyMarks.get(id)?.saved !== false) return;
+    this.keyMarks.delete(id);
+    this.cells.forEach((c) => this.overlays(c));
+    this.emit();
+  }
+
+  /** The marks not saved yet, saved as one Key Object Selection a study, with this
+   * description. Resolves to null, or to why not (the marks then stay, not saved). */
+  async saveKeys(description: string): Promise<string | null> {
+    const pending = [...this.keyMarks.values()].filter((k) => !k.saved);
+    const studies = [...new Set(pending.map((k) => k.study))];
+    for (const study of studies) {
+      const mine = pending.filter((k) => k.study === study);
+      try {
+        await api(`studies/${study}/key-images`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ Images: mine.map((k) => (k.frame ? { ID: k.instance, Frame: k.frame } : k.instance)), Description: description.trim() }),
+        });
+      } catch (e) {
+        if (e instanceof HttpError) return e.message;
+        throw e;
+      }
+      for (const k of mine) k.saved = true;
+    }
+    this.cells.forEach((c) => this.overlays(c));
+    this.emit();
+    return null;
+  }
+
+  /** Shows a key image in the active viewport. */
+  async goToKey(id: string) {
+    const k = this.keyMarks.get(id);
+    if (!k?.seriesId) return;
+    if (this.mode === "mpr") await this.exitMpr();
+    const data = await this.loadSeries(k.seriesId);
+    const at = data.slots.findIndex((s) => s.instance.MainDicomTags.SOPInstanceUID === k.sop && (!k.frame || s.frame === k.frame));
+    if (at < 0) return;
+    const cell = this.active();
+    if (cell.seriesId === k.seriesId && cell.kind === "stack") this.go(at);
+    else await this.show(cell, k.seriesId, at);
   }
 
   // ---- MPR ----

@@ -1,0 +1,21 @@
+{
+  "ExpectedNumberOfInstances": null,
+  "ID": "bd0f17c2-04190837-9cef0baf-30f4e455-c483f133",
+  "Instances": [
+    "de0819a5-a34b21a4-3d5f06ae-fe16f745-781d59a2"
+  ],
+  "IsStable": false,
+  "Labels": [],
+  "LastUpdate": "20261127T215958",
+  "MainDicomTags": {
+    "Modality": "KO",
+    "Manufacturer": "pacs-rs",
+    "TimezoneOffsetFromUTC": "+0000",
+    "SeriesDescription": "Key images",
+    "SeriesInstanceUID": "2.25.311471336301085837276017228720879463298",
+    "SeriesNumber": "302"
+  },
+  "ParentStudy": "9fe34720-0aef8f74-788ae8a7-74ce28b1-45495d68",
+  "Status": "Unknown",
+  "Type": "Series"
+}

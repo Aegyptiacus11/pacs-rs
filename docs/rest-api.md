@@ -53,5 +53,11 @@ study attributes and the time it was added (UTC). It answers as `POST /instances
 what does not begin with `%PDF-`, and needs `write`. `GET /instances/{id}/pdf` gives any
 Encapsulated PDF instance's document back, as it was put in.
 
+**Key images** are images of a study marked as mattering, as other PACS and viewers
+exchange them: `POST /studies/{id}/key-images` with `{"Images": [ids...], "Description": "..."}`
+(a frame as `{"ID": ..., "Frame": n}`) makes a Key Object Selection Document of the study,
+titled Of Interest (DCM 113000), in a series of its own of modality KO. Every image must be an
+instance of that study; it answers as `POST /instances` does and needs `write`.
+
 Not yet: searching series or instances by anything but their UID or their labels. Not
 planned: modifications (`/modify`).

@@ -7,16 +7,15 @@
 //! Document (C.24.2) and SOP Common. Explicit VR Little Endian.
 
 use dicom_core::value::DataSetSequence;
-use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
+use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::tags;
-use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
+use dicom_object::InMemDicomObject;
 use serde_json::{Map, Value};
 
-use crate::Error;
+use crate::{Error, made};
 
 /// Encapsulated PDF Storage.
 pub const ENCAPSULATED_PDF: &str = "1.2.840.10008.5.1.4.1.1.104.1";
-const EXPLICIT_VR_LE: &str = "1.2.840.10008.1.2.1";
 
 /// What a new document needs besides its PDF.
 pub struct NewDocument<'a> {
@@ -89,30 +88,6 @@ pub fn encapsulated_pdf(new: &NewDocument, pdf: &[u8]) -> Result<Vec<u8>, Error>
         return Err(Error::Malformed(why));
     }
     let mut object = InMemDicomObject::new_empty();
-    let mut put = |tag: Tag, vr: VR, value: &str| {
-        object.put(DataElement::new(
-            tag,
-            vr,
-            if value.is_empty() {
-                PrimitiveValue::Empty
-            } else {
-                PrimitiveValue::from(value)
-            },
-        ));
-    };
-    let text = |map: &Map<String, Value>, key: &str| {
-        map.get(key)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned()
-    };
-    let study_uid = text(new.study, "StudyInstanceUID");
-    if study_uid.is_empty() {
-        return Err(Error::Missing {
-            name: "StudyInstanceUID",
-            tag: tags::STUDY_INSTANCE_UID,
-        });
-    }
     let title: String = new.title.trim().chars().take(1024).collect();
     let description = title
         .chars()
@@ -120,34 +95,8 @@ pub fn encapsulated_pdf(new: &NewDocument, pdf: &[u8]) -> Result<Vec<u8>, Error>
         .collect::<String>()
         .trim_end()
         .to_owned();
-    let values = [
-        (tags::PATIENT_NAME, VR::PN, text(new.patient, "PatientName")),
-        (tags::PATIENT_ID, VR::LO, text(new.patient, "PatientID")),
-        (
-            tags::PATIENT_BIRTH_DATE,
-            VR::DA,
-            text(new.patient, "PatientBirthDate"),
-        ),
-        (tags::PATIENT_SEX, VR::CS, text(new.patient, "PatientSex")),
-        (tags::STUDY_INSTANCE_UID, VR::UI, study_uid),
-        (tags::STUDY_DATE, VR::DA, text(new.study, "StudyDate")),
-        (tags::STUDY_TIME, VR::TM, text(new.study, "StudyTime")),
-        (tags::STUDY_ID, VR::SH, text(new.study, "StudyID")),
-        (
-            tags::ACCESSION_NUMBER,
-            VR::SH,
-            text(new.study, "AccessionNumber"),
-        ),
-        (
-            tags::REFERRING_PHYSICIAN_NAME,
-            VR::PN,
-            text(new.study, "ReferringPhysicianName"),
-        ),
-        (
-            tags::STUDY_DESCRIPTION,
-            VR::LO,
-            text(new.study, "StudyDescription"),
-        ),
+    let mut values = made::patient_and_study(new.study, new.patient)?;
+    values.extend([
         (tags::SOP_CLASS_UID, VR::UI, ENCAPSULATED_PDF.to_owned()),
         (tags::SOP_INSTANCE_UID, VR::UI, new.instance_uid.to_owned()),
         (tags::MODALITY, VR::CS, "DOC".to_owned()),
@@ -171,14 +120,8 @@ pub fn encapsulated_pdf(new: &NewDocument, pdf: &[u8]) -> Result<Vec<u8>, Error>
             VR::LO,
             "application/pdf".to_owned(),
         ),
-    ];
-    let any_wide = values.iter().any(|(_, _, v)| !v.is_ascii());
-    for (tag, vr, value) in &values {
-        put(*tag, *vr, value);
-    }
-    if any_wide {
-        put(tags::SPECIFIC_CHARACTER_SET, VR::CS, "ISO_IR 192");
-    }
+    ]);
+    made::put_all(&mut object, &values);
     object.put(DataElement::new(
         tags::CONCEPT_NAME_CODE_SEQUENCE,
         VR::SQ,
@@ -199,18 +142,7 @@ pub fn encapsulated_pdf(new: &NewDocument, pdf: &[u8]) -> Result<Vec<u8>, Error>
         VR::UL,
         PrimitiveValue::from(pdf.len() as u32),
     ));
-    let file = object
-        .with_meta(
-            FileMetaTableBuilder::new()
-                .transfer_syntax(EXPLICIT_VR_LE)
-                .media_storage_sop_class_uid(ENCAPSULATED_PDF)
-                .media_storage_sop_instance_uid(new.instance_uid),
-        )
-        .map_err(|e| Error::Malformed(format!("no file meta: {e}")))?;
-    let mut out = Vec::new();
-    file.write_all(&mut out)
-        .map_err(|e| Error::Malformed(format!("the document could not be written: {e}")))?;
-    Ok(out)
+    made::part10(object, ENCAPSULATED_PDF, new.instance_uid)
 }
 
 /// The PDF of an Encapsulated PDF instance, without its padding; `None` for any other.

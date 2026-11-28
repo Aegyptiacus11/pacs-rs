@@ -439,6 +439,29 @@ Permission, when the login is on: `read`.
 | 200 | list of [Instance](#instance) | The instances. |
 | 404 | nothing | No study has this identifier; the body is empty. |
 
+### `POST /studies/{id}/key-images`
+
+Marks images of a study as its key images.
+
+They become a Key Object Selection Document of the study, titled Of Interest (DCM 113000),
+in a new series of modality KO after the study's last; its answer is that of `POST
+/instances`, and so are its refusals. Every image must be an instance of this study.
+
+Permission, when the login is on: `write`.
+
+| Send | Where | Type | |
+|---|---|---|---|
+| `id` | path | string | The study's identifier. |
+| the body | | [KeyImages](#keyimages) | The images. |
+
+| Status | Answer | |
+|---|---|---|
+| 200 | [Stored](#stored) | Stored: the new Key Object Selection. |
+| 400 | [Error](#error) | No image, an image that is not of this study, or a frame number of 0. |
+| 403 | [Error](#error) | The account is limited to some projects. |
+| 404 | nothing | No study has this identifier; the body is empty. |
+| 409 | [Error](#error) | The study came in through a project. |
+
 ### `GET /studies/{id}/labels`
 
 The labels of a study, sorted.
@@ -2300,6 +2323,21 @@ A file a restore left in the trash.
 |---|---|---|
 | `object_key` | string | Where it was before the deletion. |
 | `reason` | string | Why it was left. |
+
+### KeyImageRef
+
+A key image: an instance's identifier, or one frame of a multi-frame instance.
+
+string or object.
+
+### KeyImages
+
+The images, and what they are about.
+
+| Field | Type | |
+|---|---|---|
+| `Description` | string, optional | The Key Object Description, if any. |
+| `Images` | list of [KeyImageRef](#keyimageref) | The images, by identifier, in the order they are to be read; a frame of a multi-frame instance as `{"ID": ..., "Frame": n}`. |
 
 ### Me
 
