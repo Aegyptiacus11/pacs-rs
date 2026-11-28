@@ -118,7 +118,7 @@ async fn echo(
     args.extend(extra);
     let config = dimse_config(&settings(dir, &args)).map_err(|e| format!("{e:#}"))?;
     let remote = config.remote("there").unwrap();
-    match pacs_dimse::echo(remote, &AeTitle::new("CALLER").unwrap(), WAIT).await {
+    match pacs_dimse::echo(&remote, &AeTitle::new("CALLER").unwrap(), WAIT).await {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("{e:#}")),
     }
@@ -349,20 +349,6 @@ fn settings_that_do_not_add_up_stop_the_start() {
             "PACS_DIMSE_TLS_CLIENT_AUTH=off",
         ),
         (vec![tls_remote], "reached over TLS"),
-        (vec!["--dimse-tls-ca-file", &ca_file], "nothing reads it"),
-        (
-            vec![
-                "--dimse-tls-cert-file",
-                &cert,
-                "--dimse-tls-key-file",
-                &key,
-                "--dimse-tls-client-auth",
-                "off",
-                "--dimse-tls-ca-file",
-                &ca_file,
-            ],
-            "nothing reads it",
-        ),
         (
             vec![
                 "--dimse-tls-cert-file",
@@ -426,7 +412,11 @@ fn settings_that_do_not_add_up_stop_the_start() {
         &["--dimse-remotes=there=PACS@pacs.test:104"],
     ))
     .unwrap();
-    assert!(config.tls.is_none() && !config.remotes[0].secure && config.remotes[0].tls.is_none());
+    assert!(
+        config.tls.is_none()
+            && !config.directory.remotes()[0].secure
+            && config.directory.remotes()[0].tls.is_none()
+    );
     let config = dimse_config(&settings(
         dir.path(),
         &[
@@ -445,7 +435,11 @@ fn settings_that_do_not_add_up_stop_the_start() {
         &[tls_remote, "--dimse-tls-ca-file", &ca_file],
     ))
     .unwrap();
-    assert!(config.tls.is_none() && config.remotes[0].secure && config.remotes[0].tls.is_some());
+    assert!(
+        config.tls.is_none()
+            && config.directory.remotes()[0].secure
+            && config.directory.remotes()[0].tls.is_some()
+    );
     // a plain remote beside a TLS one stays plain
     let config = dimse_config(&settings(
         dir.path(),
@@ -528,4 +522,43 @@ async fn over_tls_an_ae_titles_capabilities_hold_per_operation() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// With authorities named and no remote AE of the settings over TLS, a remote AE added while
+/// the server runs may be reached over TLS: the calls' TLS is there for it. Kept in the index,
+/// such a remote AE stops a start whose settings name no authorities.
+#[tokio::test]
+async fn a_remote_ae_added_at_run_time_is_reached_over_tls() {
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ca = Authority::new(dir.path(), "site");
+    let ca_file = ca.file();
+    let with_ca = settings(dir.path(), &["--dimse-tls-ca-file", &ca_file]);
+    let archive = open_archive(&with_ca).await.unwrap();
+    let app = pacs_server::app(archive, &with_ca).unwrap();
+    let body = serde_json::json!({"AET": "SECURE", "Host": "10.0.0.8", "Port": 2762, "TLS": true});
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/modalities/secure")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let without = settings(dir.path(), &[]);
+    let Err(error) = open_archive(&without).await else {
+        panic!("the start is not refused");
+    };
+    assert!(
+        format!("{error:#}").contains("secure added in the web interface is reached over TLS"),
+        "{error:#}"
+    );
 }

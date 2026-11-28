@@ -220,7 +220,7 @@ async fn run(
         } => {
             let (result, method) = retriever
                 .retrieve(
-                    remote,
+                    &remote,
                     patient_id.as_deref(),
                     &studies,
                     destination,
@@ -230,12 +230,12 @@ async fn run(
             (result, method.name())
         }
         Work::Send => (
-            retriever.send(remote, &index, &studies, on_progress).await,
+            retriever.send(&remote, &index, &studies, on_progress).await,
             SEND,
         ),
         Work::WriteBack => (
             retriever
-                .write_back(remote, &index, &studies, on_progress)
+                .write_back(&remote, &index, &studies, on_progress)
                 .await,
             WRITE_BACK,
         ),

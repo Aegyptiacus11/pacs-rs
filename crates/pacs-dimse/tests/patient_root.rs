@@ -20,7 +20,10 @@ use pacs_dimse::{AeTitle, Config, Destination, Project, Scp, Status};
 /// A configuration that answers VIEWER.
 fn answering() -> Config {
     let mut config = config();
-    config.remotes = vec!["viewer=VIEWER@127.0.0.1:11112".parse().unwrap()];
+    config.directory = pacs_dimse::Directory::new(
+        vec!["viewer=VIEWER@127.0.0.1:11112".parse().unwrap()],
+        vec![],
+    );
     config
 }
 
@@ -539,9 +542,13 @@ async fn a_patient_is_sent_whole_with_c_move() {
     let archive = archive().await;
     let [first, second, later, _] = two_patients(&archive).await;
     let (destination, received) = storage_scp(&[CT], &[EXPLICIT_VR_LE], Peer::Answers(&[])).await;
-    let mut config = answering();
-    config.remotes.push(destination.clone());
-    config.move_destinations = vec![destination.id.clone()];
+    let config = answering();
+    config.directory.set(destination.clone(), false);
+    assert!(
+        config
+            .directory
+            .set_may_receive(&destination.id.clone(), true)
+    );
     let addr = start(config, archive).await;
     let mut client = viewer(addr, "PACSRS").await;
     let moved = client

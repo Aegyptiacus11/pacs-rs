@@ -147,7 +147,7 @@ The DICOM network protocol: see [DIMSE](dimse.md), and [DIMSE over TLS](dimse.md
 | `PACS_DIMSE_TIMEOUT` | `30` | seconds to wait for a remote AE |
 | `PACS_DIMSE_MOVE_TIMEOUT` | `600` | seconds to wait between two C-MOVE responses, while a large study is sent |
 | `PACS_DIMSE_TLS_CERT_FILE`, `PACS_DIMSE_TLS_KEY_FILE` | none | pacs-rs's certificate (with its chain) and private key, PEM: with them the DIMSE port speaks TLS only |
-| `PACS_DIMSE_TLS_CA_FILE` | none | the authorities (PEM) that sign the certificates of DIMSE callers and of the remote AEs called over TLS |
+| `PACS_DIMSE_TLS_CA_FILE` | none | the authorities (PEM) that sign the certificates of DIMSE callers and of the remote AEs called over TLS, those added in the web interface included |
 | `PACS_DIMSE_TLS_CLIENT_AUTH` | `required` | whether a DIMSE caller must show a certificate; `off` takes any caller that speaks TLS |
 
 ## Projects

@@ -1,0 +1,6 @@
+{
+    "HttpError": "Conflict",
+    "HttpStatus": 409,
+    "Message": "Set in the settings",
+    "Details": "hospital is one of PACS_DIMSE_REMOTES: remove it there"
+}

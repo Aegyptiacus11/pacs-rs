@@ -22,7 +22,10 @@ use pacs_dimse::{AeTitle, Config, Destination, Project, Scp, Status};
 /// A configuration that answers the queries of VIEWER.
 fn answering() -> Config {
     let mut config = config();
-    config.remotes = vec!["viewer=VIEWER@127.0.0.1:11112".parse().unwrap()];
+    config.directory = pacs_dimse::Directory::new(
+        vec!["viewer=VIEWER@127.0.0.1:11112".parse().unwrap()],
+        vec![],
+    );
     config
 }
 

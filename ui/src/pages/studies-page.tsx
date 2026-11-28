@@ -13,7 +13,7 @@ import {
   type RowSelectionState,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, Loader2, MousePointerClick, SlidersHorizontal, Send, TriangleAlert, Search, Tag, Trash2, Upload, User, X, FilePlus, FileText } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Copy, Download, Ellipsis, Eye, FileStack, FilePlus, FileText, Loader2, MousePointerClick, Send, SlidersHorizontal, TriangleAlert, Search, Tag, Trash2, Upload, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

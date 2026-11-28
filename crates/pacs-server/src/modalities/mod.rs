@@ -4,6 +4,7 @@
 //! [`jobs`].
 
 pub(crate) mod jobs;
+pub(crate) mod manage;
 mod retrieve;
 pub(crate) mod retriever;
 pub mod schema;
@@ -34,8 +35,15 @@ pub(crate) struct Remotes {
     pub retriever: Arc<retriever::Retriever>,
     /// Project names and their AE titles, the destinations a move may name.
     pub projects: Vec<(String, AeTitle)>,
-    /// Where the jobs are kept.
+    /// Where the jobs, and the remote AEs added through the API, are kept.
     index: pacs_index::Index,
+    /// The remote AEs the settings send to on their own (forwarding, projects' write-back),
+    /// each with why: not removed while they do.
+    in_use: Vec<(String, String)>,
+    /// Held by each change of the remote AEs, from its checks to the index and the
+    /// directory: two at once could pass the same check, or leave the index and the directory
+    /// apart.
+    changes: tokio::sync::Mutex<()>,
 }
 
 /// The routes, each one by its `#[utoipa::path]`, so that none is served that the API's
@@ -44,6 +52,7 @@ fn described() -> OpenApiRouter<Arc<Remotes>> {
     OpenApiRouter::new()
         .routes(routes!(list))
         .routes(routes!(echo))
+        .routes(routes!(manage::put, manage::delete))
         .routes(routes!(studies::studies))
         .routes(routes!(retrieve::move_studies))
         .routes(routes!(send::send))
@@ -61,6 +70,7 @@ pub(crate) fn router(
     retriever: Arc<retriever::Retriever>,
     projects: Vec<(String, AeTitle)>,
     index: pacs_index::Index,
+    in_use: Vec<(String, String)>,
 ) -> Router {
     described()
         .with_state(Arc::new(Remotes {
@@ -68,22 +78,28 @@ pub(crate) fn router(
             retriever,
             projects,
             index,
+            in_use,
+            changes: tokio::sync::Mutex::new(()),
         }))
         .split_for_parts()
         .0
 }
 
-fn describe(remote: &RemoteAe) -> Value {
+fn describe(remote: &RemoteAe, directory: &pacs_dimse::Directory) -> Value {
     json!({
         "AET": remote.ae_title.as_str(),
         "Host": remote.host,
         "Port": remote.port,
+        "TLS": remote.secure,
+        "MayReceive": directory.may_receive(&remote.id),
+        "Fixed": directory.is_fixed(&remote.id),
     })
 }
 
 /// Lists the remote AEs.
 ///
-/// The AEs of `PACS_DIMSE_REMOTES`: those pacs-rs can test, search and pull studies from.
+/// Those of `PACS_DIMSE_REMOTES`, then those added with `PUT /modalities/{id}`: the AEs pacs-rs
+/// can test, search and pull studies from, and send studies to when they may receive them.
 #[utoipa::path(
     get,
     path = "/modalities",
@@ -98,18 +114,20 @@ async fn list(
     if query.contains_key("expand") {
         let all: serde_json::Map<String, Value> = remotes
             .config
-            .remotes
+            .directory
+            .remotes()
             .iter()
-            .map(|r| (r.id.clone(), describe(r)))
+            .map(|r| (r.id.clone(), describe(r, &remotes.config.directory)))
             .collect();
         Json(Value::Object(all))
     } else {
         Json(json!(
             remotes
                 .config
-                .remotes
-                .iter()
-                .map(|r| &r.id)
+                .directory
+                .remotes()
+                .into_iter()
+                .map(|r| r.id)
                 .collect::<Vec<_>>()
         ))
     }
@@ -133,7 +151,7 @@ async fn echo(State(remotes): State<Arc<Remotes>>, Path(id): Path<String>) -> Re
     let Some(remote) = remotes.config.remote(&id) else {
         return RestError::NotFound.into_response();
     };
-    match pacs_dimse::echo(remote, &remotes.config.ae_title, remotes.config.timeout).await {
+    match pacs_dimse::echo(&remote, &remotes.config.ae_title, remotes.config.timeout).await {
         Ok(echo) => Json(json!({
             "Status": "Success",
             "AET": remote.ae_title.as_str(),

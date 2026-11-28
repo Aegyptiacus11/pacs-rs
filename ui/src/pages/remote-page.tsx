@@ -1,16 +1,16 @@
-// The Remote page: the other archives pacs-rs knows (PACS_DIMSE_REMOTES), each tested with a
+// The Remote page: the other archives pacs-rs knows (managed in the settings), each tested with a
 // C-ECHO when the page opens; a search of one's studies (C-FIND), and the ticked studies
 // pulled into this archive, or a project's de-identified copy, as a job (C-MOVE or C-GET).
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDownToLine, CircleAlert, ListChecks, Loader2, RefreshCw, Search, Server, TriangleAlert } from "lucide-react";
+import { ArrowDownToLine, CircleAlert, ListChecks, Loader2, RefreshCw, Search, Server, Settings2, TriangleAlert } from "lucide-react";
 import { formatDate, formatTime, personName, plural, sexAge } from "@/lib/api";
 import { IMAGING_MODALITIES } from "@/lib/modalities";
 import { emptyQuery, pull, useEcho, useRemotes, useRemoteSearch, type RemoteAe, type RemoteQuery } from "@/lib/remote";
 import { href } from "@/lib/route";
-import { may, useSession } from "@/lib/session";
+import { authOn, may, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { useProjects } from "@/pages/projects-choice";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,9 @@ function EchoState({ ae }: { ae: RemoteAe }) {
     </span>
   );
 }
+
+/** Whether the user adds and removes archives: an administrator, or anyone without a login. */
+const manages = () => !authOn || may("admin");
 
 function RemoteList({ remotes, chosen, onChoose }: { remotes: RemoteAe[]; chosen: string | null; onChoose: (id: string) => void }) {
   const client = useQueryClient();
@@ -80,9 +83,16 @@ function RemoteList({ remotes, chosen, onChoose }: { remotes: RemoteAe[]; chosen
           </li>
         ))}
       </ul>
-      <a href={href.jobs()} className="mx-3 mt-auto mb-3 hidden items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground md:flex">
-        <ListChecks className="size-4" /> Jobs
-      </a>
+      <div className="mt-auto mb-3 hidden flex-col md:flex">
+        <a href={href.jobs()} className="mx-3 flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+          <ListChecks className="size-4" /> Jobs
+        </a>
+        {manages() && (
+          <a href={href.settings("remotes")} className="mx-3 flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+            <Settings2 className="size-4" /> Manage the archives
+          </a>
+        )}
+      </div>
     </aside>
   );
 }
@@ -317,9 +327,15 @@ export function RemotePage({ open }: { open: string | null }) {
         </div>
         <div className="font-medium">No remote archive yet</div>
         <p className="mt-1 text-sm text-muted-foreground">
-          List the archives pacs-rs may search and pull from in <code className="font-mono text-xs">PACS_DIMSE_REMOTES</code>, as{" "}
-          <code className="font-mono text-xs">id=AE_TITLE@host:port</code>, and register pacs-rs on each of them.
+          Add the archives pacs-rs may search and pull from, and register pacs-rs on each of them.
         </p>
+        {manages() && (
+          <Button asChild className="mt-4">
+            <a href={href.settings("remotes")}>
+              <Settings2 /> Add a remote archive
+            </a>
+          </Button>
+        )}
       </div>
     );
 

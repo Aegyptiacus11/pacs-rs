@@ -15,6 +15,7 @@ use std::time::Duration;
 pub mod ae;
 pub mod command;
 pub mod conformance;
+pub mod directory;
 pub mod message;
 pub mod project;
 pub mod query;
@@ -26,6 +27,7 @@ pub mod status;
 pub mod tools;
 
 pub use ae::{AeError, AeTitle, ClientTls, RemoteAe};
+pub use directory::Directory;
 pub use project::{Project, ProjectError, Received};
 pub use query::{DateRange, QueryError, StudyQuery};
 pub use scp::{
@@ -65,12 +67,11 @@ pub struct Config {
     /// Further called AE titles accepted on the same port, with the same presentation
     /// contexts.
     pub extra_ae_titles: Vec<AeTitle>,
-    /// The AEs pacs-rs can call.
-    pub remotes: Vec<RemoteAe>,
-    /// The `id` of each remote AE that instances may be sent to: the destinations a C-MOVE
-    /// may name. None unless set: an archive this server only reads from is among the
-    /// remotes too, and must not be written to because someone asked.
-    pub move_destinations: Vec<String>,
+    /// The AEs pacs-rs can call, and those instances may be sent to (the destinations a
+    /// C-MOVE may name: none unless set, as an archive this server only reads from is among
+    /// the remotes too, and must not be written to because someone asked). Shared and live:
+    /// a clone of the configuration sees what is changed in it.
+    pub directory: Directory,
     /// Refuse associations whose calling AE title is not one of `remotes`.
     pub known_callers_only: bool,
     /// Associations served at once; one more is rejected as a local limit exceeded.
@@ -106,8 +107,7 @@ impl Config {
         Config {
             ae_title,
             extra_ae_titles: Vec::new(),
-            remotes: Vec::new(),
-            move_destinations: Vec::new(),
+            directory: Directory::default(),
             known_callers_only: false,
             max_associations: 16,
             timeout: Duration::from_secs(30),
@@ -119,17 +119,13 @@ impl Config {
         }
     }
 
-    pub fn remote(&self, id: &str) -> Option<&RemoteAe> {
-        self.remotes.iter().find(|r| r.id == id)
+    pub fn remote(&self, id: &str) -> Option<RemoteAe> {
+        self.directory.remote(id)
     }
 
-    /// The remote AE a C-MOVE to `ae_title` sends to: one of [`Config::move_destinations`]
-    /// with that AE title. `None` is a Move Destination this server does not know (PS3.4
-    /// Table C.4-2, status A801).
-    pub fn move_destination(&self, ae_title: &str) -> Option<&RemoteAe> {
-        self.remotes.iter().find(|remote| {
-            remote.ae_title.matches(ae_title) && self.move_destinations.contains(&remote.id)
-        })
+    /// See [`Directory::move_destination`].
+    pub fn move_destination(&self, ae_title: &str) -> Option<RemoteAe> {
+        self.directory.move_destination(ae_title)
     }
 }
 

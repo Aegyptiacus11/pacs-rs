@@ -95,12 +95,6 @@ pub(crate) fn open(settings: &Settings, calls_over_tls: bool) -> anyhow::Result<
              sign its certificate in PACS_DIMSE_TLS_CA_FILE"
         );
     }
-    if roots.is_some() && !asks_callers && !calls_over_tls {
-        bail!(
-            "PACS_DIMSE_TLS_CA_FILE is set and nothing reads it: there is no certificate for \
-             the listener to ask callers by, and no remote AE with /tls"
-        );
-    }
     // named, not the process default: the build holds two cryptography providers
     let provider = Arc::new(rustls::crypto::ring::default_provider());
 
@@ -131,8 +125,10 @@ pub(crate) fn open(settings: &Settings, calls_over_tls: bool) -> anyhow::Result<
         None => None,
     };
 
-    let caller = match (roots, calls_over_tls) {
-        (Some(roots), true) => {
+    // with authorities named, a remote AE added while the server runs may be reached over TLS
+    // too, so the calls' TLS is there whether or not one of PACS_DIMSE_REMOTES asks for it
+    let caller = match roots {
+        Some(roots) => {
             let builder = ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()
                 .context("the TLS versions of DIMSE calls")?

@@ -137,7 +137,7 @@ pub(super) async fn move_studies(
     let (result, method) = remotes
         .retriever
         .retrieve(
-            remote,
+            &remote,
             patient_id.as_deref(),
             &studies,
             &destination,

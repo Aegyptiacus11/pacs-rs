@@ -28,6 +28,7 @@ pub mod kind {
     pub const LOGIN: Code = Code::dcm("110122", "Login");
     pub const LOGOUT: Code = Code::dcm("110123", "Logout");
     pub const NODE_AUTHENTICATION: Code = Code::dcm("110126", "Node Authentication");
+    pub const NETWORK_CONFIGURATION: Code = Code::dcm("110128", "Network Configuration");
     pub const USE_OF_RESTRICTED_FUNCTION: Code = Code::dcm("110132", "Use of Restricted Function");
     pub const AUDIT_RECORDING_STOPPED: Code = Code::dcm("110133", "Audit Recording Stopped");
     pub const AUDIT_RECORDING_STARTED: Code = Code::dcm("110134", "Audit Recording Started");

@@ -19,8 +19,12 @@ if (!base) {
   process.exit(1);
 }
 
-async function ask(path, init) {
-  const response = await fetch(new URL(path, base), init);
+// with a login, every request carries the administrator's token
+const token = process.env.PACS_TOKEN;
+
+async function ask(path, init = {}) {
+  const headers = { ...init.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  const response = await fetch(new URL(path, base), { ...init, headers });
   if (!response.ok) {
     console.error(`${path}: ${response.status} ${response.statusText}`);
     process.exit(1);
@@ -57,11 +61,10 @@ for (const id of await (await ask("studies")).json()) {
   answers[`study-${id}-statistics.json`] = `studies/${id}/statistics`;
 }
 
-const token = process.env.PACS_TOKEN;
 if (token) Object.assign(answers, { "roles.json": "roles", "me-admin.json": "auth/me" });
 
 for (const [file, path] of Object.entries(answers)) {
-  const response = await ask(path, token ? { headers: { Authorization: `Bearer ${token}` } } : {});
+  const response = await ask(path);
   await writeFile(new URL(`fixtures/${file}`, import.meta.url), JSON.stringify(await response.json(), null, 2) + "\n");
   console.log(`${file} <- ${path}`);
 }

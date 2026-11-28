@@ -1,24 +1,52 @@
-// Other archives, over the DICOM network: the remote AEs of PACS_DIMSE_REMOTES, a C-ECHO to
-// each, a C-FIND of one's studies, and the jobs that pull studies in (C-MOVE, or C-GET) and
-// send them out (C-STORE). Every call is one of the REST API (/modalities, /jobs).
+// Other archives, over the DICOM network: the remote AEs (those of PACS_DIMSE_REMOTES, and
+// those an administrator adds, changes and removes), a C-ECHO to each, a C-FIND of one's
+// studies, and the jobs that pull studies in (C-MOVE, or C-GET) and send them out (C-STORE).
+// Every call is one of the REST API (/modalities, /jobs).
 
 import { useQuery } from "@tanstack/react-query";
 import { api, HttpError, ROOT } from "@/lib/api";
 import { authFetch } from "@/lib/session";
 
-export type RemoteAe = { id: string; aet: string; host: string; port: number };
+/** A remote AE; `fixed` when it comes from PACS_DIMSE_REMOTES, changed there only. */
+export type RemoteAe = { id: string; aet: string; host: string; port: number; tls: boolean; mayReceive: boolean; fixed: boolean };
 
 export function useRemotes(enabled = true) {
   return useQuery({
     queryKey: ["remotes"],
     enabled,
     queryFn: async (): Promise<RemoteAe[]> => {
-      const byId = await api<Record<string, { AET: string; Host: string; Port: number }>>("modalities?expand");
+      const byId = await api<Record<string, { AET: string; Host: string; Port: number; TLS?: boolean; MayReceive?: boolean; Fixed?: boolean }>>("modalities?expand");
       return Object.entries(byId)
-        .map(([id, ae]) => ({ id, aet: ae.AET, host: ae.Host, port: ae.Port }))
+        .map(([id, ae]) => ({ id, aet: ae.AET, host: ae.Host, port: ae.Port, tls: !!ae.TLS, mayReceive: !!ae.MayReceive, fixed: !!ae.Fixed }))
         .sort((a, b) => a.id.localeCompare(b.id));
     },
   });
+}
+
+/** Why `id` cannot name a remote AE, as the server checks it, if it cannot. */
+export function badRemoteId(id: string) {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? null : "1 to 64 letters, digits, - and _";
+}
+
+/** Why `aet` cannot be an AE title (PS3.5 6.2, AE), if it cannot. */
+export function badAeTitle(aet: string) {
+  const t = aet.trim();
+  if (!t) return "Required";
+  if (aet.length > 16) return "At most 16 characters";
+  return /^[\x20-\x5b\x5d-\x7e]+$/.test(aet) ? null : "No backslash, accent or control character";
+}
+
+/** Adds the remote AE `id`, or changes one added before; answers it as it is now. */
+export function putRemote(id: string, ae: { aet: string; host: string; port: number; tls: boolean; mayReceive: boolean }) {
+  return api(`modalities/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ AET: ae.aet.trim(), Host: ae.host.trim(), Port: ae.port, TLS: ae.tls, MayReceive: ae.mayReceive }),
+  });
+}
+
+export function deleteRemote(id: string) {
+  return api(`modalities/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 /** A C-ECHO: how long it took, or why it failed. */

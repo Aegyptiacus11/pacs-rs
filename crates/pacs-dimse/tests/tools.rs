@@ -120,13 +120,16 @@ async fn find_move_and_get_from_pacs_rs() {
     let dir = tempfile::tempdir().unwrap();
     let receiver = Receiver::start(&dir.path().join("moved")).await;
     let mut config = config();
-    config.remotes = vec![
-        "tools=PACSRS@127.0.0.1:11112".parse().unwrap(),
-        format!("receiver=STORESCP@127.0.0.1:{}", receiver.1)
-            .parse()
-            .unwrap(),
-    ];
-    config.move_destinations = vec!["receiver".into()];
+    config.directory = pacs_dimse::Directory::new(
+        vec![
+            "tools=PACSRS@127.0.0.1:11112".parse().unwrap(),
+            format!("receiver=STORESCP@127.0.0.1:{}", receiver.1)
+                .parse()
+                .unwrap(),
+        ],
+        vec![],
+    );
+    assert!(config.directory.set_may_receive("receiver", true));
     config.ae_title = AeTitle::new("ARCHIVE").unwrap();
     let addr = start(config, archive).await;
     let at = format!("ARCHIVE@127.0.0.1:{}", addr.port());

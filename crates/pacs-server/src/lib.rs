@@ -342,6 +342,13 @@ pub struct Settings {
     #[arg(long, env = "PACS_DIMSE_REMOTES", value_delimiter = ',')]
     pub dimse_remotes: Vec<RemoteAe>,
 
+    /// The remote AEs as the server runs: those of PACS_DIMSE_REMOTES, then those added in
+    /// the web interface (kept in the index, read when the archive opens). Every clone of
+    /// these settings shares it, so the DIMSE server, the REST API and the retriever see one
+    /// list, changed while they run.
+    #[arg(skip)]
+    pub remote_directory: pacs_dimse::Directory,
+
     /// The remote AEs studies may be sent to, by the id each has in PACS_DIMSE_REMOTES,
     /// comma-separated: the destinations a C-MOVE asked of this server may name. None
     /// unless named.
@@ -752,6 +759,47 @@ pub fn open_store(location: &str, settings: &Settings) -> anyhow::Result<Store> 
     })
 }
 
+/// The remote AEs added in the web interface, from the index into the settings' directory,
+/// after those of PACS_DIMSE_REMOTES. One with an id or a destination AE title the settings
+/// already have stops the server: which one to keep is not for it to guess.
+async fn load_remote_aes(settings: &Settings, index: &Index) -> anyhow::Result<()> {
+    let directory = dimse_config(settings)?.directory;
+    for stored in index
+        .remote_aes()
+        .await
+        .context("reading the remote AEs added in the web interface")?
+    {
+        if directory.remote(&stored.id).is_some() {
+            bail!(
+                "remote AE {} is in PACS_DIMSE_REMOTES and was also added in the web interface: remove one of them",
+                stored.id
+            );
+        }
+        let remote = modalities::manage::stored_remote(&stored).map_err(|why| {
+            anyhow::anyhow!("the remote AE {} kept in the index: {why}", stored.id)
+        })?;
+        if remote.secure && settings.dimse_tls_ca_file.is_none() {
+            bail!(
+                "the remote AE {} added in the web interface is reached over TLS: name the \
+                 authorities that sign its certificate in PACS_DIMSE_TLS_CA_FILE",
+                stored.id
+            );
+        }
+        if stored.may_receive
+            && let Some(other) = directory.move_destination(remote.ae_title.as_str())
+        {
+            bail!(
+                "remote AEs {} and {} may both receive studies under the AE title {}: remove one of them",
+                other.id,
+                stored.id,
+                remote.ae_title
+            );
+        }
+        directory.set(remote, stored.may_receive);
+    }
+    Ok(())
+}
+
 /// Open the store and the index the settings name.
 pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
     let store = open_store(&settings.storage, settings)?;
@@ -783,6 +831,7 @@ pub async fn open_archive(settings: &Settings) -> anyhow::Result<Archive> {
                 .with_context(|| format!("opening the index {}", path.display()))?
         }
     };
+    load_remote_aes(settings, &index).await?;
     Ok(Archive::new(store, index)
         .with_overwrite(settings.overwrite_instances)
         .with_compression(settings.compression.into())
@@ -801,7 +850,7 @@ pub fn forward_rules(settings: &Settings) -> anyhow::Result<Vec<forward::Forward
                 rule.destination
             );
         }
-        if !config.move_destinations.contains(&rule.destination) {
+        if !config.directory.may_receive(&rule.destination) {
             bail!(
                 "PACS_FORWARD sends to {}, which is not in PACS_DIMSE_MOVE_DESTINATIONS",
                 rule.destination
@@ -832,7 +881,7 @@ pub fn write_backs(
                 "project {name} writes back to {remote}, which is not a remote AE of PACS_DIMSE_REMOTES"
             );
         }
-        if !config.move_destinations.contains(&remote) {
+        if !config.directory.may_receive(&remote) {
             bail!(
                 "project {name} writes back to {remote}, which is not in PACS_DIMSE_MOVE_DESTINATIONS"
             );
@@ -916,16 +965,23 @@ pub fn spawn_forwarding(
 pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
     let mut config = pacs_dimse::Config::new(settings.dimse_ae_title.clone());
     config.extra_ae_titles = settings.dimse_extra_ae_titles.clone();
-    for remote in &settings.dimse_remotes {
+    // the settings' remote AEs go in once; every later call shares what is there by then
+    let fill = !settings.remote_directory.is_filled();
+    config.directory = if fill {
+        pacs_dimse::Directory::default()
+    } else {
+        settings.remote_directory.clone()
+    };
+    for remote in settings.dimse_remotes.iter().filter(|_| fill) {
         if config.remote(&remote.id).is_some() {
             bail!(
                 "remote AE {} is named twice in PACS_DIMSE_REMOTES",
                 remote.id
             );
         }
-        config.remotes.push(remote.clone());
+        config.directory.set(remote.clone(), false);
     }
-    for id in &settings.dimse_move_destinations {
+    for id in settings.dimse_move_destinations.iter().filter(|_| fill) {
         let Some(remote) = config.remote(id) else {
             bail!(
                 "PACS_DIMSE_MOVE_DESTINATIONS names {id}, which is not a remote AE of PACS_DIMSE_REMOTES"
@@ -939,7 +995,16 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
                 remote.ae_title
             );
         }
-        config.move_destinations.push(id.clone());
+        config.directory.set_may_receive(id, true);
+    }
+    if fill {
+        // checked: now shared
+        for remote in config.directory.remotes() {
+            let may = config.directory.may_receive(&remote.id);
+            settings.remote_directory.set(remote, may);
+        }
+        settings.remote_directory.mark_filled();
+        config.directory = settings.remote_directory.clone();
     }
     config.known_callers_only = settings.dimse_known_callers_only;
     if settings.dimse_max_associations == 0 {
@@ -999,11 +1064,16 @@ pub fn dimse_config(settings: &Settings) -> anyhow::Result<pacs_dimse::Config> {
             from_bytes: settings.dimse_spool_from,
         });
     }
-    let tls = dimse_tls::open(settings, config.remotes.iter().any(|remote| remote.secure))?;
+    let tls = dimse_tls::open(
+        settings,
+        config
+            .directory
+            .remotes()
+            .iter()
+            .any(|remote| remote.secure),
+    )?;
     config.tls = tls.listener;
-    for remote in config.remotes.iter_mut().filter(|remote| remote.secure) {
-        remote.tls = tls.caller.clone();
-    }
+    config.directory.set_client_tls(tls.caller.clone());
     Ok(config)
 }
 
@@ -1214,11 +1284,22 @@ pub fn app_with_audit(
     let observer: Option<std::sync::Arc<dyn pacs_dimse::Observer>> = audit
         .is_on()
         .then(|| std::sync::Arc::new(audit.clone()) as _);
+    // the remote AEs the settings send to on their own, not to be removed while they do
+    let mut in_use: Vec<(String, String)> = forward_rules(settings)?
+        .into_iter()
+        .map(|rule| (rule.destination, "PACS_FORWARD".to_owned()))
+        .collect();
+    in_use.extend(
+        write_backs(settings)?
+            .into_iter()
+            .map(|(project, remote)| (remote, format!("project {project}'s write-back"))),
+    );
     let rest =
         pacs_rest::router(archive.clone(), settings.max_upload_bytes).merge(modalities::router(
             retriever(settings, &archive, observer)?,
             project_titles.clone(),
             archive.index().clone(),
+            in_use,
         ));
     let index = archive.index().clone();
     let audit_index = index.clone();

@@ -177,13 +177,12 @@ impl Scp {
         let mut accepted = vec![self.config.ae_title.clone()];
         accepted.extend(self.config.extra_ae_titles.iter().cloned());
         accepted.extend(self.routes.iter().map(|(title, _)| title.clone()));
-        let callers = self.config.known_callers_only.then(|| {
-            self.config
-                .remotes
-                .iter()
-                .map(|r| r.ae_title.clone())
-                .collect()
-        });
+        // the directory itself, asked at each association: a remote AE added while the
+        // server runs is let in, one removed is not
+        let callers = self
+            .config
+            .known_callers_only
+            .then(|| self.config.directory.clone());
         let mut options = ServerAssociationOptions::new()
             .ae_access_control(Titles { accepted, callers })
             .ae_title(self.config.ae_title.as_str().to_owned())
@@ -330,10 +329,7 @@ impl Scp {
     /// An AE title is a claim, not a proof; who may connect at all is the listener's
     /// business (TLS, known callers).
     fn answers_queries_of(&self, calling: &str) -> bool {
-        self.config
-            .remotes
-            .iter()
-            .any(|remote| remote.ae_title.matches(calling))
+        self.config.directory.knows_ae_title(calling)
     }
 
     /// Answer a C-FIND and tell the observer. Whether the association goes on.
@@ -718,7 +714,8 @@ impl dicom_ul::association::server::Negotiation for Roles {
 #[derive(Debug, Clone)]
 pub struct Titles {
     accepted: Vec<AeTitle>,
-    callers: Option<Vec<AeTitle>>,
+    /// With known callers only: the remote AEs whose titles may call.
+    callers: Option<crate::Directory>,
 }
 
 impl AccessControl for Titles {
@@ -733,7 +730,7 @@ impl AccessControl for Titles {
             return Err(AssociationRJServiceUserReason::CalledAETitleNotRecognized);
         }
         if let Some(callers) = &self.callers
-            && !callers.iter().any(|t| t.matches(calling_ae_title))
+            && !callers.knows_ae_title(calling_ae_title)
         {
             return Err(AssociationRJServiceUserReason::CallingAETitleNotRecognized);
         }

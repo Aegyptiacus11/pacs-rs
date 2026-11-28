@@ -55,7 +55,8 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   five over; the quarantine (files and bytes, when `PACS_QUARANTINE` is set); and the last
   hundred warnings and errors the server logged, each with its time, where it came from, its
   message and its fields (`/ui/api/server`).
-- **Remote** (a role with `remote`): the other archives of `PACS_DIMSE_REMOTES`, each tested
+- **Remote** (a role with `remote`): the other archives (those of `PACS_DIMSE_REMOTES` and
+  those added in the settings), each tested
   with a C-ECHO when the page opens (how long it took, or why it failed), and a search of one
   of them: patient name and ID (matched from their start), accession number, a span of dates,
   a modality. The studies found are ticked and pulled, one job per patient (with its Patient
@@ -98,9 +99,14 @@ viewer is [Cornerstone3D](https://www.cornerstonejs.org/) 5.14.0.
   what each role permits, adds roles, renames and removes them, and everyone else sees the
   table read-only. *Tools*, for an administrator: the [programs that connect without a
   person](login.md#tools), adding one (its secret is shown once), changing its role, the studies it sees and
-  removing it. *Your account*: the login, the
-  role, changing the password, signing out. *About this server*: its version and the
-  addresses a viewer or a script connects to. Without a login only the last one is there.
+  removing it. *Remote archives*, for an administrator (anyone without a login): the other
+  DICOM archives and workstations, each with its AE title, address, whether studies may be
+  sent to it, and Test (a C-ECHO); adding one, changing and removing those added there, which
+  the server uses at once with no restart. Those of `PACS_DIMSE_REMOTES` are shown with a lock
+  and changed in the settings ([DIMSE](dimse.md)). The Remote page leads there. *Your account*:
+  the login, the role, changing the password, signing out. *About this server*: its version
+  and the addresses a viewer or a script connects to. Without a login only the last two are
+  there.
 - **Light or dark**: one button on the rail, remembered in the browser; the system setting until it is used. The viewer is always dark.
 - **Upload**: a dialog with a drop zone, or files and folders dropped anywhere; each file goes
   to `POST /instances` and is counted as new, already stored or skipped.

@@ -337,16 +337,21 @@ async fn a_series_sent_to_another_pacs_rs_arrives_whole() {
 #[test]
 fn a_move_destination_is_a_remote_ae_that_is_listed_as_one() {
     let mut config = config();
-    config.remotes = vec![
-        "hospital=HOSP_PACS@10.0.0.5:104".parse().unwrap(),
-        "viewer=VIEWER@10.0.0.9:11112".parse().unwrap(),
-        "ws=WS1@10.0.0.7:104/tls".parse().unwrap(),
-    ];
+    config.directory = pacs_dimse::Directory::new(
+        vec![
+            "hospital=HOSP_PACS@10.0.0.5:104".parse().unwrap(),
+            "viewer=VIEWER@10.0.0.9:11112".parse().unwrap(),
+            "ws=WS1@10.0.0.7:104/tls".parse().unwrap(),
+        ],
+        vec![],
+    );
     // nothing is a destination until it is named
     for title in ["HOSP_PACS", "VIEWER", "WS1", "PACSRS"] {
         assert!(config.move_destination(title).is_none(), "{title}");
     }
-    config.move_destinations = vec!["viewer".into(), "ws".into()];
+    for id in ["viewer", "ws"] {
+        assert!(config.directory.set_may_receive(id, true));
+    }
     assert_eq!(config.move_destination("VIEWER").unwrap().id, "viewer");
     // as it comes in a command: padded
     assert_eq!(config.move_destination("WS1 ").unwrap().port, 104);

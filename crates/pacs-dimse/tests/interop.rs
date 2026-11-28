@@ -685,14 +685,17 @@ async fn pacs_rs_pulls_from_pynetdicom() {
 /// A configuration that answers the queries of these AE titles.
 fn answering(callers: &[&str]) -> pacs_dimse::Config {
     let mut config = config();
-    config.remotes = callers
-        .iter()
-        .map(|title| {
-            format!("{}={title}@127.0.0.1:104", title.to_lowercase())
-                .parse()
-                .unwrap()
-        })
-        .collect();
+    config.directory = pacs_dimse::Directory::new(
+        callers
+            .iter()
+            .map(|title| {
+                format!("{}={title}@127.0.0.1:104", title.to_lowercase())
+                    .parse()
+                    .unwrap()
+            })
+            .collect(),
+        vec![],
+    );
     config
 }
 
@@ -1330,16 +1333,19 @@ async fn archive_to_retrieve_from() -> (pacs_archive::Archive, [RealSeries; 2]) 
 
 /// A configuration that answers `caller` and sends to `destination` on `port` here.
 fn retrieving(caller: &str, destination: &str, port: u16) -> pacs_dimse::Config {
-    let mut config = answering(&[caller]);
-    config
-        .remotes
-        .retain(|remote| !remote.ae_title.matches(destination));
-    config.remotes.push(
+    let config = answering(&[caller]);
+    for remote in config.directory.remotes() {
+        if remote.ae_title.matches(destination) {
+            config.directory.remove(&remote.id);
+        }
+    }
+    config.directory.set(
         format!("destination={destination}@127.0.0.1:{port}")
             .parse()
             .unwrap(),
+        false,
     );
-    config.move_destinations = vec!["destination".into()];
+    assert!(config.directory.set_may_receive("destination", true));
     config
 }
 
@@ -1741,8 +1747,10 @@ async fn dcmtk_tools_query_and_retrieve_on_the_patient_root_model() {
     let other = RealSeries::new(93, 1).with_patient("Roe^Richard", None);
     ingest(&archive, &other).await;
     let receiving = free_port();
-    let mut config = retrieving("DCMTK", "DCMTK", receiving);
-    config.remotes.extend(answering(&["DCMTK"]).remotes);
+    let config = retrieving("DCMTK", "DCMTK", receiving);
+    for remote in answering(&["DCMTK"]).directory.remotes() {
+        config.directory.set(remote, false);
+    }
     let addr = start(config, archive).await;
     let patient = series[0].patient_id();
 

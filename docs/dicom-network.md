@@ -96,7 +96,8 @@ C-GET avoids the second connection: the images come back on the association that
 
 To pull studies from another archive, both sides are set up once:
 
-1. On pacs-rs, name the archive in `PACS_DIMSE_REMOTES`, as `id=AE_TITLE@host:port`.
+1. On pacs-rs, add the archive: in the web interface (Settings, Remote archives) or with
+   `PUT /modalities/{id}`, or in `PACS_DIMSE_REMOTES` as `id=AE_TITLE@host:port`.
 2. On the archive, its administrator registers pacs-rs: AE title, host and port.
 3. Test the link with `POST /modalities/{id}/echo`.
 4. Search with `GET /modalities/{id}/studies`, and pull with `POST /modalities/{id}/move`.

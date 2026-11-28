@@ -22,12 +22,19 @@ use pacs_dimse::{AeTitle, Config, Destination, Project, RemoteAe, Scp, Status};
 /// A configuration that answers VIEWER, reads from HOSPITAL and sends to `destination`.
 fn sending_to(destination: &RemoteAe) -> Config {
     let mut config = config();
-    config.remotes = vec![
-        "viewer=VIEWER@127.0.0.1:11112".parse().unwrap(),
-        "hospital=HOSP_PACS@127.0.0.1:104".parse().unwrap(),
-        destination.clone(),
-    ];
-    config.move_destinations = vec![destination.id.clone()];
+    config.directory = pacs_dimse::Directory::new(
+        vec![
+            "viewer=VIEWER@127.0.0.1:11112".parse().unwrap(),
+            "hospital=HOSP_PACS@127.0.0.1:104".parse().unwrap(),
+            destination.clone(),
+        ],
+        vec![],
+    );
+    assert!(
+        config
+            .directory
+            .set_may_receive(&destination.id.clone(), true)
+    );
     config
 }
 

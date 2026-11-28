@@ -58,7 +58,7 @@ pub(super) async fn studies(
     let mut found = Vec::new();
     let mut more = false;
     let result = pacs_dimse::find_studies(
-        remote,
+        &remote,
         &remotes.config.ae_title,
         &query,
         remotes.config.timeout,
