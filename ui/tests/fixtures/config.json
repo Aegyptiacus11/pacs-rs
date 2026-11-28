@@ -1,0 +1,7 @@
+{
+  "dicomweb": "/dicom-web",
+  "auth": false,
+  "provider": false,
+  "trash_days": 30,
+  "version": "0.16.3"
+}
